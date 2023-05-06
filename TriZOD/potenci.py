@@ -972,5 +972,5 @@ def main():
     writeOutput(name,shiftdct)
     print('chemical shift succesfully predicted, see output:',name)
 
-
-main()
+if __name__ == '__main__':
+    main()
