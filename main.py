@@ -4,6 +4,7 @@ import argparse
 import TriZOD.potenci as potenci
 import TriZOD.trizod as trizod
 import numpy as np
+import pandas as pd
 
 def parse_args():
     parser = argparse.ArgumentParser(description='')
@@ -16,10 +17,11 @@ def parse_args():
     args.bmrb_dir = os.path.abspath(args.bmrb_dir)
     return args
 
-def comp2pred(predshiftdct,bbshifts,seq):
-    bbatns =['C','CA','CB','HA','H','N','HB']
+def comp2pred(predshiftdct, bbshifts, seq):
+    bbatns = ['C','CA','CB','HA','H','N','HB']
     cmpdct = {}
     shiftdct = {}
+    cmparr = np.zeros(shape=(len(seq), len(bbatns)))
     for i in range(1,len(seq)-1):
         if i in bbshifts:
             trip=seq[i-1:i+1]
@@ -29,7 +31,7 @@ def comp2pred(predshiftdct,bbshifts,seq):
                 pent=seq[i-2]+trip+'c'
             else:
                 pent=seq[i-2]+trip+seq[i+2]
-            for at in bbatns:
+            for j,at in enumerate(bbatns):
                 if at in bbshifts[i]:
                     sho = bbshifts[i][at][0]
                     shp = predshiftdct[(i+1,seq[i])][at]
@@ -40,20 +42,39 @@ def comp2pred(predshiftdct,bbshifts,seq):
                         if at not in cmpdct:
                             cmpdct[at] = {}
                         cmpdct[at][i] = diff
-    return cmpdct, shiftdct
+                        cmparr[i][j] = diff
+    return cmpdct, shiftdct, cmparr, bbatns
+
+def comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask):
+    bbatns = ['C','CA','CB','HA','H','N','HB'] # TODO: make this a global constant
+    #cmparr = np.zeros(shape=(len(seq), len(bbatns)))
+    # convert predshift dict to np array (TODO: do this in potenci...)
+    predshift_arr = np.zeros(shape=bbshifts_arr.shape)
+    predshift_mask = np.full(shape=bbshifts_mask.shape, fill_value=False)
+    for res,aa in predshiftdct:
+        i = res - 1
+        for j,at in enumerate(bbatns):
+            if at in predshiftdct[(res,aa)]:
+                if predshiftdct[(res,aa)][at] is not None:
+                    predshift_arr[i, j] = predshiftdct[(res,aa)][at]
+                    predshift_mask[i, j] = True
+    cmparr =  np.subtract(bbshifts_arr, predshift_arr, where=bbshifts_mask & predshift_mask, out=bbshifts_arr)
+    return cmparr, bbatns, bbshifts_mask & predshift_mask
 
 def convChi2CDF(rss,k):
     return ((((rss/k)**(1.0/6))-0.50*((rss/k)**(1.0/3))+1.0/3*((rss/k)**(1.0/2)))\
             - (5.0/6-1.0/9/k-7.0/648/(k**2)+25.0/2187/(k**3)))\
             / np.sqrt(1.0/18/k+1.0/162/(k**2)-37.0/11664/(k**3))
 
-def get_offset_correction(dct, minAIC=999.):
+def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     refined_weights = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
     maxi = max([max(dct[at].keys()) for at in dct])
     mini = min([min(dct[at].keys()) for at in dct])#is often 1
     nres = maxi - mini + 1
     totnum = np.zeros(nres)
     allruns = np.zeros(nres)
+    runstds = np.empty(cmparr.shape, dtype=np.float64)
+    runstds[:] = np.nan
     rdct = {}
 
     for at in dct:
@@ -62,24 +83,50 @@ def get_offset_correction(dct, minAIC=999.):
         shw = A[:,1] / w
         for i in range(len(A)):
             resi = int(A[i][0]) - mini #minimum value for resi is 0
-            totnum[resi]+=1
+            totnum[resi] += 1
             if 3 < i < len(A)-4:
                 vals = shw[i-4:i+5]
                 runstd = np.std(vals)
                 allruns[resi] += runstd
+                runstds[resi + mini,bbatns.index(at)] = runstd
                 if not resi in rdct:
                     rdct[resi]={}
                 rdct[resi][at] = np.average(vals), np.sqrt(np.average(vals**2)), runstd
     tr = (allruns / totnum)[4:-4]
-    offdct = {}
     mintr = None
     minval = 999
     for j in range(len(tr)):
-        if j+4 in rdct and len(rdct[j+4]) == len(dct): #all ats must be represented for this res
-            if tr[j]<minval:
-                minval = tr[j]
-                mintr = j
-    if mintr==None:
+        if j+4 in rdct:
+            if len(rdct[j+4]) == len(dct): #all ats must be represented for this res
+                if tr[j] < minval:
+                    minval = tr[j]
+                    mintr = j
+    runstds = pd.DataFrame(runstds)
+    
+    w_ = np.array([refined_weights[at] for at in bbatns]) # ensure same order
+    shw_ = cmparr / w_
+    df = pd.DataFrame(shw_).mask(~mask)
+    # compute rolling stadard deviation over detected shifts (missing values are ignored and streched by rolling window)
+    at_stdc = []
+    at_roff = []
+    at_std0 = []
+    for i in range(7): # TODO: not necessary to compute anything but at_stdc for all values. Only the selected position would suffice
+        roll = df[i].dropna().rolling(9, center=True)
+        at_stdc.append(roll.std(ddof=0))
+        at_roff.append(roll.mean())
+        at_std0.append(roll.apply(lambda x : np.sqrt(x.pow(2).mean())))
+    runstds_ = pd.concat(at_stdc, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
+    runoffs_ = pd.concat(at_roff, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
+    runstd0s_ = pd.concat(at_std0, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
+    # get index with the lowest mean rolling stddev for which all ats were detected (all that were detected anywhere for this sample)
+    runstds_val = runstds_.dropna(how='all', axis=1).dropna(axis=0).mean(axis=1)
+    try:
+        min_idx_ = runstds_val.idxmin()
+    except ValueError:
+        min_idx_ = None # still not found
+
+    offdct = {}
+    if mintr == None:
         return None #still not found
     for at in rdct[mintr+4]:
         roff,std0,stdc = rdct[mintr+4][at]
@@ -91,9 +138,27 @@ def get_offset_correction(dct, minAIC=999.):
         else:
             print('rejecting offset correction due to low dAIC:', at, roff, dAIC)
             offdct[at] = 0.0
+    
+    offdct_ = {}
+    if min_idx_ == None:
+        return None
+    for col in runstds_.dropna(how='all', axis=1).columns: # for all at shifts that were detected anywhere in this sample
+        at = bbatns[col]
+        roff = runoffs_.loc[min_idx_][col]
+        std0 = runstd0s_.loc[min_idx_][col]
+        stdc = runstds_.loc[min_idx_][col]
+        dAIC = np.log(std0/stdc) * 9 - 1 # difference in Akaike’s information criterion ?
+        print('minimum running average', at, roff, dAIC)
+        if dAIC > minAIC:
+            print('using offset correction:', at, roff, dAIC)
+            offdct_[at] = roff
+        else:
+            print('rejecting offset correction due to low dAIC:', at, roff, dAIC)
+            offdct_[at] = 0.0
+
     return offdct #with the running offsets
 
-def results_w_offset(dct, shiftdct, dataset=None, offdct=None, minAIC=999., cdfthr=6.0):
+def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=None, minAIC=999., cdfthr=6.0):
     refined_weights = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
     maxi = max([max(dct[at].keys()) for at in dct])
     mini = min([min(dct[at].keys()) for at in dct])#is often 1
@@ -110,21 +175,41 @@ def results_w_offset(dct, shiftdct, dataset=None, offdct=None, minAIC=999., cdft
         print ('using predetermined offset correction', at, offdct[at], offdct[at] * w)
         for i in range(len(A)):
             resi = int(A[i][0]) - mini #minimum value for resi is 0
-            ashwi = abs(shw[i])
+            ashwi = np.abs(shw[i])
             if ashwi > cdfthr:
                 oldct.add((at,resi)) # was oldct[(at,resi)] = ashwi
             tot[resi] += min(4.0, ashwi)**2
-            totnum[resi]+=1
+            totnum[resi] += 1
+    
+    # build the array that would replace dct as input
+    w_ = np.array([refined_weights[at] for at in bbatns]) # ensure same order
+    off_ = np.array([offdct.get(at, 0.) for at in bbatns])
+    shw_ = cmparr / w_
+
+    ashwi_ = np.abs(np.subtract(shw_, off_, where=mask, out=shw_))
+    oldct_ = ashwi_ > cdfthr
+    tot_ = (np.clip(ashwi_, a_min=None, a_max=4.0) ** 2).sum(axis=1)
+    totnum_ = mask.sum(axis=1)
+
     cdfs = convChi2CDF(tot, totnum)
     tot3f  = np.pad(tot, 1)[2:]    + tot    + np.pad(tot, 1)[:-2]
     totn3f = np.pad(totnum, 1)[2:] + totnum + np.pad(totnum, 1)[:-2]
     cdfs3 = convChi2CDF(tot3f, totn3f)
+
+    cdfs_ = convChi2CDF(tot_, totnum_)
+    tot3f_ =  np.pad(tot_, 1)[2:]    + tot_    + np.pad(tot_, 1)[:-2]
+    totn3f_ = np.pad(totnum_, 1)[2:] + totnum_ + np.pad(totnum_, 1)[:-2]
+    cdfs3_ = convChi2CDF(tot3f_, totn3f_)
+
     if dataset is not None:
         return cdfs3
+        #return cdfs3_
 
     finaloutli = [i+mini+1 for i in range(nres) if cdfs[i]>cdfthr or (cdfs3[i]>cdfthr and cdfs[i]>0.0 and totnum[i]>0)]
     print('outliers:', len(finaloutli), np.sum(totnum==0), finaloutli)
     print(len(oldct), mini, maxi, nres)
+
+    finaloutli_ = (cdfs_ > cdfthr) | ((cdfs3_ > cdfthr) & (cdfs_ > 0.0) & (totnum_ > 0))
 
     # now accumulate the validated data
     accdct = {k:[] for k in dct.keys()}
@@ -132,7 +217,6 @@ def results_w_offset(dct, shiftdct, dataset=None, offdct=None, minAIC=999., cdft
     iatns = list(shiftdct.keys())
     iatns.sort()
     for i,at in iatns: #i is seq enumeration (starting from 0, but terminal always excluded)
-        w = refined_weights[at]
         ol = False
         if (i+1) in finaloutli or (at,i-mini) in oldct:
             ol=True
@@ -140,6 +224,10 @@ def results_w_offset(dct, shiftdct, dataset=None, offdct=None, minAIC=999., cdft
             accdct[at].append(dct[at][i])
         else:
             numol += 1
+    
+    ol_ = mask & (np.repeat(finaloutli_, 7).reshape((finaloutli_.shape[0],7)) | oldct_) # mask for the outliers
+    accdct_ = mask & ~ol_ # mask for the validated data
+    
     sumrmsd = 0.0
     totsh = 0
     newoffdct = {}
@@ -164,6 +252,17 @@ def results_w_offset(dct, shiftdct, dataset=None, offdct=None, minAIC=999., cdft
             sumrmsd += astdc * anum
             totsh += anum
             newoffdct[at] = aoff
+    
+    anum_ = np.sum(accdct_, axis=0)
+    newoffdct_ = np.mean(shw_, axis=0, where=accdct_)
+    astd0_ = np.sqrt(np.mean(shw_ ** 2, axis=0, where=accdct_))
+    astdc_ = np.std(shw_, axis=0, where=accdct_)
+    adAIC_ = np.log(astd0_ / astdc_) * anum_ - 1
+    reject_mask = (adAIC_ < minAIC) | (anum_ < 4)
+    astdc_[reject_mask] = astd0_[reject_mask]
+    newoffdct_[reject_mask] = 0.
+    totsh_ = np.sum(anum_)
+
     if totsh == 0:
         avewrmsd,fracacc = 9.99, 0.0
     else:
@@ -188,7 +287,7 @@ def main():
     for (stID, condID, assemID, entityID), shifts in peptide_shifts.items():
         # get polymer sequence and chemical backbone shifts
         seq = entry.entities[entityID].seq
-        bbshifts = trizod.get_valid_bbshifts(shifts, seq)
+        bbshifts, bbshifts_arr, bbshifts_mask = trizod.get_valid_bbshifts(shifts, seq)
         if bbshifts is None:
             logging.info(f'skipping shifts for {(stID, condID, assemID, entityID)} due to previous error')
             continue
@@ -209,27 +308,29 @@ def main():
         usephcor = pH < 6.99 or pH > 7.01
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
-        except:
-            logging.error(f"POTENCI failed for {(stID, condID, assemID, entityID)}")
+        except Exception as e:
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, entityID)} due to the following error:\n{str(e)}")
             continue
         
         # compare predicted to actual shifts
-        cmpdct, shiftdct = comp2pred(predshiftdct,bbshifts,seq)
+        cmpdct, shiftdct, cmparr, bbatns = comp2pred(predshiftdct,bbshifts,seq)
+        cmparr, bbatns, cmpmask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
+
         totbbsh = sum([len(cmpdct[at].keys()) for at in cmpdct])
         logging.info(f"total number of backbone shifts: {totbbsh}")
-        offr = get_offset_correction(cmpdct, minAIC=6.0)
-        print(offr)
+        offr = get_offset_correction(cmpdct, cmparr, cmpmask, bbatns, minAIC=6.0)
+        
         if offr is None:
             logging.warning(f'no running offset could be estimated for {(stID, condID, assemID, entityID)}')
-            bbatns = ['C','CA','CB','HA','H','N','HB']
+            #bbatns = ['C','CA','CB','HA','H','N','HB']
             off0 = dict(zip(bbatns,[0.0 for _ in bbatns]))
             armsdc = 999.9
             frac = 0.0
         else:
             atns = offr.keys()
             off0 = dict(zip(atns,[0.0 for _ in atns]))
-            armsdc,frac,noffc,cdfs3c = results_w_offset(cmpdct, shiftdct, offdct=offr, minAIC=6.0)
-        armsd0,fra0,noff0,cdfs30 = results_w_offset(cmpdct, shiftdct, offdct=off0, minAIC=6.0)
+            armsdc,frac,noffc,cdfs3c = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, offdct=offr, minAIC=6.0)
+        armsd0,fra0,noff0,cdfs30 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, offdct=off0, minAIC=6.0)
         usefirst = (armsd0 / (0.01 + fra0)) < (armsdc / (0.01 + frac))
         av0 = np.average(cdfs30[cdfs30 < 20.0]) #to avoid nan
         if offr is not None:
@@ -241,9 +342,9 @@ def main():
         else:
             orusefirst=True
         if orusefirst:
-            cdfs3 = results_w_offset(cmpdct, shiftdct, dataset=True, offdct=noff0, minAIC=6.0)
+            cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=noff0, minAIC=6.0)
         else:
-            cdfs3 = results_w_offset(cmpdct, shiftdct, dataset=True, offdct=noffc, minAIC=6.0)
+            cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=noffc, minAIC=6.0)
         
         mini = min([min(cmpdct[at].keys()) for at in cmpdct])
         savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, entityID)

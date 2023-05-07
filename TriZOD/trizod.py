@@ -418,4 +418,12 @@ def get_valid_bbshifts(shifts, seq):
                 vals = [v[0] for v in bbshifts[pos0][atm_id].values()]
                 errs = [v[0] for v in bbshifts[pos0][atm_id].values()]
                 bbshifts[pos0][atm_id] = (np.mean(vals), np.mean(errs))
-    return bbshifts
+    bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
+    bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)
+    for i in range(len(seq)):
+        for j,atm_id in enumerate(bb_atm_ids):
+            if i in bbshifts:
+                if atm_id in bbshifts[i]:
+                    bbshifts_arr[i,j] = bbshifts[i][atm_id][0]
+                    bbshifts_mask[i,j] = True
+    return bbshifts, bbshifts_arr, bbshifts_mask
