@@ -385,8 +385,8 @@ def get_valid_bbshifts(shifts, seq):
             try:
                 err = float(err)
             except:
-                logging.warning(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
-                err = 0. # TODO: correct defulat value?
+                logging.info(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
+                err = 0. # TODO: correct default value?
             if seq[pos0] != aa3to1[aa3]:
                 logging.error(f'canonical amino acid mismatch at 0-based position {pos0}')
                 return

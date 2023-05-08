@@ -107,7 +107,7 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
             E_all = np.array([sum([10 ** -(gmatrix[p] * np.outer(c,c)).sum() for c in alltuples]) for p in range(len(pHs))])
             E_sel = np.array([sum([10 ** -(gmatrix[p] * np.outer(c,c)).sum() for c in alltuples if c[resi-1] == 1]) for p in range(len(pHs))])
             titration[ires-1] = E_sel/E_all
-        sol=np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=1000)[0] for p in range(len(pK0s))])
+        sol=np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
         (pKs, nHs) = sol.transpose()
         ##print (sol)
   

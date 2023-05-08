@@ -68,6 +68,8 @@ def convChi2CDF(rss,k):
 
 def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     refined_weights = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
+    
+    # >
     maxi = max([max(dct[at].keys()) for at in dct])
     mini = min([min(dct[at].keys()) for at in dct])#is often 1
     nres = maxi - mini + 1
@@ -76,7 +78,7 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     runstds = np.empty(cmparr.shape, dtype=np.float64)
     runstds[:] = np.nan
     rdct = {}
-
+    
     for at in dct:
         A = np.array(list(dct[at].items()))
         w = refined_weights[at]
@@ -102,6 +104,7 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
                     minval = tr[j]
                     mintr = j
     runstds = pd.DataFrame(runstds)
+    # <
     
     w_ = np.array([refined_weights[at] for at in bbatns]) # ensure same order
     shw_ = cmparr / w_
@@ -125,6 +128,7 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     except ValueError:
         min_idx_ = None # still not found
 
+    # >
     offdct = {}
     if mintr == None:
         return None #still not found
@@ -138,6 +142,7 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
         else:
             print('rejecting offset correction due to low dAIC:', at, roff, dAIC)
             offdct[at] = 0.0
+    # <
     
     offdct_ = {}
     if min_idx_ == None:
@@ -155,18 +160,23 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
         else:
             print('rejecting offset correction due to low dAIC:', at, roff, dAIC)
             offdct_[at] = 0.0
+    
+    #if not offdct == offdct_:
+    #    breakpoint()
 
-    return offdct #with the running offsets
+    return offdct_ #with the running offsets
 
 def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=None, minAIC=999., cdfthr=6.0):
     refined_weights = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
     maxi = max([max(dct[at].keys()) for at in dct])
     mini = min([min(dct[at].keys()) for at in dct])#is often 1
+
+    # >
     nres = maxi-mini+1
     tot = np.zeros(nres)
     totnum = np.zeros(nres)
     oldct = set() # was {}
-
+    
     for at in dct:
         A = np.array(list(dct[at].items()))
         w = refined_weights[at]
@@ -181,36 +191,54 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
             tot[resi] += min(4.0, ashwi)**2
             totnum[resi] += 1
     
-    # build the array that would replace dct as input
-    w_ = np.array([refined_weights[at] for at in bbatns]) # ensure same order
-    off_ = np.array([offdct.get(at, 0.) for at in bbatns])
-    shw_ = cmparr / w_
-
-    ashwi_ = np.abs(np.subtract(shw_, off_, where=mask, out=shw_))
-    oldct_ = ashwi_ > cdfthr
-    tot_ = (np.clip(ashwi_, a_min=None, a_max=4.0) ** 2).sum(axis=1)
-    totnum_ = mask.sum(axis=1)
-
     cdfs = convChi2CDF(tot, totnum)
     tot3f  = np.pad(tot, 1)[2:]    + tot    + np.pad(tot, 1)[:-2]
     totn3f = np.pad(totnum, 1)[2:] + totnum + np.pad(totnum, 1)[:-2]
     cdfs3 = convChi2CDF(tot3f, totn3f)
+    # <
+
+    w_ = np.array([refined_weights[at] for at in bbatns]) # ensure same order
+    off_ = np.array([offdct.get(at, 0.) for at in bbatns])
+    shw_ = cmparr / w_
+    ashwi_ = shw_.copy() # need to do the copy here, because shw_ is reused later and would otherwise be partially overwritten due to the out=
+    ashwi_ = np.abs(np.subtract(shw_, off_, where=mask, out=ashwi_))
+    oldct_ = ashwi_ > cdfthr
+    tot_ = (np.clip(ashwi_, a_min=None, a_max=4.0) ** 2).sum(axis=1)
+    totnum_ = mask.sum(axis=1)
 
     cdfs_ = convChi2CDF(tot_, totnum_)
+    # TODO: find more elegant solution than using maxi, mini (not safe: using mask.any(axis=1) !?! --> gaps in between are fine)
+    # what would work is using pandas for this...
+    tot_[:mini] = 0.
+    tot_[maxi+1:] = 0.
+    totnum_[:mini] = 0.
+    totnum_[maxi+1:] = 0.
     tot3f_ =  np.pad(tot_, 1)[2:]    + tot_    + np.pad(tot_, 1)[:-2]
     totn3f_ = np.pad(totnum_, 1)[2:] + totnum_ + np.pad(totnum_, 1)[:-2]
     cdfs3_ = convChi2CDF(tot3f_, totn3f_)
 
-    if dataset is not None:
-        return cdfs3
-        #return cdfs3_
+    #if not np.array_equal(cdfs3_[mini:maxi+1], cdfs3, equal_nan=True):
+    #    breakpoint()
+    #else:
+    #    print("all equal")
 
+    if dataset is not None:
+        #return cdfs3
+        return cdfs3_[mini:maxi+1]
+    
+    # >
+    #finaloutli= [i+mini+1 for i in range(nres) if cdfs[i]>cdfthr or cdfs3[i]>cdfthr and cdfs[i]>0.0 and totnum[i]>0]
     finaloutli = [i+mini+1 for i in range(nres) if cdfs[i]>cdfthr or (cdfs3[i]>cdfthr and cdfs[i]>0.0 and totnum[i]>0)]
     print('outliers:', len(finaloutli), np.sum(totnum==0), finaloutli)
     print(len(oldct), mini, maxi, nres)
+    # <
 
     finaloutli_ = (cdfs_ > cdfthr) | ((cdfs3_ > cdfthr) & (cdfs_ > 0.0) & (totnum_ > 0))
 
+
+    # >
+    #d_accdct = np.empty(cmparr.shape, dtype=np.float64)
+    #d_accdct[:] = np.nan
     # now accumulate the validated data
     accdct = {k:[] for k in dct.keys()}
     numol = 0
@@ -222,12 +250,16 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
             ol=True
         if not ol:
             accdct[at].append(dct[at][i])
+            #d_accdct[i, bbatns.index(at)] = dct[at][i]
         else:
             numol += 1
+    # <
     
     ol_ = mask & (np.repeat(finaloutli_, 7).reshape((finaloutli_.shape[0],7)) | oldct_) # mask for the outliers
-    accdct_ = mask & ~ol_ # mask for the validated data
+    accdct_ = mask & ~ol_ # mask for the validated data (where there is shift data, predictions and not outliers)
+    numol_ = ol_.sum()
     
+    # >
     sumrmsd = 0.0
     totsh = 0
     newoffdct = {}
@@ -249,11 +281,15 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
                 aoff = 0.0
             else:
                 print('using offset correction:', at, aoff, adAIC, anum)
+            
             sumrmsd += astdc * anum
             totsh += anum
             newoffdct[at] = aoff
+            #print(astdc, anum)
+    # <
     
     anum_ = np.sum(accdct_, axis=0)
+    #shw_ = cmparr / w_ # np.array_equal(shw_[accdct_], (d_accdct / w_)[accdct_]) evals False. Fixed by using out=
     newoffdct_ = np.mean(shw_, axis=0, where=accdct_)
     astd0_ = np.sqrt(np.mean(shw_ ** 2, axis=0, where=accdct_))
     astdc_ = np.std(shw_, axis=0, where=accdct_)
@@ -261,13 +297,25 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
     reject_mask = (adAIC_ < minAIC) | (anum_ < 4)
     astdc_[reject_mask] = astd0_[reject_mask]
     newoffdct_[reject_mask] = 0.
+    newoffdct_ = {at:val for at,val in zip(bbatns,newoffdct_)}
     totsh_ = np.sum(anum_)
+    sumrmsd_ = np.nansum(astdc_ * anum_)
 
+    # np.array_equal(cmparr[accdct_], d_accdct[accdct_]) = True !
+
+    # >
     if totsh == 0:
         avewrmsd,fracacc = 9.99, 0.0
     else:
         avewrmsd,fracacc = sumrmsd / totsh, totsh / (0.0+totsh+numol)
-    return avewrmsd, fracacc, newoffdct, cdfs3 #offsets from accepted stats
+    #return avewrmsd, fracacc, newoffdct, cdfs3 #offsets from accepted stats
+    ## <
+
+    if totsh_ == 0:
+        avewrmsd_,fracacc_ = 9.99, 0.0
+    else:
+        avewrmsd_,fracacc_ = sumrmsd_ / totsh_, totsh_ / (0.0+totsh_+numol_)
+    return avewrmsd_, fracacc_, newoffdct_, cdfs3_[mini:maxi+1] #offsets from accepted stats
 
 def savedata(cdfs3, bmrID, seq, mini, stID, condID, assemID, entityID):
     out=open(f'zscores{bmrID}_{stID}_{condID}_{assemID}_{entityID}.txt','w')
@@ -315,6 +363,7 @@ def main():
         # compare predicted to actual shifts
         cmpdct, shiftdct, cmparr, bbatns = comp2pred(predshiftdct,bbshifts,seq)
         cmparr, bbatns, cmpmask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
+        #cmpdct, shiftdct = None, None
 
         totbbsh = sum([len(cmpdct[at].keys()) for at in cmpdct])
         logging.info(f"total number of backbone shifts: {totbbsh}")
