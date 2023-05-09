@@ -72,13 +72,14 @@ class Assembly(object):
         self.metal_ions = get_tag_vals(sf, '_Assembly.Metal_ions', indices=0)
         self.molecules_in_chemical_exchange = get_tag_vals(sf, '_Assembly.Molecules_in_chemical_exchange', indices=0)
         self.entities = list(zip(
+            get_tag_vals(sf, '_Entity_assembly.ID', default=[]),
             get_tag_vals(sf, '_Entity_assembly.Entity_ID', default=[]),
             get_tag_vals(sf, '_Entity_assembly.Entity_label', default=[]),
             get_tag_vals(sf, '_Entity_assembly.Physical_state', default=[])
             ))
     
     def __str__(self):
-        return f'(Assembly {self.id}: entities {[e[0] for e in self.entities]}, {self.n_components} components)'
+        return f'(Assembly {self.id}: entities {[(e[0], e[1]) for e in self.entities]}, {self.n_components} components)'
     
     def __repr__(self):
         return f"<Assembly {self.id}>"
@@ -87,16 +88,15 @@ class SampleConditions(object):
     def __init__(self, sf):
         super(SampleConditions, self).__init__()
         self.id = get_tag_vals(sf, '_Sample_condition_list.ID', indices=0)
-        self.ionic_strength = None
-        self.pH = None
-        self.pressure = None
-        self.temperature = None
+        self.ionic_strength = (None, None)
+        self.pH = (None, None)
+        self.pressure = (None, None)
+        self.temperature = (None, None)
         info = list(zip(
             get_tag_vals(sf, '_Sample_condition_variable.Type', default=[]),
             get_tag_vals(sf, '_Sample_condition_variable.Val', default=[]),
             get_tag_vals(sf, '_Sample_condition_variable.Val_units', default=[])
             ))
-        ureg = pint.UnitRegistry()
         for t,val,unit in info:
             try:
                 val = float(val)
@@ -104,42 +104,54 @@ class SampleConditions(object):
                 logging.warning(f'failed to convert value for {t}')
                 continue
             if 'ionic strength' in t.lower():
-                try:
-                    factor = ureg.parse_expression(unit).to('M').magnitude
-                except:
-                    logging.warning(f'Could not parse ionic strength unit string for sample condition {self.id}: {unit}')
-                    factor = 1.
-                self.ionic_strength = val * factor
+                self.ionic_strength = (val, unit)
             elif t.lower() == 'ph':
-                self.pH = val
+                self.pH = (val, unit)
             elif t.lower() == 'pressure':
-                try:
-                    factor = ureg.parse_expression(unit).to('atm').magnitude
-                except:
-                    logging.warning(f'Could not parse pressure unit string for sample condition {self.id}: {unit}')
-                    factor = 1.
-                self.pressure = val * factor
+                self.pressure = (val, unit)
             elif 'temp' in t.lower():
-                try:
-                    factor = ureg.parse_expression(unit).to('K').magnitude
-                except:
-                    logging.warning(f'Could not parse temperature unit string for sample condition {self.id}: {unit}')
-                    factor = 1.
-                self.temperature = val * factor
+                self.temperature = (val, unit)
             else:
                 logging.debug(f'Skipping sample condition {t} = {val} {unit}')
-        #if self.ionic_strength is None:
-        #    logging.warning(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
-        #    self.ionic_strength = 0.1
-        #if self.pH is None:
-        #    logging.warning(f'No information on pH for sample condition {self.id}, assuming 7.0')
-        #    self.ionic_strength = 7.0
-        #if self.temperature is None:
-        #    logging.warning(f'No information on temperature for sample condition {self.id}, assuming 298 K')
-        #    self.ionic_strength = 298.
     
+    def convert_unit(self, val, unit, target_unit):
+        ureg = pint.UnitRegistry()
+        try:
+            factor = ureg.parse_expression(unit).to(target_unit).magnitude
+        except:
+            if target_unit == 'M' and val > 10:
+                assumed_unit = 'mM'
+            elif target_unit == 'K' and val < 150:
+                assumed_unit = '°C'
+            else:
+                assumed_unit = target_unit
+            logging.warning(f'Could not parse unit string for sample condition {self.id}: {val} "{unit}" , assuming {assumed_unit}')
+            factor = ureg.parse_expression(assumed_unit).to(target_unit).magnitude
+        return val * factor
+
+    def get_pH(self):
+        if self.pH[0] is None:
+            logging.warning(f'No information on pH for sample condition {self.id}, assuming 7.0')
+            return 7.0
+        return self.pH[0]
+    
+    def get_temperature(self):
+        if self.temperature[0] is None:
+            logging.warning(f'No information on temperature for sample condition {self.id}, assuming 298 K')
+            return 298.
+        return self.convert_unit(self.temperature[0], self.temperature[1], 'K')
+    
+    def get_pressure(self):
+        return self.convert_unit(self.pressure[0], self.pressure[1], 'atm')
+    
+    def get_ionic_strength(self):
+        if self.ionic_strength[0] is None:
+            logging.warning(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
+            return 0.1
+        return self.convert_unit(self.ionic_strength[0], self.ionic_strength[1], 'M')
+
     def __str__(self):
-        return f'(Conditions {self.id}: pH {self.pH}, {self.temperature} K, {self.ionic_strength} M)'
+        return f'(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)'
     
     def __repr__(self):
         return f"<Conditions {self.id}>"
@@ -312,22 +324,22 @@ class BmrbEntry(object):
         for stID,st in self.shift_tables.items():
             condID = st.conditions
             if condID is None or condID not in self.conditions:
-                logging.warning(f'skipping shift table {stID} due to missing conditions entry: {condID}')
+                logging.error(f'skipping shift table {stID} due to missing conditions entry: {condID}')
                 continue
             for (assemID,entityID),shifts in st.shifts.items():
-                if assemID is None or assemID not in self.assemblies:
-                    logging.warning(f'skipping shifts for entity {entityID} due to missing assembly entry: {assemID}')
+                if assemID is None or assemID not in [e[0] for assem in self.assemblies for e in assem.entities]: #self.assemblies:
+                    logging.error(f'skipping shifts for entity {entityID} due to missing assembly entity entry: {assemID}')
                     continue
                 if entityID is None or entityID not in self.entities:
-                    logging.warning(f'skipping shifts for assembly {assemID} due to missing entity entry: {entityID}')
+                    logging.error(f'skipping shifts for assembly {assemID} due to missing entity entry: {entityID}')
                     continue
                 entity = self.entities[entityID]
                 if not entity.type:
-                    logging.warning(f'skipping shifts for assembly {assemID} due to missing entity type: {entityID}')
+                    logging.error(f'skipping shifts for assembly {assemID} due to missing entity type: {entityID}')
                     continue
                 if entity.type == 'polymer':
                     if not entity.polymer_type:
-                        logging.warning(f'skipping shifts for assembly {assemID} due to missing polymer type for entity: {entityID}')
+                        logging.error(f'skipping shifts for assembly {assemID} due to missing polymer type for entity: {entityID}')
                         continue
                     if entity.polymer_type == 'polypeptide(L)':
                         peptide_shifts[(stID, condID, assemID, entityID)] = shifts
@@ -358,7 +370,7 @@ class BmrbEntry(object):
     def __repr__(self):
         return f'<bmr{self.id}>'
 
-def get_valid_bbshifts(shifts, seq):
+def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
     bb_atm_ids = ['C','CA','CB','HA','H','N','HB']
     bbshifts = {}
     # 0: '_Atom_chem_shift.Entity_assembly_ID'
@@ -385,32 +397,55 @@ def get_valid_bbshifts(shifts, seq):
             try:
                 err = float(err)
             except:
-                logging.info(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
-                err = 0. # TODO: correct default value?
+                logging.debug(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
+                err = np.nan #0. # TODO: correct default value?
             if seq[pos0] != aa3to1[aa3]:
                 logging.error(f'canonical amino acid mismatch at 0-based position {pos0}')
                 return
+            if max_err is not None:
+                if np.isnan(err):
+                    pass
+                elif err <= max_err:
+                    pass
+                else:
+                    continue
+            if filter_amb:
+                if ambc not in ['1', '2', '', '.']:
+                    continue
             if atm_id in bb_atm_ids:
                 if pos0 not in bbshifts:
                     bbshifts[pos0] = {}
                 if atm_id in bbshifts[pos0]:
-                    logging.error(f'multiple shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                    return
+                    if bbshifts[pos0][atm_id] != (val, err):
+                        logging.error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        return
+                    else:
+                        logging.warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
                 bbshifts[pos0][atm_id] = (val, err)
             elif aa3 == 'GLY' and atm_id in ['HA2', 'HA3']:
-                if not 'HA' in bbshifts[pos0]:
+                if pos0 not in bbshifts:
+                    bbshifts[pos0] = {}
+                if 'HA' not in bbshifts[pos0]:
                     bbshifts[pos0]['HA'] = {}
                 if atm_id in bbshifts[pos0]['HA']:
-                    logging.error(f'multiple shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                    return
+                    if bbshifts[pos0]['HA'][atm_id] != (val, err):
+                        logging.error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        return
+                    else:
+                        logging.warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
                 bbshifts[pos0]['HA'][atm_id] = (val, err)
             elif (aa3 != 'ALA' and atm_id in ['HB2', 'HB3']) or\
                  (aa3 == 'ALA' and atm_id in ['HB1', 'HB2', 'HB3']):
-                if not 'HB' in bbshifts[pos0]:
+                if pos0 not in bbshifts:
+                    bbshifts[pos0] = {}
+                if 'HB' not in bbshifts[pos0]:
                     bbshifts[pos0]['HB'] = {}
                 if atm_id in bbshifts[pos0]['HB']:
-                    logging.error(f'multiple shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                    return
+                    if bbshifts[pos0]['HB'][atm_id] != (val, err):
+                        logging.error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        return
+                    else:
+                        logging.warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
                 bbshifts[pos0]['HB'][atm_id] = (val, err)
     for pos0 in bbshifts:
         for atm_id in bbshifts[pos0]:

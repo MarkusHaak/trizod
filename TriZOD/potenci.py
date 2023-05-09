@@ -40,10 +40,24 @@ def smallmatrixpos(ires, cutoff, len):
 def fun(pH, pK, nH):
     return (10 ** ( nH*(pK - pH) ) ) / (1. + (10 **( nH*(pK - pH) ) ) )
 
+#def W(r,Ion=0.1):
+#    k = np.sqrt(Ion) / 3.08 #Ion=0.1 is default
+#    x = k * r / np.sqrt(6)
+#    return 332.286 * np.sqrt(6 / np.pi) * (1 - np.sqrt(np.pi) * x * np.exp(x ** 2) * erfc(x)) / (e * r)
 def W(r,Ion=0.1):
     k = np.sqrt(Ion) / 3.08 #Ion=0.1 is default
-    x = k * r / np.sqrt(6)
-    return 332.286 * np.sqrt(6 / np.pi) * (1 - np.sqrt(np.pi) * x * np.exp(x ** 2) * erfc(x)) / (e * r)
+    x = k.astype(np.float64) * r.astype(np.float64) / np.sqrt(6)
+    i1 = 332.286 * np.sqrt(6 / np.pi)
+    i2_3 = erfc(x)
+    i2_2 = np.sqrt(np.pi) * x
+
+    #i2_1 = np.exp(x ** 2)
+    #i2_1 = np.nan_to_num(i2_1) # to convert inf values to the largest possible value
+    i3 = (e * r)
+    i4 = np.exp(((x ** 2) - np.log(i3))) # always equal to np.exp(x ** 2) / (e * r), but intermediates are smaller
+    i4 = np.nan_to_num(i4) # to convert inf values to the largest possible value
+    #return i1 * ((1 / i3) - ((i2_1/i3) * i2_2 * i2_3))
+    return i1 * ((1 / i3) - np.nan_to_num(i4 * i2_2 * i2_3))
 
 def w2logp(x,T=293.15):
     return x * 4181.2 / (R * T * np.log(10)) 

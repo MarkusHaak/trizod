@@ -5,6 +5,7 @@ import TriZOD.potenci as potenci
 import TriZOD.trizod as trizod
 import numpy as np
 import pandas as pd
+import traceback
 
 def parse_args():
     parser = argparse.ArgumentParser(description='')
@@ -34,7 +35,11 @@ def comp2pred(predshiftdct, bbshifts, seq):
             for j,at in enumerate(bbatns):
                 if at in bbshifts[i]:
                     sho = bbshifts[i][at][0]
-                    shp = predshiftdct[(i+1,seq[i])][at]
+                    #shp = predshiftdct[(i+1,seq[i])][at]
+                    shp = None
+                    if (i+1,seq[i]) in predshiftdct:
+                        if at in predshiftdct[(i+1,seq[i])]:
+                            shp = predshiftdct[(i+1,seq[i])][at]
                     if shp is not None:
                         shiftdct[(i,at)] = [sho,pent]
                         diff=sho-shp
@@ -223,6 +228,7 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
     #    print("all equal")
 
     if dataset is not None:
+        #breakpoint()
         #return cdfs3
         return cdfs3_[mini:maxi+1]
     
@@ -337,13 +343,13 @@ def main():
         seq = entry.entities[entityID].seq
         bbshifts, bbshifts_arr, bbshifts_mask = trizod.get_valid_bbshifts(shifts, seq)
         if bbshifts is None:
-            logging.info(f'skipping shifts for {(stID, condID, assemID, entityID)} due to previous error')
+            logging.warning(f'skipping shifts for {(stID, condID, assemID, entityID)}, retrieving backbone shifts failed')
             continue
 
         # use POTENCI to predict shifts
-        ion = entry.conditions[condID].ionic_strength
-        pH = entry.conditions[condID].pH
-        temperature = entry.conditions[condID].temperature
+        ion = entry.conditions[condID].get_ionic_strength()
+        pH = entry.conditions[condID].get_pH()
+        temperature = entry.conditions[condID].get_temperature()
         if ion is None:
             logging.warning(f'No information on ionic strength for sample condition {condID}, assuming 0.1 M')
             ion = 0.1
@@ -356,8 +362,8 @@ def main():
         usephcor = pH < 6.99 or pH > 7.01
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
-        except Exception as e:
-            logging.error(f"POTENCI failed for {(stID, condID, assemID, entityID)} due to the following error:\n{str(e)}")
+        except Exception:
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, entityID)} due to the following error:\n{str(traceback.format_exc())}")
             continue
         
         # compare predicted to actual shifts
