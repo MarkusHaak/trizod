@@ -327,7 +327,7 @@ class BmrbEntry(object):
                 logging.error(f'skipping shift table {stID} due to missing conditions entry: {condID}')
                 continue
             for (assemID,entityID),shifts in st.shifts.items():
-                if assemID is None or assemID not in [e[0] for assem in self.assemblies for e in assem.entities]: #self.assemblies:
+                if assemID is None or assemID not in [e[0] for assem in self.assemblies for e in self.assemblies[assem].entities]: #self.assemblies:
                     logging.error(f'skipping shifts for entity {entityID} due to missing assembly entity entry: {assemID}')
                     continue
                 if entityID is None or entityID not in self.entities:
