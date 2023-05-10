@@ -3,4 +3,5 @@ tmp*
 *.zip
 *.txt
 *.pyc
+*.txt
 __pycache__

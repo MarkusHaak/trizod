@@ -323,8 +323,8 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
         avewrmsd_,fracacc_ = sumrmsd_ / totsh_, totsh_ / (0.0+totsh_+numol_)
     return avewrmsd_, fracacc_, newoffdct_, cdfs3_[mini:maxi+1] #offsets from accepted stats
 
-def savedata(cdfs3, bmrID, seq, mini, stID, condID, assemID, entityID):
-    out=open(f'zscores{bmrID}_{stID}_{condID}_{assemID}_{entityID}.txt','w')
+def savedata(cdfs3, bmrID, seq, mini, stID, condID, assemID, assem_entityID, entityID):
+    out=open(f'zscores{bmrID}_{stID}_{condID}_{assemID}_{assem_entityID}_{entityID}.txt','w')
     for i,x in enumerate(cdfs3):
       if x < 99: #not nan
         I = i + mini
@@ -338,12 +338,12 @@ def main():
     print(entry)
     print()
     peptide_shifts = entry.get_peptide_shifts()
-    for (stID, condID, assemID, entityID), shifts in peptide_shifts.items():
+    for (stID, condID, assemID, assem_entityID, entityID), shifts in peptide_shifts.items():
         # get polymer sequence and chemical backbone shifts
         seq = entry.entities[entityID].seq
         bbshifts, bbshifts_arr, bbshifts_mask = trizod.get_valid_bbshifts(shifts, seq)
         if bbshifts is None:
-            logging.warning(f'skipping shifts for {(stID, condID, assemID, entityID)}, retrieving backbone shifts failed')
+            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, retrieving backbone shifts failed')
             continue
 
         # use POTENCI to predict shifts
@@ -363,7 +363,7 @@ def main():
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
         except Exception:
-            logging.error(f"POTENCI failed for {(stID, condID, assemID, entityID)} due to the following error:\n{str(traceback.format_exc())}")
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID)} due to the following error:\n{str(traceback.format_exc())}")
             continue
         
         # compare predicted to actual shifts
@@ -376,7 +376,7 @@ def main():
         offr = get_offset_correction(cmpdct, cmparr, cmpmask, bbatns, minAIC=6.0)
         
         if offr is None:
-            logging.warning(f'no running offset could be estimated for {(stID, condID, assemID, entityID)}')
+            logging.warning(f'no running offset could be estimated for {(stID, condID, assemID, assem_entityID, entityID)}')
             #bbatns = ['C','CA','CB','HA','H','N','HB']
             off0 = dict(zip(bbatns,[0.0 for _ in bbatns]))
             armsdc = 999.9
@@ -402,7 +402,7 @@ def main():
             cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=noffc, minAIC=6.0)
         
         mini = min([min(cmpdct[at].keys()) for at in cmpdct])
-        savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, entityID)
+        savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, assem_entityID, entityID)
 
 if __name__ == '__main__':
     args = parse_args()

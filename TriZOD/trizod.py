@@ -36,6 +36,7 @@ class Entity(object):
         self.type = get_tag_vals(sf, '_Entity.Type', indices=0)
         self.polymer_type = get_tag_vals(sf, '_Entity.Polymer_type', indices=0)
         self.polymer_type_details = get_tag_vals(sf, '_Entity.Polymer_type_details', indices=0)
+        self.polymer_author_seq_details = get_tag_vals(sf, '_Entity.Polymer_author_seq_details', indices=0)
         self.seq = get_tag_vals(sf, '_Entity.Polymer_seq_one_letter_code', indices=0)
         if self.seq is not None and self.seq not in ['', '.']:
             self.seq = self.seq.replace('\n', '')
@@ -98,11 +99,6 @@ class SampleConditions(object):
             get_tag_vals(sf, '_Sample_condition_variable.Val_units', default=[])
             ))
         for t,val,unit in info:
-            try:
-                val = float(val)
-            except:
-                logging.warning(f'failed to convert value for {t}')
-                continue
             if 'ionic strength' in t.lower():
                 self.ionic_strength = (val, unit)
             elif t.lower() == 'ph':
@@ -115,6 +111,7 @@ class SampleConditions(object):
                 logging.debug(f'Skipping sample condition {t} = {val} {unit}')
     
     def convert_unit(self, val, unit, target_unit):
+        '''too slow...'''
         ureg = pint.UnitRegistry()
         try:
             factor = ureg.parse_expression(unit).to(target_unit).magnitude
@@ -129,26 +126,70 @@ class SampleConditions(object):
             factor = ureg.parse_expression(assumed_unit).to(target_unit).magnitude
         return val * factor
 
+    def convert_val(self, val):
+        try:
+            val = float(val)
+        except:
+            logging.warning(f'failed to convert value {val}')
+            val = np.nan
+        return val
+
     def get_pH(self):
-        if self.pH[0] is None:
+        val = self.convert_val(self.pH[0])
+        if np.isnan(val):
             logging.warning(f'No information on pH for sample condition {self.id}, assuming 7.0')
             return 7.0
-        return self.pH[0]
+        return val
     
-    def get_temperature(self):
-        if self.temperature[0] is None:
+    def get_temperature(self, fix_outliers=True):
+        val = self.convert_val(self.temperature[0])
+        if np.isnan(val):
             logging.warning(f'No information on temperature for sample condition {self.id}, assuming 298 K')
             return 298.
-        return self.convert_unit(self.temperature[0], self.temperature[1], 'K')
+        if 'C' in self.temperature[1]:
+            const0, const1, factor = 0., 273.15, 1.
+        elif 'F' in self.temperature[1]:
+            const0, const1, factor = -32., 273.15, 1.8
+        elif self.temperature[1] == 'K':
+            const0, const1, factor = 0., 0., 1.
+        else:
+            const0, const1, factor = 0., 0., 1.
+            logging.info(f'Temperature unit unknown: {self.temperature[1]}, assuming K')
+        if fix_outliers and const1 == 0.: # not explicitly °C or °F
+            if 15 <= val < 50:
+                logging.info(f'Very low temperature: {val}, assuming unit should be °C')
+                const0, const1, factor = 0., 273.15, 1.
+            elif 50 <= val <= 100:
+                const0, const1, factor = -32., 273.15, 1.8
+                logging.info(f'Low temperature: {val}, assuming unit should be °F')
+        return (val + const0) * factor + const1
+        #return self.convert_unit(val, self.temperature[1], 'K')
     
     def get_pressure(self):
-        return self.convert_unit(self.pressure[0], self.pressure[1], 'atm')
+        # TODO: implement
+        return
+        #return self.convert_unit(self.pressure[0], self.pressure[1], 'atm')
     
-    def get_ionic_strength(self):
-        if self.ionic_strength[0] is None:
+    def get_ionic_strength(self, fix_outliers=True):
+        val = self.convert_val(self.ionic_strength[0])
+        if np.isnan(val):
             logging.warning(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
             return 0.1
-        return self.convert_unit(self.ionic_strength[0], self.ionic_strength[1], 'M')
+        if self.ionic_strength[1] == 'M':
+            const1, factor = 0., 1.
+        elif self.ionic_strength[1] == 'mM':
+            const1, factor = 0., 0.001
+        elif self.ionic_strength[1] == 'mu':
+            const1, factor = 0., 0.000001
+        else:
+            const1, factor = 0., 1.
+            logging.info(f'Ionic strength unit unknown: {self.ionic_strength[1]}, assuming K')
+        if fix_outliers and factor == 1.:
+            if val > 5:
+                logging.info(f'High ionic strength: {val}, assuming unit should be mM')
+                factor = 0.001
+        return val * factor + const1
+        #return self.convert_unit(val, self.ionic_strength[1], 'M')
 
     def __str__(self):
         return f'(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)'
@@ -162,6 +203,7 @@ class Sample(object):
         self.id = get_tag_vals(sf, '_Sample.ID', indices=0)
         self.type = get_tag_vals(sf, '_Sample.Type', indices=0)
         self.components = list(zip(
+            get_tag_vals(sf, '_Sample_component.ID', default=[]),
             get_tag_vals(sf, '_Sample_component.Assembly_ID', default=[]),
             get_tag_vals(sf, '_Sample_component.Entity_ID', default=[]),
             get_tag_vals(sf, '_Sample_component.Mol_common_name', default=[]),
@@ -244,7 +286,6 @@ class BmrbEntry(object):
             fn3 = os.path.join(bmrb_dir, f"bmr{id_}_3.str")
             if not os.path.exists(fn3):
                 logging.error(f'Bio-Star file for BMRB entry {id_} not found, file {fn3} does not exist')
-                #sys.exit(1)
                 raise ValueError
 
         self.source = fn3
@@ -279,19 +320,21 @@ class BmrbEntry(object):
         entry_assemblies = entry.get_saveframes_by_category('assembly')
         if len(entry_assemblies) == 0:
             logging.error(f'BMRB entry {id_} contains no assembly information')
-            #sys.exit(1)
-            raise ValueError
+            #raise ValueError
         self.assemblies = [Assembly(sf) for sf in entry_assemblies]
-        assert len([a.id for a in self.assemblies]) == len({a.id for a in self.assemblies})
+        if not len([a.id for a in self.assemblies]) == len({a.id for a in self.assemblies}):
+            logging.error("entry contains assemblies with non-unique ID")
+            raise ValueError
         self.assemblies = {a.id:a for a in self.assemblies}
         
         entry_entities = entry.get_saveframes_by_category('entity')
         if len(entry_entities) == 0:
             logging.error(f'BMRB entry {id_} contains no entity information')
-            #sys.exit(1)
-            raise ValueError
+            #raise ValueError
         self.entities = [Entity(sf) for sf in entry_entities]
-        assert len([e.id for e in self.entities]) == len({e.id for e in self.entities})
+        if not len([e.id for e in self.entities]) == len({e.id for e in self.entities}):
+            logging.error("entry contains entities with non-unique ID")
+            raise ValueError
         self.entities = {e.id:e for e in self.entities}
 
         entry_samples = entry.get_saveframes_by_category('sample')
@@ -299,7 +342,9 @@ class BmrbEntry(object):
             logging.warning(f'BMRB entry {id_} contains no sample information')
         else:
             self.samples = [Sample(sf) for sf in entry_samples]
-            assert len([s.id for s in self.samples]) == len({s.id for s in self.samples})
+            if not len([s.id for s in self.samples]) == len({s.id for s in self.samples}):
+                logging.error("entry contains samples with non-unique ID")
+                raise ValueError
             self.samples = {s.id:s for s in self.samples}
 
         entry_conditions = entry.get_saveframes_by_category('sample_conditions')
@@ -307,16 +352,19 @@ class BmrbEntry(object):
             logging.warning(f'BMRB entry {id_} contains no sample condition information')
         else:
             self.conditions = [SampleConditions(sf) for sf in entry_conditions]
-            assert len([a.id for a in self.conditions]) == len({a.id for a in self.conditions})
+            if not len([a.id for a in self.conditions]) == len({a.id for a in self.conditions}):
+                logging.error("entry contains conditions with non-unique ID")
+                raise ValueError
             self.conditions = {a.id:a for a in self.conditions}
 
         entry_shift_tables = entry.get_saveframes_by_category('assigned_chemical_shifts')
         if len(entry_shift_tables) == 0:
             logging.error(f'BMRB entry {id_} contains no chemical shift information')
-            #sys.exit(1)
-            raise ValueError
+            #raise ValueError
         self.shift_tables = [ShiftTable(sf) for sf in entry_shift_tables]
-        assert len([s.id for s in self.shift_tables]) == len({s.id for s in self.shift_tables})
+        if not len([s.id for s in self.shift_tables]) == len({s.id for s in self.shift_tables}):
+            logging.error("entry contains shift tables with non-unique ID")
+            raise ValueError
         self.shift_tables = {s.id:s for s in self.shift_tables}
     
     def get_peptide_shifts(self):
@@ -326,23 +374,40 @@ class BmrbEntry(object):
             if condID is None or condID not in self.conditions:
                 logging.error(f'skipping shift table {stID} due to missing conditions entry: {condID}')
                 continue
-            for (assemID,entityID),shifts in st.shifts.items():
-                if assemID is None or assemID not in [e[0] for assem in self.assemblies for e in self.assemblies[assem].entities]: #self.assemblies:
-                    logging.error(f'skipping shifts for entity {entityID} due to missing assembly entity entry: {assemID}')
+            for (entity_assemID,entityID),shifts in st.shifts.items():
+                # check if there is ambiguity if the entityID tag in matching assemblies is not tested (might be empty)
+                assemID = [(self.assemblies[assem].id, e[1]) for assem in self.assemblies for e in self.assemblies[assem].entities if e[0] == entity_assemID and e[1] in ['', None, entityID]]
+                if len(assemID) > 1:
+                    # if so, enforce same entityID
+                    # should be extremely rare, only few entries have multiple assemblies...
+                    logging.info(f"ambiguity with respect to correct assemly, enforcing matching, non-empty entityID")
+                    assemID = [(self.assemblies[assem].id, e[1]) for assem in self.assemblies for e in self.assemblies[assem].entities if e[0] == entity_assemID and e[1] == entityID]
+                    if len(assemID) > 1:
+                        logging.error(f'skipping shifts for entity {entityID} due to ambiguity with respect to correct assemly: {assemID}')
+                        continue
+                if len(assemID) == 0:
+                    logging.error(f"skipping shift table {stID}, could not associate it with any assembly")
+                    continue
+                assemID, entityID_ = assemID[0]
+                if entityID_ != entityID:
+                    logging.warning(f'Unambiguously using assembly {assemID} with empty entityID tag for assembly entity {entity_assemID}, assuming it is {entityID}')
+                
+                if entity_assemID is None or entity_assemID not in [e[0] for assem in self.assemblies for e in self.assemblies[assem].entities]: #self.assemblies:
+                    logging.error(f'skipping shifts for entity {entityID} due to missing assembly entity entry: {entity_assemID}')
                     continue
                 if entityID is None or entityID not in self.entities:
-                    logging.error(f'skipping shifts for assembly {assemID} due to missing entity entry: {entityID}')
+                    logging.error(f'skipping shifts for assembly {entity_assemID} due to missing entity entry: {entityID}')
                     continue
                 entity = self.entities[entityID]
                 if not entity.type:
-                    logging.error(f'skipping shifts for assembly {assemID} due to missing entity type: {entityID}')
+                    logging.error(f'skipping shifts for assembly {entity_assemID} due to missing entity type: {entityID}')
                     continue
                 if entity.type == 'polymer':
                     if not entity.polymer_type:
-                        logging.error(f'skipping shifts for assembly {assemID} due to missing polymer type for entity: {entityID}')
+                        logging.error(f'skipping shifts for assembly {entity_assemID} due to missing polymer type for entity: {entityID}')
                         continue
                     if entity.polymer_type == 'polypeptide(L)':
-                        peptide_shifts[(stID, condID, assemID, entityID)] = shifts
+                        peptide_shifts[(stID, condID, assemID, entity_assemID, entityID)] = shifts
         return peptide_shifts
 
     
