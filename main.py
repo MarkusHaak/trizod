@@ -1,7 +1,8 @@
-import os
+import os, sys
 import logging
 import argparse
 import TriZOD.potenci as potenci
+import TriZOD.bmrb as bmrb
 import TriZOD.trizod as trizod
 import numpy as np
 import pandas as pd
@@ -131,7 +132,7 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     try:
         min_idx_ = runstds_val.idxmin()
     except ValueError:
-        min_idx_ = None # still not found
+        return None # still not found
 
     # >
     offdct = {}
@@ -150,8 +151,6 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     # <
     
     offdct_ = {}
-    if min_idx_ == None:
-        return None
     for col in runstds_.dropna(how='all', axis=1).columns: # for all at shifts that were detected anywhere in this sample
         at = bbatns[col]
         roff = runoffs_.loc[min_idx_][col]
@@ -164,7 +163,7 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
             offdct_[at] = roff
         else:
             print('rejecting offset correction due to low dAIC:', at, roff, dAIC)
-            offdct_[at] = 0.0
+            #offdct_[at] = 0.0
     
     #if not offdct == offdct_:
     #    breakpoint()
@@ -177,7 +176,7 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
     mini = min([min(dct[at].keys()) for at in dct])#is often 1
 
     # >
-    nres = maxi-mini+1
+    nres = maxi - mini + 1
     tot = np.zeros(nres)
     totnum = np.zeros(nres)
     oldct = set() # was {}
@@ -186,8 +185,8 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
         A = np.array(list(dct[at].items()))
         w = refined_weights[at]
         shw = A[:,1] / w
-        shw -= offdct[at] #offset correction
-        print ('using predetermined offset correction', at, offdct[at], offdct[at] * w)
+        shw -= offdct.get(at, 0.) #offset correction
+        print ('using predetermined offset correction', at, offdct.get(at, 0.), offdct.get(at, 0.) * w)
         for i in range(len(A)):
             resi = int(A[i][0]) - mini #minimum value for resi is 0
             ashwi = np.abs(shw[i])
@@ -261,10 +260,11 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
             numol += 1
     # <
     
-    ol_ = mask & (np.repeat(finaloutli_, 7).reshape((finaloutli_.shape[0],7)) | oldct_) # mask for the outliers
+    #ol_ = mask & (np.repeat(finaloutli_, 7).reshape((finaloutli_.shape[0],7)) | oldct_) # mask for the outliers
+    ol_ = mask & (np.bitwise_or(np.expand_dims(finaloutli_, axis=1), oldct_)) # mask for the outliers
     accdct_ = mask & ~ol_ # mask for the validated data (where there is shift data, predictions and not outliers)
     numol_ = ol_.sum()
-    
+
     # >
     sumrmsd = 0.0
     totsh = 0
@@ -309,6 +309,12 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
 
     # np.array_equal(cmparr[accdct_], d_accdct[accdct_]) = True !
 
+    #shw0, ashwi0 = trizod.get_std_norm_diffs(cmparr, mask, offdct)
+    #_,cdfs30,_,cdfs0 = trizod.compute_zscores(ashwi0, mask)
+    #ol0 = trizod.get_outlier_mask(cdfs30, cdfs0, ashwi0, mask, cdfthr=6.0)
+    #noff0 = trizod.compute_offsets(shw0, mask & ~ol0, minAIC=6.0)
+    #breakpoint()
+
     # >
     if totsh == 0:
         avewrmsd,fracacc = 9.99, 0.0
@@ -333,7 +339,7 @@ def savedata(cdfs3, bmrID, seq, mini, stID, condID, assemID, assem_entityID, ent
     out.close()
 
 def main():
-    entry = trizod.BmrbEntry(args.ID, args.bmrb_dir)
+    entry = bmrb.BmrbEntry(args.ID, args.bmrb_dir)
     print("Parsed the following BMRB entry:")
     print(entry)
     print()
@@ -341,7 +347,7 @@ def main():
     for (stID, condID, assemID, assem_entityID, entityID), shifts in peptide_shifts.items():
         # get polymer sequence and chemical backbone shifts
         seq = entry.entities[entityID].seq
-        bbshifts, bbshifts_arr, bbshifts_mask = trizod.get_valid_bbshifts(shifts, seq)
+        bbshifts, bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq)
         if bbshifts is None:
             logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, retrieving backbone shifts failed')
             continue
@@ -350,15 +356,6 @@ def main():
         ion = entry.conditions[condID].get_ionic_strength()
         pH = entry.conditions[condID].get_pH()
         temperature = entry.conditions[condID].get_temperature()
-        if ion is None:
-            logging.warning(f'No information on ionic strength for sample condition {condID}, assuming 0.1 M')
-            ion = 0.1
-        if pH is None:
-            logging.warning(f'No information on pH for sample condition {condID}, assuming 7.0')
-            pH = 7.0
-        if temperature is None:
-            logging.warning(f'No information on temperature for sample condition {condID}, assuming 298 K')
-            temperature = 298.
         usephcor = pH < 6.99 or pH > 7.01
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
@@ -369,43 +366,91 @@ def main():
         # compare predicted to actual shifts
         cmpdct, shiftdct, cmparr, bbatns = comp2pred(predshiftdct,bbshifts,seq)
         cmparr, bbatns, cmpmask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
-        #cmpdct, shiftdct = None, None
-
         totbbsh = sum([len(cmpdct[at].keys()) for at in cmpdct])
         logging.info(f"total number of backbone shifts: {totbbsh}")
+
+        off0 = dict(zip(bbatns,[0.0 for _ in bbatns]))
+        armsd0,fra0,noff0,cdfs30 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, offdct=off0, minAIC=6.0)
+        av0 = np.nanmean(cdfs30) #np.average(cdfs30[cdfs30 < 20.0]) #to avoid nan
+        offdct = noff0
+
         offr = get_offset_correction(cmpdct, cmparr, cmpmask, bbatns, minAIC=6.0)
-        
         if offr is None:
             logging.warning(f'no running offset could be estimated for {(stID, condID, assemID, assem_entityID, entityID)}')
-            #bbatns = ['C','CA','CB','HA','H','N','HB']
-            off0 = dict(zip(bbatns,[0.0 for _ in bbatns]))
-            armsdc = 999.9
-            frac = 0.0
-        else:
-            atns = offr.keys()
-            off0 = dict(zip(atns,[0.0 for _ in atns]))
+        elif np.any([v != 0. for v in offr.values()]):
             armsdc,frac,noffc,cdfs3c = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, offdct=offr, minAIC=6.0)
-        armsd0,fra0,noff0,cdfs30 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, offdct=off0, minAIC=6.0)
-        usefirst = (armsd0 / (0.01 + fra0)) < (armsdc / (0.01 + frac))
-        av0 = np.average(cdfs30[cdfs30 < 20.0]) #to avoid nan
-        if offr is not None:
-            avc = np.average(cdfs3c[cdfs3c < 20.0])
-            orusefirst = av0 < avc
-            if usefirst != orusefirst:
-                print('WARNING: hard decission',usefirst,orusefirst)
-            print('decide',orusefirst,armsd0,fra0,av0,armsdc,frac,avc)
-        else:
-            orusefirst=True
-        if orusefirst:
-            cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=noff0, minAIC=6.0)
-        else:
-            cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=noffc, minAIC=6.0)
+            avc = np.nanmean(cdfs3c) #np.average(cdfs3c[cdfs3c < 20.0])
+            logging.info(f'decide {av0 >= avc} , armsd0 = {armsd0} , fra0 = {fra0} , av0 = {av0} , armsdc = {armsdc} , frac = {frac} , avc = {avc}')
+            if av0 >= avc: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (more disordered residues)
+                offdct = noffc
         
+        cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=offdct, minAIC=6.0)
         mini = min([min(cmpdct[at].keys()) for at in cmpdct])
-        savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, assem_entityID, entityID)
+        #breakpoint()
+        #savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, assem_entityID, entityID)
+
+def new_main():
+    entry = bmrb.BmrbEntry(args.ID, args.bmrb_dir)
+    print("Parsed the following BMRB entry:")
+    print(entry)
+    print()
+
+    # reject solid state experiments
+    if not ('nmr' in entry.exp_method.lower() and \
+       ('solution' in entry.exp_method_subtype.lower() or \
+        'STRUCTURES' in entry.exp_method_subtype or not entry.exp_method_subtype) and \
+       'state' not in entry.exp_method_subtype.lower()):
+        logging.error(f"Reject BMRB entry due to wrong experiment method descriptor: {entry.exp_method}, {entry.exp_method_subtype}")
+        sys.exit(1)
+
+    peptide_shifts = entry.get_peptide_shifts()
+    for (stID, condID, assemID, assem_entityID, entityID), shifts in peptide_shifts.items():
+        # get polymer sequence and chemical backbone shifts
+        seq = entry.entities[entityID].seq
+        if seq is None:
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, no sequence information")
+            continue
+        elif len(seq) < 5:
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, sequence shorter than 5 residues")
+            continue
+
+        # use POTENCI to predict shifts
+        ion = entry.conditions[condID].get_ionic_strength()
+        pH = entry.conditions[condID].get_pH()
+        temperature = entry.conditions[condID].get_temperature()
+
+        # reject if out of certain ranges
+        if ion > 3. or pH > 13. or temperature < 273.15 or temperature > 373.15:
+            logging.error(f"skipping {(stID, condID, assemID, assem_entityID, entityID)} due to extreme experiment conditions")
+            continue
+        
+        # predict random coil chemical shifts using POTENCI
+        usephcor = pH != 7.0
+        try:
+            predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
+        except:
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID)} due to the following error:", exc_info=True)
+            continue
+        ret = trizod.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
+        if ret is None:
+            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)} due to a previous error')
+            continue
+        shw, ashwi, cmp_mask, olf, offf = ret
+        ashwi3, k3 = trizod.convert_to_triplet_data(ashwi, cmp_mask)
+        zscores = trizod.compute_zscores(ashwi3, k3, cmp_mask)
+        zscores_corr = trizod.compute_zscores(ashwi3, k3, cmp_mask, corr=True)
+        pscores = trizod.compute_pscores(ashwi3, k3, cmp_mask)
+        # save data
+        fp = os.path.join(entry.entry_path, f'trizod{args.ID}_{stID}_{condID}_{assemID}_{assem_entityID}_{entityID}.npz')
+        np.savez(fp, zscores=zscores, zscores_corr=zscores_corr, pscores=pscores,
+                 shw=shw, ashwi=ashwi, ashwi3=ashwi3, k3=k3, cmp_mask=cmp_mask, 
+                 olf=olf, offf=offf,
+                 seq=np.array(list(seq)))
+        
 
 if __name__ == '__main__':
     args = parse_args()
     level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(level=level) #filename='example.log', encoding='utf-8'
+    #new_main()
     main()

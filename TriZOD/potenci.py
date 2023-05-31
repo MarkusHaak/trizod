@@ -932,22 +932,22 @@ def getpredshifts(seq,temperature,pH,ion,usephcor=True,pkacsvfile=None,identifie
     return shiftdct
 
 def writeOutput(name,dct):
-        out=open(name,'w')
-        bbatns =['N','C','CA','CB','H','HA','HB']
-        out.write('#NUM AA   N ')
-        out.write(' %7s %7s %7s %7s %7s %7s\n'%tuple(bbatns[1:]))
-        reskeys=list(dct.keys())
-        reskeys.sort()
-        for resnum,resn in reskeys:
-          shdct=dct[(resnum,resn)]
-          if len(shdct)>0:
+    out=open(name,'w')
+    bbatns =['N','C','CA','CB','H','HA','HB']
+    out.write('#NUM AA   N ')
+    out.write(' %7s %7s %7s %7s %7s %7s\n'%tuple(bbatns[1:]))
+    reskeys=list(dct.keys())
+    reskeys.sort()
+    for resnum,resn in reskeys:
+        shdct=dct[(resnum,resn)]
+        if len(shdct)>0:
             out.write('%-4d %1s '%(resnum,resn))
             for at in bbatns:
-              shp=0.0
-              if at in shdct:shp=shdct[at]
-              out.write(' %7.3f'%shp)
-          out.write('\n')
-        out.close()
+                shp=0.0
+                if at in shdct:shp=shdct[at]
+                out.write(' %7.3f'%shp)
+        out.write('\n')
+    out.close()
 
 def main():
     ##README##......

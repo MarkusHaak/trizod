@@ -5,3 +5,5 @@ tmp*
 *.pyc
 *.txt
 __pycache__
+data
+tests
