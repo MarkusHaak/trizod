@@ -3,6 +3,7 @@ import pandas as pd
 import logging
 import TriZOD.bmrb as bmrb
 import scipy
+import warnings
 
 BBATNS = ['C','CA','CB','HA','H','N','HB']
 REFINED_WEIGHTS = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
@@ -30,9 +31,27 @@ Z_CORRECTION = {
  21: -0.014116118689604495}
 
 def convChi2CDF(rss,k):
-    return ((((rss/k)**(1.0/6))-0.50*((rss/k)**(1.0/3))+1.0/3*((rss/k)**(1.0/2)))\
+    # I expect to see RuntimeWarnings in this block
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        res = ((((rss/k)**(1.0/6))-0.50*((rss/k)**(1.0/3))+1.0/3*((rss/k)**(1.0/2)))\
             - (5.0/6-1.0/9/k-7.0/648/(k**2)+25.0/2187/(k**3)))\
             / np.sqrt(1.0/18/k+1.0/162/(k**2)-37.0/11664/(k**3))
+    return res
+
+#def convChi2CDF(rss,k):
+#    mask = k>0
+#    div_rss_k = np.zeros(rss.shape, dtype=rss.dtype)
+#    div_rss_k = np.divide(rss, k, where=mask)
+#    s1 = np.divide((1/9),k, where=mask)# np.zeros(k.shape, dtype=k.dtype)
+#    s2 = np.divide((7/648),(k**2), where=mask)# np.zeros(k.shape, dtype=k.dtype)
+#    s3 = np.divide((25/2187),(k**3), where=mask)# np.zeros(k.shape, dtype=k.dtype)
+#    sqrt = np.sqrt(np.divide((1/18),k, where=mask) + np.divide((1/162),(k**2), where=mask) - np.divide((37/11664),(k**3), where=mask), where=mask)
+#    ret = np.divide((((div_rss_k**(1/6)) - 0.50*(div_rss_k**(1/3)) + (1/3)*(div_rss_k**(1/2)))\
+#                     - ((5/6) - s1 - s2 + s3)),
+#                     sqrt, where=mask)
+#    ret[~mask] = np.nan
+#    return ret
 
 def comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask):
     #cmparr = np.zeros(shape=(len(seq), len(BBATNS)))
@@ -50,8 +69,6 @@ def comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask):
     return cmparr, BBATNS, bbshifts_mask & predshift_mask
 
 def compute_running_offsets(cmparr, mask, minAIC=999.):
-    REFINED_WEIGHTS = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
-    
     w_ = np.array([REFINED_WEIGHTS[at] for at in BBATNS]) # ensure same order
     shw_ = cmparr / w_
     df = pd.DataFrame(shw_).mask(~mask)
@@ -68,7 +85,8 @@ def compute_running_offsets(cmparr, mask, minAIC=999.):
     runoffs_ = pd.concat(at_roff, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
     runstd0s_ = pd.concat(at_std0, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
     # get index with the lowest mean rolling stddev for which all ats were detected (all that were detected anywhere for this sample)
-    runstds_val = runstds_.dropna(how='all', axis=1).dropna(axis=0).mean(axis=1)
+    #runstds_val = runstds_.dropna(how='all', axis=1).dropna(axis=0).mean(axis=1)
+    runstds_val = runstds_[runstds_.columns[mask.any(axis=0)]].dropna(axis=0).mean(axis=1)
     try:
         min_idx_ = runstds_val.idxmin()
     except ValueError:
@@ -156,12 +174,14 @@ def compute_pscores(ashwi3, k3, mask, quotient=2.0, limit=4.0):
 
     if limit:
         p = np.prod(scipy.stats.norm.pdf(np.minimum(ashwi3, limit) / quotient) / scipy.stats.norm.pdf(0.), axis=1)
-        p = p ** (1/k3)
+        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are expected 
+            p = p ** (1/k3)
         minimum = scipy.stats.norm.pdf(limit / quotient) / scipy.stats.norm.pdf(0.)
         p = (p - minimum) / (1. - minimum)
     else:
         p = np.prod(scipy.stats.norm.pdf(ashwi3 / quotient) / scipy.stats.norm.pdf(0.), axis=1)
-        p = p ** (1/k3)
+        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are expected 
+            p = p ** (1/k3)
     p[k3 == 0] = np.nan
     p[:mini] = np.nan
     p[maxi+1:] = np.nan
@@ -185,7 +205,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     cmparr, BBATNS, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
     totbbsh = np.sum(cmp_mask)
     if totbbsh == 0:
-        logging.error(f'no backbone shifts')
+        logging.error(f'no comparable backbone shifts')
         return
     logging.info(f"total number of backbone shifts: {totbbsh}")
 
@@ -212,7 +232,8 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
         cdfs3c = compute_zscores(*convert_to_triplet_data(ashwic, cmp_mask), cmp_mask)
         avc = np.nanmean(cdfs3c)
         #logging.info(f'decide {av0 < avc} , armsd0 = {armsd0} , fra0 = {fra0} , av0 = {av0} , armsdc = {armsdc} , frac = {frac} , avc = {avc}')
-        if avc <= av0: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (smaller mean, more disordered residues)
+        #if avc <= av0: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (smaller mean, more disordered residues)
+        if av0 >= avc: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (more disordered)
             olc = get_outlier_mask(cdfs3c, cdfsc, ashwic, cmp_mask, cdfthr=6.0)
             noffc = compute_offsets(shwc, cmp_mask & ~olc, minAIC=6.)
             offf = noffc
@@ -221,4 +242,4 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     #cdfs3 = results_w_offset(cmparr, cmp_mask, BBATNS, dataset=True, offdct=offdct, minAIC=6.0)
     shwf, ashwif = get_std_norm_diffs(cmparr, cmp_mask, offf)
     #_,cdfs3f,_,_ = compute_zscores(ashwif, cmp_mask)
-    return shwf, ashwif, cmp_mask, olf, offf
+    return shwf, ashwif, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0

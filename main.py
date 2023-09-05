@@ -86,20 +86,25 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     rdct = {}
     
     for at in dct:
-        A = np.array(list(dct[at].items()))
+        A_list = list(dct[at].items())
+        A_list.sort(key=lambda x: x[0])
+        A = np.array(A_list)
         w = refined_weights[at]
         shw = A[:,1] / w
         for i in range(len(A)):
             resi = int(A[i][0]) - mini #minimum value for resi is 0
+            if resi in [42,43]:
+                print(i, resi, at, len(A))
             totnum[resi] += 1
             if 3 < i < len(A)-4:
                 vals = shw[i-4:i+5]
                 runstd = np.std(vals)
                 allruns[resi] += runstd
                 runstds[resi + mini,bbatns.index(at)] = runstd
-                if not resi in rdct:
-                    rdct[resi]={}
+                if resi not in rdct:
+                    rdct[resi] = {}
                 rdct[resi][at] = np.average(vals), np.sqrt(np.average(vals**2)), runstd
+        #breakpoint()
     tr = (allruns / totnum)[4:-4]
     mintr = None
     minval = 999
@@ -128,11 +133,13 @@ def get_offset_correction(dct, cmparr, mask, bbatns, minAIC=999.):
     runoffs_ = pd.concat(at_roff, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
     runstd0s_ = pd.concat(at_std0, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
     # get index with the lowest mean rolling stddev for which all ats were detected (all that were detected anywhere for this sample)
-    runstds_val = runstds_.dropna(how='all', axis=1).dropna(axis=0).mean(axis=1)
+    #runstds_val = runstds_.dropna(how='all', axis=1).dropna(axis=0).mean(axis=1)
+    runstds_val = runstds_[runstds_.columns[mask.any(axis=0)]].dropna(axis=0).mean(axis=1)
     try:
         min_idx_ = runstds_val.idxmin()
     except ValueError:
         return None # still not found
+
 
     # >
     offdct = {}
@@ -329,7 +336,7 @@ def results_w_offset(dct, shiftdct, cmparr, mask, bbatns, dataset=None, offdct=N
         avewrmsd_,fracacc_ = sumrmsd_ / totsh_, totsh_ / (0.0+totsh_+numol_)
     return avewrmsd_, fracacc_, newoffdct_, cdfs3_[mini:maxi+1] #offsets from accepted stats
 
-def savedata(cdfs3, bmrID, seq, mini, stID, condID, assemID, assem_entityID, entityID):
+def savedata(cdfs3, bmrID, seq, mini, stID, condID, assemID, assem_entityID, entityID, sampleID):
     out=open(f'zscores{bmrID}_{stID}_{condID}_{assemID}_{assem_entityID}_{entityID}.txt','w')
     for i,x in enumerate(cdfs3):
       if x < 99: #not nan
@@ -344,12 +351,12 @@ def main():
     print(entry)
     print()
     peptide_shifts = entry.get_peptide_shifts()
-    for (stID, condID, assemID, assem_entityID, entityID), shifts in peptide_shifts.items():
+    for (stID, condID, assemID, assem_entityID, entityID, sampleID), shifts in peptide_shifts.items():
         # get polymer sequence and chemical backbone shifts
         seq = entry.entities[entityID].seq
         bbshifts, bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq)
         if bbshifts is None:
-            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, retrieving backbone shifts failed')
+            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID, sampleID)}, retrieving backbone shifts failed')
             continue
 
         # use POTENCI to predict shifts
@@ -360,7 +367,7 @@ def main():
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
         except Exception:
-            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID)} due to the following error:\n{str(traceback.format_exc())}")
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID, sampleID)} due to the following error:\n{str(traceback.format_exc())}")
             continue
         
         # compare predicted to actual shifts
@@ -376,18 +383,18 @@ def main():
 
         offr = get_offset_correction(cmpdct, cmparr, cmpmask, bbatns, minAIC=6.0)
         if offr is None:
-            logging.warning(f'no running offset could be estimated for {(stID, condID, assemID, assem_entityID, entityID)}')
+            logging.warning(f'no running offset could be estimated for {(stID, condID, assemID, assem_entityID, entityID, sampleID)}')
         elif np.any([v != 0. for v in offr.values()]):
             armsdc,frac,noffc,cdfs3c = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, offdct=offr, minAIC=6.0)
             avc = np.nanmean(cdfs3c) #np.average(cdfs3c[cdfs3c < 20.0])
             logging.info(f'decide {av0 >= avc} , armsd0 = {armsd0} , fra0 = {fra0} , av0 = {av0} , armsdc = {armsdc} , frac = {frac} , avc = {avc}')
-            if av0 >= avc: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (more disordered residues)
+            if av0 >= avc: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (more disordered)
                 offdct = noffc
         
         cdfs3 = results_w_offset(cmpdct, shiftdct, cmparr, cmpmask, bbatns, dataset=True, offdct=offdct, minAIC=6.0)
         mini = min([min(cmpdct[at].keys()) for at in cmpdct])
         #breakpoint()
-        #savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, assem_entityID, entityID)
+        #savedata(cdfs3, args.ID, seq, mini, stID, condID, assemID, assem_entityID, entityID, sampleID)
 
 def new_main():
     entry = bmrb.BmrbEntry(args.ID, args.bmrb_dir)
@@ -404,14 +411,14 @@ def new_main():
         sys.exit(1)
 
     peptide_shifts = entry.get_peptide_shifts()
-    for (stID, condID, assemID, assem_entityID, entityID), shifts in peptide_shifts.items():
+    for (stID, condID, assemID, assem_entityID, entityID, sampleID), shifts in peptide_shifts.items():
         # get polymer sequence and chemical backbone shifts
         seq = entry.entities[entityID].seq
         if seq is None:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, no sequence information")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID, sampleID)}, no sequence information")
             continue
         elif len(seq) < 5:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, sequence shorter than 5 residues")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID, sampleID)}, sequence shorter than 5 residues")
             continue
 
         # use POTENCI to predict shifts
@@ -419,38 +426,42 @@ def new_main():
         pH = entry.conditions[condID].get_pH()
         temperature = entry.conditions[condID].get_temperature()
 
-        # reject if out of certain ranges
-        if ion > 3. or pH > 13. or temperature < 273.15 or temperature > 373.15:
-            logging.error(f"skipping {(stID, condID, assemID, assem_entityID, entityID)} due to extreme experiment conditions")
-            continue
+        ## reject if out of certain ranges
+        #if ion > 3. or pH > 13. or temperature < 273.15 or temperature > 373.15:
+        #    logging.error(f"skipping {(stID, condID, assemID, assem_entityID, entityID, sampleID)} due to extreme experiment conditions")
+        #    continue
         
         # predict random coil chemical shifts using POTENCI
         usephcor = pH != 7.0
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
         except:
-            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID)} due to the following error:", exc_info=True)
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID, sampleID)} due to the following error:", exc_info=True)
             continue
         ret = trizod.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
         if ret is None:
-            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)} due to a previous error')
+            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID, sampleID)} due to a previous error')
             continue
-        shw, ashwi, cmp_mask, olf, offf = ret
+        shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
         ashwi3, k3 = trizod.convert_to_triplet_data(ashwi, cmp_mask)
         zscores = trizod.compute_zscores(ashwi3, k3, cmp_mask)
         zscores_corr = trizod.compute_zscores(ashwi3, k3, cmp_mask, corr=True)
         pscores = trizod.compute_pscores(ashwi3, k3, cmp_mask)
+        ashwi30, k30 = trizod.convert_to_triplet_data(ashwi0, cmp_mask)
+        zscores_corr0 = trizod.compute_zscores(ashwi30, k30, cmp_mask, corr=True)
         # save data
         fp = os.path.join(entry.entry_path, f'trizod{args.ID}_{stID}_{condID}_{assemID}_{assem_entityID}_{entityID}.npz')
         np.savez(fp, zscores=zscores, zscores_corr=zscores_corr, pscores=pscores,
                  shw=shw, ashwi=ashwi, ashwi3=ashwi3, k3=k3, cmp_mask=cmp_mask, 
                  olf=olf, offf=offf,
+                 shw0=shw0, ashwi30=ashwi30, k30=k30, ol0=ol0, off0=off0,
+                 zscores_corr0=zscores_corr0,
                  seq=np.array(list(seq)))
         
 
 if __name__ == '__main__':
     args = parse_args()
     level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(level=level) #filename='example.log', encoding='utf-8'
-    #new_main()
-    main()
+    logging.basicConfig(level=level, format=f'%(levelname)s [{args.ID}] : %(message)s') #filename='example.log', encoding='utf-8'
+    new_main()
+    #main()

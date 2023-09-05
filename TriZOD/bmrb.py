@@ -1,7 +1,7 @@
 import os, sys
 import logging
 import pynmrstar
-import pint
+#import pint
 import numpy as np
 
 aa3to1 = {'CYS': 'C', 'GLN': 'Q', 'ILE': 'I', 'SER': 'S', 'VAL': 'V', 'MET': 'M', 'ASN': 'N', 'PRO': 'P', 'LYS': 'K', 'THR': 'T', 'PHE': 'F', 'ALA': 'A', 'HIS': 'H', 'GLY': 'G', 'ASP': 'D', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 'GLU': 'E', 'TYR': 'Y'}
@@ -109,21 +109,21 @@ class SampleConditions(object):
             else:
                 logging.debug(f'Skipping sample condition {t} = {val} {unit}')
     
-    def convert_unit(self, val, unit, target_unit):
-        '''too slow...'''
-        ureg = pint.UnitRegistry()
-        try:
-            factor = ureg.parse_expression(unit).to(target_unit).magnitude
-        except:
-            if target_unit == 'M' and val > 10:
-                assumed_unit = 'mM'
-            elif target_unit == 'K' and val < 150:
-                assumed_unit = '°C'
-            else:
-                assumed_unit = target_unit
-            logging.warning(f'Could not parse unit string for sample condition {self.id}: {val} "{unit}" , assuming {assumed_unit}')
-            factor = ureg.parse_expression(assumed_unit).to(target_unit).magnitude
-        return val * factor
+    #def convert_unit(self, val, unit, target_unit):
+    #    '''too slow...'''
+    #    ureg = pint.UnitRegistry()
+    #    try:
+    #        factor = ureg.parse_expression(unit).to(target_unit).magnitude
+    #    except:
+    #        if target_unit == 'M' and val > 10:
+    #            assumed_unit = 'mM'
+    #        elif target_unit == 'K' and val < 150:
+    #            assumed_unit = '°C'
+    #        else:
+    #            assumed_unit = target_unit
+    #        logging.warning(f'Could not parse unit string for sample condition {self.id}: {val} "{unit}" , assuming {assumed_unit}')
+    #        factor = ureg.parse_expression(assumed_unit).to(target_unit).magnitude
+    #    return val * factor
 
     def convert_val(self, val):
         try:
@@ -200,7 +200,11 @@ class Sample(object):
     def __init__(self, sf):
         super(Sample, self).__init__()
         self.id = get_tag_vals(sf, '_Sample.ID', indices=0)
+        self.name = get_tag_vals(sf, '_Sample.Name', indices=0)
+        self.framecode = get_tag_vals(sf, '_Sample.Sf_framecode', indices=0)
+        self.details = get_tag_vals(sf, '_Sample.Details', indices=0)
         self.type = get_tag_vals(sf, '_Sample.Type', indices=0)
+        self.sub_type = get_tag_vals(sf, '_Sample.Sub_type', indices=0)
         self.components = list(zip(
             get_tag_vals(sf, '_Sample_component.ID', default=[]),
             get_tag_vals(sf, '_Sample_component.Assembly_ID', default=[]),
@@ -215,6 +219,30 @@ class Sample(object):
     
     def __repr__(self):
         return f"<Sample {self.id}>"
+
+class ExperimentList(object):
+    def __init__(self, sf):
+        super(ExperimentList, self).__init__()
+        self.id = get_tag_vals(sf, '_Experiment_list.ID', indices=0)
+        self.details = get_tag_vals(sf, '_Experiment_list.Details', indices=0)
+        self.experiments = list(zip(
+            get_tag_vals(sf, '_Experiment.ID', default=[]),
+            get_tag_vals(sf, '_Experiment.Name', default=[]),
+            get_tag_vals(sf, '_Experiment.Raw_data_flag', default=[]),
+            get_tag_vals(sf, '_Experiment.Sample_ID', default=[]),
+            get_tag_vals(sf, '_Experiment.Sample_label', default=[]),
+            get_tag_vals(sf, '_Experiment.Sample_state', default=[]),
+            get_tag_vals(sf, '_Experiment.Sample_condition_list_ID', default=[]),
+            get_tag_vals(sf, '_Experiment.Sample_condition_list_label', default=[]),
+            get_tag_vals(sf, '_Experiment.Mass_spectrometer_ID', default=[]),
+            get_tag_vals(sf, '_Experiment.Mass_spectrometer_label', default=[]),
+        ))
+    
+    def __str__(self):
+        return f'(ExperimentList {self.id}: experiments: {[(c[0],c[1]) for c in self.experiments]})'
+    
+    def __repr__(self):
+        return f"<ExperimentList {self.id}>"
 
 class ShiftTable(object):
     def __init__(self, sf):
@@ -258,6 +286,8 @@ class BmrbEntry(object):
         
         self.id = id_
         self.type = None
+        self.title = None
+        self.details = None
         self.submission_date = None
         self.nmr_star_version = None
         self.original_nmr_star_version = None
@@ -294,6 +324,8 @@ class BmrbEntry(object):
         entry_information = entry.get_saveframes_by_category('entry_information')
         if entry_information:
             self.type = get_tag_vals(entry_information[0], '_Entry.Type', indices=0)
+            self.title = get_tag_vals(entry_information[0], '_Entry.Title', indices=0)
+            self.details = get_tag_vals(entry_information[0], '_Entry.Title', indices=0)
             self.submission_date = get_tag_vals(entry_information[0], '_Entry.Submission_date', indices=0)
             self.nmr_star_version = get_tag_vals(entry_information[0], '_Entry.NMR_STAR_version', indices=0)
             self.original_nmr_star_version = get_tag_vals(entry_information[0], '_Entry.Original_NMR_STAR_version', indices=0)
@@ -320,7 +352,7 @@ class BmrbEntry(object):
         entry_assemblies = entry.get_saveframes_by_category('assembly')
         if len(entry_assemblies) == 0:
             logging.error(f'BMRB entry {id_} contains no assembly information')
-            #raise ValueError
+            raise ValueError
         self.assemblies = [Assembly(sf) for sf in entry_assemblies]
         if not len([a.id for a in self.assemblies]) == len({a.id for a in self.assemblies}):
             logging.error("entry contains assemblies with non-unique ID")
@@ -330,7 +362,7 @@ class BmrbEntry(object):
         entry_entities = entry.get_saveframes_by_category('entity')
         if len(entry_entities) == 0:
             logging.error(f'BMRB entry {id_} contains no entity information')
-            #raise ValueError
+            raise ValueError
         self.entities = [Entity(sf) for sf in entry_entities]
         if not len([e.id for e in self.entities]) == len({e.id for e in self.entities}):
             logging.error("entry contains entities with non-unique ID")
@@ -356,11 +388,18 @@ class BmrbEntry(object):
                 logging.error("entry contains conditions with non-unique ID")
                 raise ValueError
             self.conditions = {a.id:a for a in self.conditions}
+        
+        entry_experiment_lists = entry.get_saveframes_by_category('experiment_list')
+        if len(entry_experiment_lists) != 1:
+            logging.error(f'BMRB entry {id_} contains no or more than one experiment list')
+            raise ValueError
+        self.experiment_list = ExperimentList(entry_experiment_lists[0])
+        self.experiment_dict = {e[0] : e for e in self.experiment_list.experiments}
 
         entry_shift_tables = entry.get_saveframes_by_category('assigned_chemical_shifts')
         if len(entry_shift_tables) == 0:
             logging.error(f'BMRB entry {id_} contains no chemical shift information')
-            #raise ValueError
+            raise ValueError
         self.shift_tables = [ShiftTable(sf) for sf in entry_shift_tables]
         if not len([s.id for s in self.shift_tables]) == len({s.id for s in self.shift_tables}):
             logging.error("entry contains shift tables with non-unique ID")
@@ -373,6 +412,39 @@ class BmrbEntry(object):
             condID = st.conditions
             if condID is None or condID not in self.conditions:
                 logging.error(f'skipping shift table {stID} due to missing conditions entry: {condID}')
+                continue
+            exp_missing = False
+            sampleIDs = []
+            experimentIDs = []
+            #for eID in experimentIDs:
+            for eID,_,sID,_ in st.experiments:
+                if eID:
+                    if eID not in self.experiment_dict:
+                        exp_missing = True
+                        break
+                    experimentIDs.append(eID)
+                if sID:
+                    sampleIDs.append(sID)
+            if exp_missing:
+                logging.error(f'skipping shift table {stID} due to missing experiment entry: {eID}')
+                continue
+            if len(sampleIDs) == 0:
+                logging.warning(f'missing sample ID references in shift table, trying to retrive from list of experiment IDs')
+                sampleIDs = [self.experiment_dict[eID][3] for eID in experimentIDs]
+            #if len(set(sampleIDs)) != 1:
+            #    #logging.error(f'skipping shift table {stID}, sampleIDs could not be safely determined')
+            #    #print(self.id, sampleIDs)
+            #    #continue
+            #    # TODO: double-check that all experiments share the same experiment conditions
+            #sampleIDs = sampleIDs[0]
+            sampleIDs = tuple(set(sampleIDs))
+            sample_missing = False
+            for sID in sampleIDs:
+                if sID not in self.samples:
+                    sample_missing = True
+                    break
+            if sample_missing:
+                logging.error(f'skipping shift table {stID}, sample ID unknown: {sID}')
                 continue
             for (entity_assemID,entityID),shifts in st.shifts.items():
                 # check if there is ambiguity if the entityID tag in matching assemblies is not tested (might be empty)
@@ -407,7 +479,7 @@ class BmrbEntry(object):
                         logging.error(f'skipping shifts for assembly {entity_assemID} due to missing polymer type for entity: {entityID}')
                         continue
                     if entity.polymer_type == 'polypeptide(L)':
-                        peptide_shifts[(stID, condID, assemID, entity_assemID, entityID)] = shifts
+                        peptide_shifts[(stID, condID, assemID, entity_assemID, entityID, sampleIDs)] = shifts
         return peptide_shifts
 
     
