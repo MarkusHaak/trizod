@@ -98,13 +98,13 @@ def compute_running_offsets(cmparr, mask, minAIC=999.):
         roff = runoffs_.loc[min_idx_][col]
         std0 = runstd0s_.loc[min_idx_][col]
         stdc = runstds_.loc[min_idx_][col]
-        dAIC = np.log(std0/stdc) * 9 - 1 # difference in Akaike’s information criterion ?
-        logging.info(f'minimum running average: {at} {roff} {dAIC}')
+        dAIC = np.log(std0/stdc) * 9 - 1 # difference in Akaike’s information criterion, 9 is width of window
+        logging.getLogger('trizod.trizod').info(f'minimum running average: {at} {roff} {dAIC}')
         if dAIC > minAIC:
-            logging.info(f'using offset correction: {at} {roff} {dAIC}')
+            logging.getLogger('trizod.trizod').info(f'using offset correction: {at} {roff} {dAIC}')
             offdct_[at] = roff
         else:
-            logging.info(f'rejecting offset correction due to low dAIC: {at} {roff} {dAIC}')
+            logging.getLogger('trizod.trizod').info(f'rejecting offset correction due to low dAIC: {at} {roff} {dAIC}')
             #offdct_[at] = 0.0
 
     return offdct_ #with the running offsets
@@ -205,16 +205,16 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     # get polymer sequence and chemical backbone shifts
     bbshifts, bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq)
     if bbshifts is None:
-        logging.error(f'retrieving backbone shifts failed')
+        logging.getLogger('trizod.trizod').error(f'retrieving backbone shifts failed')
         return
     
     # compare predicted to actual shifts
     cmparr, _, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
     totbbsh = np.sum(cmp_mask)
     if totbbsh == 0:
-        logging.error(f'no comparable backbone shifts')
+        logging.getLogger('trizod.trizod').error(f'no comparable backbone shifts')
         return
-    logging.info(f"total number of backbone shifts: {totbbsh}")
+    logging.getLogger('trizod.trizod').info(f"total number of backbone shifts: {totbbsh}")
 
     off0 = {at:0.0 for at in BBATNS}
     #armsd0,fra0,noff0,cdfs30 = results_w_offset(cmparr, cmp_mask, BBATNS, offdct=off0, minAIC=6.0)
@@ -230,7 +230,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
 
     offr = compute_running_offsets(cmparr, cmp_mask, minAIC=6.0)
     if offr is None:
-        logging.warning(f'no running offset could be estimated')
+        logging.getLogger('trizod.trizod').warning(f'no running offset could be estimated')
     elif np.any([v != 0. for v in offr.values()]):
         #armsdc,frac,noffc,cdfs3c = results_w_offset(cmparr, cmp_mask, BBATNS, offdct=offr, minAIC=6.0)
         shwc, ashwic = get_std_norm_diffs(cmparr, cmp_mask, offr)
@@ -238,8 +238,6 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
         cdfsc = compute_zscores(ashwic, cmp_mask.sum(axis=1), cmp_mask)
         cdfs3c = compute_zscores(*convert_to_triplet_data(ashwic, cmp_mask), cmp_mask)
         avc = np.nanmean(cdfs3c)
-        #logging.info(f'decide {av0 < avc} , armsd0 = {armsd0} , fra0 = {fra0} , av0 = {av0} , armsdc = {armsdc} , frac = {frac} , avc = {avc}')
-        #if avc <= av0: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (smaller mean, more disordered residues)
         if av0 >= avc: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (more disordered)
             olc = get_outlier_mask(cdfs3c, cdfsc, ashwic, cmp_mask, cdfthr=6.0)
             noffc = compute_offsets(shwc, cmp_mask & ~olc, minAIC=6.)

@@ -21,8 +21,8 @@ def get_tag_vals(sf, tag, warn=None, default=None, strip_str=False, indices=None
         return vals
     except:
         if warn:
-            logging.warning(warn)
-        logging.debug(f'failed to retrieve tag {tag}')
+            logging.getLogger('trizod.bmrb').warning(warn)
+        logging.getLogger('trizod.bmrb').debug(f'failed to retrieve tag {tag}')
     return default
 
 class Entity(object):
@@ -106,20 +106,20 @@ class SampleConditions(object):
             elif 'temp' in t.lower():
                 self.temperature = (val, unit)
             else:
-                logging.debug(f'Skipping sample condition {t} = {val} {unit}')
+                logging.getLogger('trizod.bmrb').debug(f'Skipping sample condition {t} = {val} {unit}')
 
     def convert_val(self, val):
         try:
             val = float(val)
         except:
-            logging.debug(f'failed to convert value {val}')
+            logging.getLogger('trizod.bmrb').debug(f'failed to convert value {val}')
             val = np.nan
         return val
 
     def get_pH(self, return_default=True):
         val = self.convert_val(self.pH[0])
         if np.isnan(val) and return_default:
-            logging.info(f'No information on pH for sample condition {self.id}, assuming 7.0')
+            logging.getLogger('trizod.bmrb').info(f'No information on pH for sample condition {self.id}, assuming 7.0')
             return 7.0
         return val
     
@@ -127,7 +127,7 @@ class SampleConditions(object):
         val = self.convert_val(self.temperature[0])
         if np.isnan(val):
             if return_default:
-                logging.info(f'No information on temperature for sample condition {self.id}, assuming 298 K')
+                logging.getLogger('trizod.bmrb').info(f'No information on temperature for sample condition {self.id}, assuming 298 K')
                 return 298.
             else:
                 return np.nan
@@ -139,16 +139,16 @@ class SampleConditions(object):
             const0, const1, factor = 0., 0., 1.
         elif assume_si:
             const0, const1, factor = 0., 0., 1.
-            logging.info(f'Temperature unit unknown: {self.temperature[1]}, assuming K')
+            logging.getLogger('trizod.bmrb').info(f'Temperature unit unknown: {self.temperature[1]}, assuming K')
         else:
             return None
         if fix_outliers and const1 == 0.: # not explicitly °C or °F
             if 15 <= val < 50:
-                logging.info(f'Very low temperature: {val}, assuming unit should be °C')
+                logging.getLogger('trizod.bmrb').info(f'Very low temperature: {val}, assuming unit should be °C')
                 const0, const1, factor = 0., 273.15, 1.
             elif 50 <= val <= 100:
                 const0, const1, factor = -32., 273.15, 1.8
-                logging.info(f'Low temperature: {val}, assuming unit should be °F')
+                logging.getLogger('trizod.bmrb').info(f'Low temperature: {val}, assuming unit should be °F')
         return (val + const0) * factor + const1
     
     def get_pressure(self):
@@ -159,7 +159,7 @@ class SampleConditions(object):
         val = self.convert_val(self.ionic_strength[0])
         if np.isnan(val):
             if return_default:
-                logging.info(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
+                logging.getLogger('trizod.bmrb').info(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
                 return 0.1
             else:
                 return None
@@ -171,12 +171,12 @@ class SampleConditions(object):
             const1, factor = 0., 0.000001
         elif assume_si:
             const1, factor = 0., 1.
-            logging.info(f'Ionic strength unit unknown: {self.ionic_strength[1]}, assuming K')
+            logging.getLogger('trizod.bmrb').info(f'Ionic strength unit unknown: {self.ionic_strength[1]}, assuming K')
         else:
             return np.nan
         if fix_outliers and factor == 1.:
             if val > 5:
-                logging.info(f'High ionic strength: {val}, assuming unit should be mM')
+                logging.getLogger('trizod.bmrb').info(f'High ionic strength: {val}, assuming unit should be mM')
                 factor = 0.001
         return val * factor + const1
 
@@ -300,12 +300,12 @@ class BmrbEntry(object):
         self.entry_path = os.path.join(bmrb_dir, f"bmr{id_}")
         fn3 = os.path.join(self.entry_path, f"bmr{id_}_3.str")
         if not os.path.exists(fn3):
-            logging.debug(f'Bio-Star file for BMRB entry {id_} not found in directory {self.entry_path}')
+            logging.getLogger('trizod.bmrb').debug(f'Bio-Star file for BMRB entry {id_} not found in directory {self.entry_path}')
             # try to find str file in bmrb_dir
             self.entry_path = bmrb_dir
             fn3 = os.path.join(bmrb_dir, f"bmr{id_}_3.str")
             if not os.path.exists(fn3):
-                logging.error(f'Bio-Star file for BMRB entry {id_} not found, file {fn3} does not exist')
+                logging.getLogger('trizod.bmrb').error(f'Bio-Star file for BMRB entry {id_} not found, file {fn3} does not exist')
                 raise ValueError
 
         self.source = fn3
@@ -341,58 +341,58 @@ class BmrbEntry(object):
         # Assembly info
         entry_assemblies = entry.get_saveframes_by_category('assembly')
         if len(entry_assemblies) == 0:
-            logging.error(f'BMRB entry {id_} contains no assembly information')
+            logging.getLogger('trizod.bmrb').error(f'BMRB entry {id_} contains no assembly information')
             raise ValueError
         self.assemblies = [Assembly(sf) for sf in entry_assemblies]
         if not len([a.id for a in self.assemblies]) == len({a.id for a in self.assemblies}):
-            logging.error("entry contains assemblies with non-unique ID")
+            logging.getLogger('trizod.bmrb').error("entry contains assemblies with non-unique ID")
             raise ValueError
         self.assemblies = {a.id:a for a in self.assemblies}
         
         entry_entities = entry.get_saveframes_by_category('entity')
         if len(entry_entities) == 0:
-            logging.error(f'BMRB entry {id_} contains no entity information')
+            logging.getLogger('trizod.bmrb').error(f'BMRB entry {id_} contains no entity information')
             raise ValueError
         self.entities = [Entity(sf) for sf in entry_entities]
         if not len([e.id for e in self.entities]) == len({e.id for e in self.entities}):
-            logging.error("entry contains entities with non-unique ID")
+            logging.getLogger('trizod.bmrb').error("entry contains entities with non-unique ID")
             raise ValueError
         self.entities = {e.id:e for e in self.entities}
 
         entry_samples = entry.get_saveframes_by_category('sample')
         if len(entry_samples) == 0:
-            logging.warning(f'BMRB entry {id_} contains no sample information')
+            logging.getLogger('trizod.bmrb').warning(f'BMRB entry {id_} contains no sample information')
         else:
             self.samples = [Sample(sf) for sf in entry_samples]
             if not len([s.id for s in self.samples]) == len({s.id for s in self.samples}):
-                logging.error("entry contains samples with non-unique ID")
+                logging.getLogger('trizod.bmrb').error("entry contains samples with non-unique ID")
                 raise ValueError
             self.samples = {s.id:s for s in self.samples}
 
         entry_conditions = entry.get_saveframes_by_category('sample_conditions')
         if len(entry_conditions) == 0:
-            logging.warning(f'BMRB entry {id_} contains no sample condition information')
+            logging.getLogger('trizod.bmrb').warning(f'BMRB entry {id_} contains no sample condition information')
         else:
             self.conditions = [SampleConditions(sf) for sf in entry_conditions]
             if not len([a.id for a in self.conditions]) == len({a.id for a in self.conditions}):
-                logging.error("entry contains conditions with non-unique ID")
+                logging.getLogger('trizod.bmrb').error("entry contains conditions with non-unique ID")
                 raise ValueError
             self.conditions = {a.id:a for a in self.conditions}
         
         entry_experiment_lists = entry.get_saveframes_by_category('experiment_list')
         if len(entry_experiment_lists) != 1:
-            logging.error(f'BMRB entry {id_} contains no or more than one experiment list, currently not supported')
+            logging.getLogger('trizod.bmrb').error(f'BMRB entry {id_} contains no or more than one experiment list, currently not supported')
             raise ValueError # TODO: find a solution to include these as well
         self.experiment_list = ExperimentList(entry_experiment_lists[0])
         self.experiment_dict = {e[0] : e for e in self.experiment_list.experiments}
 
         entry_shift_tables = entry.get_saveframes_by_category('assigned_chemical_shifts')
         if len(entry_shift_tables) == 0:
-            logging.error(f'BMRB entry {id_} contains no chemical shift information')
+            logging.getLogger('trizod.bmrb').error(f'BMRB entry {id_} contains no chemical shift information')
             raise ValueError
         self.shift_tables = [ShiftTable(sf) for sf in entry_shift_tables]
         if not len([s.id for s in self.shift_tables]) == len({s.id for s in self.shift_tables}):
-            logging.error("entry contains shift tables with non-unique ID")
+            logging.getLogger('trizod.bmrb').error("entry contains shift tables with non-unique ID")
             raise ValueError
         self.shift_tables = {s.id:s for s in self.shift_tables}
     
@@ -401,7 +401,7 @@ class BmrbEntry(object):
         for stID,st in self.shift_tables.items():
             condID = st.conditions
             if condID is None or condID not in self.conditions:
-                logging.error(f'skipping shift table {stID} due to missing conditions entry: {condID}')
+                logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID} due to missing conditions entry: {condID}')
                 continue
             exp_missing = False
             sampleIDs = []
@@ -416,13 +416,13 @@ class BmrbEntry(object):
                 if sID:
                     sampleIDs.append(sID)
             if exp_missing:
-                logging.error(f'skipping shift table {stID} due to missing experiment entry: {eID}')
+                logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID} due to missing experiment entry: {eID}')
                 continue
             if len(sampleIDs) == 0:
-                logging.debug(f'missing sample ID references in shift table, trying to retrive from list of experiment IDs')
+                logging.getLogger('trizod.bmrb').debug(f'missing sample ID references in shift table, trying to retrive from list of experiment IDs')
                 sampleIDs = [self.experiment_dict[eID][3] for eID in experimentIDs]
             #if len(set(sampleIDs)) != 1:
-            #    #logging.error(f'skipping shift table {stID}, sampleIDs could not be safely determined')
+            #    #logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID}, sampleIDs could not be safely determined')
             #    #print(self.id, sampleIDs)
             #    #continue
             #    # TODO: double-check that all experiments share the same experiment conditions
@@ -437,7 +437,7 @@ class BmrbEntry(object):
                     sample_missing = True
                     break
             if sample_missing:
-                logging.error(f'skipping shift table {stID}, sample ID unknown.')
+                logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID}, sample ID unknown.')
                 continue
             for (entity_assemID,entityID),shifts in st.shifts.items():
                 # check if there is ambiguity if the entityID tag in matching assemblies is not tested (might be empty)
@@ -445,31 +445,31 @@ class BmrbEntry(object):
                 if len(assemID) > 1:
                     # if so, enforce same entityID
                     # should be extremely rare, only few entries have multiple assemblies...
-                    logging.info(f"ambiguity with respect to correct assemly, enforcing matching, non-empty entityID")
+                    logging.getLogger('trizod.bmrb').info(f"ambiguity with respect to correct assemly, enforcing matching, non-empty entityID")
                     assemID = [(self.assemblies[assem].id, e[1]) for assem in self.assemblies for e in self.assemblies[assem].entities if e[0] == entity_assemID and e[1] == entityID]
                     if len(assemID) > 1:
-                        logging.error(f'skipping shifts for entity {entityID} due to ambiguity with respect to correct assemly: {assemID}')
+                        logging.getLogger('trizod.bmrb').error(f'skipping shifts for entity {entityID} due to ambiguity with respect to correct assemly: {assemID}')
                         continue
                 if len(assemID) == 0:
-                    logging.error(f"skipping shift table {stID}, could not associate it with any assembly")
+                    logging.getLogger('trizod.bmrb').error(f"skipping shift table {stID}, could not associate it with any assembly")
                     continue
                 assemID, entityID_ = assemID[0]
                 if entityID_ != entityID:
-                    logging.warning(f'Unambiguously using assembly {assemID} with empty entityID tag for assembly entity {entity_assemID}, assuming it is {entityID}')
+                    logging.getLogger('trizod.bmrb').warning(f'Unambiguously using assembly {assemID} with empty entityID tag for assembly entity {entity_assemID}, assuming it is {entityID}')
                 
                 if entity_assemID is None or entity_assemID not in [e[0] for assem in self.assemblies for e in self.assemblies[assem].entities]: #self.assemblies:
-                    logging.error(f'skipping shifts for entity {entityID} due to missing assembly entity entry: {entity_assemID}')
+                    logging.getLogger('trizod.bmrb').error(f'skipping shifts for entity {entityID} due to missing assembly entity entry: {entity_assemID}')
                     continue
                 if entityID is None or entityID not in self.entities:
-                    logging.error(f'skipping shifts for assembly {entity_assemID} due to missing entity entry: {entityID}')
+                    logging.getLogger('trizod.bmrb').error(f'skipping shifts for assembly {entity_assemID} due to missing entity entry: {entityID}')
                     continue
                 entity = self.entities[entityID]
                 if not entity.type:
-                    logging.error(f'skipping shifts for assembly {entity_assemID} due to missing entity type: {entityID}')
+                    logging.getLogger('trizod.bmrb').error(f'skipping shifts for assembly {entity_assemID} due to missing entity type: {entityID}')
                     continue
                 if entity.type == 'polymer':
                     if not entity.polymer_type:
-                        logging.error(f'skipping shifts for assembly {entity_assemID} due to missing polymer type for entity: {entityID}')
+                        logging.getLogger('trizod.bmrb').error(f'skipping shifts for assembly {entity_assemID} due to missing polymer type for entity: {entityID}')
                         continue
                     if entity.polymer_type == 'polypeptide(L)':
                         #peptide_shifts[(stID, condID, assemID, entity_assemID, entityID, sampleIDs)] = shifts
@@ -516,22 +516,22 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
     for (_,_,pos1,aa3,atm_id,atm_type,val,err,ambc) in shifts:
         pos0 = int(pos1) - 1
         if pos0 >= len(seq):
-            logging.error(f'shift array sequence longer than polymer sequence')
+            logging.getLogger('trizod.bmrb').error(f'shift array sequence longer than polymer sequence')
             return
         if aa3 in aa3to1:
             # covert to floats
             try:
                 val = float(val)
             except:
-                logging.warning(f'skipping shift value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {val}')
+                logging.getLogger('trizod.bmrb').warning(f'skipping shift value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {val}')
                 continue
             try:
                 err = float(err)
             except:
-                logging.debug(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
+                logging.getLogger('trizod.bmrb').debug(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
                 err = np.nan #0. # TODO: correct default value?
             if seq[pos0] != aa3to1[aa3]:
-                logging.error(f'canonical amino acid mismatch at 0-based position {pos0}')
+                logging.getLogger('trizod.bmrb').error(f'canonical amino acid mismatch at 0-based position {pos0}')
                 return
             if max_err is not None:
                 if np.isnan(err):
@@ -548,10 +548,10 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
                     bbshifts[pos0] = {}
                 if atm_id in bbshifts[pos0]:
                     if bbshifts[pos0][atm_id] != (val, err):
-                        logging.error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        logging.getLogger('trizod.bmrb').error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
                         return
                     else:
-                        logging.warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
                 bbshifts[pos0][atm_id] = (val, err)
             elif aa3 == 'GLY' and atm_id in ['HA2', 'HA3']:
                 if pos0 not in bbshifts:
@@ -560,10 +560,10 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
                     bbshifts[pos0]['HA'] = {}
                 if atm_id in bbshifts[pos0]['HA']:
                     if bbshifts[pos0]['HA'][atm_id] != (val, err):
-                        logging.error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        logging.getLogger('trizod.bmrb').error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
                         return
                     else:
-                        logging.warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
                 bbshifts[pos0]['HA'][atm_id] = (val, err)
             elif (aa3 != 'ALA' and atm_id in ['HB2', 'HB3']) or\
                  (aa3 == 'ALA' and atm_id in ['HB1', 'HB2', 'HB3']):
@@ -573,10 +573,10 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
                     bbshifts[pos0]['HB'] = {}
                 if atm_id in bbshifts[pos0]['HB']:
                     if bbshifts[pos0]['HB'][atm_id] != (val, err):
-                        logging.error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        logging.getLogger('trizod.bmrb').error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
                         return
                     else:
-                        logging.warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
+                        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
                 bbshifts[pos0]['HB'][atm_id] = (val, err)
     for pos0 in bbshifts:
         for atm_id in bbshifts[pos0]:

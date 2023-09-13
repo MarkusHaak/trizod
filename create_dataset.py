@@ -61,7 +61,7 @@ def parse_args():
         '--peptide-length-range', nargs='+', type=int, default=[5],
         help='Minimum (and optionally maximum) peptide sequence length.')
     filter_grp.add_argument(
-        '--min-backbone-shift-types', type=int, default=3,
+        '--min-backbone-shift-types', type=int, default=2,
         help='Minimum number of different backbone shift types (max 7).')
     filter_grp.add_argument(
         '--min-backbone-shift-positions', type=int, default=5,
@@ -76,7 +76,7 @@ def parse_args():
         '--chemical-denaturants', nargs='*', default=[
             'guanidin', 'GdmCl', 'Gdn-Hcl',
             'urea',
-            'BME', '2BME', '2-ME', 'beta-mercaptoethanol'],
+            'BME', '2-ME', 'mercaptoethanol'],
         help='Exclude entries with any of these chemicals as substrings of sample components, case ignored.')
     filter_grp.add_argument(
         '--exp-method-whitelist', nargs='*', default=['solution', 'structures'],
@@ -100,22 +100,29 @@ def parse_args():
         '--reject-shift-type-only', action='store_true',
         help='Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry.')
 
+    other_grp = parser.add_argument_group('Other Options')
+    other_grp.add_argument(
+        '--processes', default=None, type=int,
+        help='Number of processes to spawn in multiprocessing. Defaults to number of CPU cores.')
+    other_grp.add_argument(
+        '--hide_progress', action='store_true',
+        help='Do not show progress bars.')
 
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
 
 
     if not os.path.exists(args.input_dir):
-        logging.error(f"Input directory {args.input_dir} does not exist.")
+        logging.getLogger('trizod').error(f"Input directory {args.input_dir} does not exist.")
         exit(1)
     if not os.path.isdir(args.input_dir):
-        logging.error(f"Path {args.input_dir} is not a directory.")
+        logging.getLogger('trizod').error(f"Path {args.input_dir} is not a directory.")
         exit(1)
     args.input_dir = os.path.abspath(args.input_dir)
 
     args.output_prefix = os.path.abspath(args.output_prefix)
     if not os.path.exists(os.path.dirname(args.output_prefix)):
-        logging.error(f"Output directory {os.path.dirname(args.output_prefix)} does not exist.")
+        logging.getLogger('trizod').error(f"Output directory {os.path.dirname(args.output_prefix)} does not exist.")
         exit(1)
 
     if len(args.peptide_length_range) == 1:
@@ -123,11 +130,11 @@ def parse_args():
 
     args.cache_dir = os.path.abspath(args.cache_dir)
     if not os.path.exists(args.cache_dir):
-        logging.debug(f"Directory {args.cache_dir} does not exist and is created.")
+        logging.getLogger('trizod').debug(f"Directory {args.cache_dir} does not exist and is created.")
         os.makedirs(args.cache_dir)
         os.makedirs(os.path.join(args.cache_dir, 'wSCS'))
     elif not os.path.isdir(args.cache_dir):
-        logging.error(f"Path {args.cache_dir} is not a directory.")
+        logging.getLogger('trizod').error(f"Path {args.cache_dir} is not a directory.")
         exit(1)
 
     return args
@@ -371,7 +378,6 @@ def fill_row_data(row, chemical_denaturants, keywords,
     for sID in sampleIDs:
         fields.extend([entry.samples[sID].name, entry.samples[sID].details, entry.samples[sID].framecode])
     for keyword in keywords:
-        #data[-1].append(False)
         row[keyword] = False
         for field in fields:
             if field: # can be None
@@ -380,14 +386,12 @@ def fill_row_data(row, chemical_denaturants, keywords,
                     break
     # check if chemical detergents are present
     for den_comp in chemical_denaturants:
-        #data[-1].append(False)
         row[den_comp] = False
         try:
             for sID in sampleIDs:
                 for comp in entry.samples[sID].components:
                     if comp[3] and not comp[2]: # if it has a name but no entity entry
-                        if comp[3].lower() in den_comp.lower():
-                            #data[-1][-1] = True
+                        if den_comp.lower() in comp[3].lower():
                             row[den_comp] = True
                             raise Found
         except Found:
@@ -530,7 +534,7 @@ def compute_scores(entry, stID, entity_assemID, entityID,
             shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = z['shw'], z['ashwi'], z['cmp_mask'], z['olf'], z['offf'], z['shw0'], z['ashwi0'], z['ol0'], z['off0']
             offf, off0 = {at:off for at,off in zip(trizod.BBATNS, offf)}, {at:off for at,off in zip(trizod.BBATNS, off0)}
         except:
-            logging.debug(f"cache file {wSCS_cache_fp} corrupt or formatted wrong, delete and repeat computation")
+            logging.getLogger('trizod').debug(f"cache file {wSCS_cache_fp} corrupt or formatted wrong, delete and repeat computation")
             os.remove(wSCS_cache_fp)
     if not (cache_dir and os.path.exists(wSCS_cache_fp)):
         peptide_shifts = entry.get_peptide_shifts()
@@ -541,11 +545,11 @@ def compute_scores(entry, stID, entity_assemID, entityID,
             usephcor = (pH != 7.0)
             predshiftdct = potenci.getpredshifts(seq, temperature, pH, ion, usephcor, pkacsvfile=False)
         except:
-            logging.error(f"POTENCI failed for {(entry.id, stID, entity_assemID, entityID)} due to the following error:", exc_info=True)
+            logging.getLogger('trizod').error(f"POTENCI failed for {(entry.id, stID, entity_assemID, entityID)} due to the following error:", exc_info=True)
             raise ZscoreComputationError
         ret = trizod.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
         if ret is None:
-            logging.error(f'TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs.')
+            logging.getLogger('trizod').error(f'TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs.')
             raise ZscoreComputationError
         shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
         if cache_dir:
@@ -621,15 +625,13 @@ def output_dataset(df, output_prefix, output_format):
         raise ValueError(f"Unknown output format: {output_format}")
 
 def main():
-    # load all BMRB data
+    logging.getLogger('trizod').info('Loading BMRB files.')
     bmrb_files = find_bmrb_files(args.input_dir, args.BMRB_file_pattern)
     global bmrb_entries
     bmrb_entries, failed = load_bmrb_entries(bmrb_files, args.cache_dir)
     if failed:
-        logging.warning(f"Could not load {len(failed)} of {len(bmrb_files)} BMRB files")
-    # parse information and filter entries
-    import time
-    start_time = time.time()    
+        logging.getLogger('trizod').warning(f"Could not load {len(failed)} of {len(bmrb_files)} BMRB files")
+    logging.getLogger('trizod').info('Parsing and filtering relevant information.')
     df = create_peptide_dataframe_parallel(
         bmrb_entries, 
         chemical_denaturants=args.chemical_denaturants, 
@@ -637,7 +639,6 @@ def main():
         return_default=args.no_default_conditions, 
         assume_si=args.no_unit_assumptions, 
         fix_outliers=args.no_unit_corrections)
-    print("--- %s seconds ---" % (time.time() - start_time))
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
         df,
         method_whitelist=args.exp_method_whitelist, 
@@ -652,24 +653,28 @@ def main():
         keywords=args.keywords_blacklist,
         chemical_denaturants=args.chemical_denaturants,
         )
-    # compute zscores for each remaining entry
-    np.seterr(invalid='raise', divide='raise')
-    df = df.apply(compute_scores_row, axis=1)
-    # filter based on offset and scores
+    print()
+    logging.getLogger('trizod').info('Computing scores for each remaining entry.')
+    df = df.parallel_apply(compute_scores_row, axis=1)
+    print()
+    logging.getLogger('trizod').info('Filtering results.')
     sels_post, sels_off, sels_all_post = postfilter_dataframe(
         df,
         min_backbone_shift_types=args.min_backbone_shift_types,
         min_backbone_shift_positions=args.min_backbone_shift_positions,
         min_backbone_shift_fraction=args.min_backbone_shift_fraction,
         reject_shift_type_only=args.reject_shift_type_only)
-    # print filtering results and summary stats
+    logging.getLogger('trizod').info('Output filtering results.')
     print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre, sels_post, sels_off, sels_all_post)
-    # output results
+    logging.getLogger('trizod').info('Writing dataset to file.')
     output_dataset(df, args.output_prefix, args.output_format)
 
 if __name__ == '__main__':
     args = parse_args()
-    level = logging.DEBUG if args.debug else logging.WARNING
-    logging.basicConfig(level=level, format=f'%(levelname)s : %(message)s') #filename='example.log', encoding='utf-8'
-    pandarallel.initialize(nb_workers=12, progress_bar=False)
+    pandarallel.initialize(verbose=0, nb_workers=args.processes, progress_bar=(not args.hide_progress))
+    level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=level, format=f'%(levelname)s : %(message)s')
+    # reject most logging messages for sub-routines like parsing database files:
+    logging.getLogger('trizod.bmrb').setLevel(logging.CRITICAL)
+    logging.getLogger('trizod.trizod').setLevel(logging.CRITICAL)
     main()
