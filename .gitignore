@@ -3,6 +3,7 @@ tmp*
 *.zip
 *.txt
 *.pyc
+*.pkl
 *.txt
 __pycache__
 data

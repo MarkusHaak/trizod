@@ -1,7 +1,6 @@
-import os, sys
+import os
 import logging
 import pynmrstar
-#import pint
 import numpy as np
 
 aa3to1 = {'CYS': 'C', 'GLN': 'Q', 'ILE': 'I', 'SER': 'S', 'VAL': 'V', 'MET': 'M', 'ASN': 'N', 'PRO': 'P', 'LYS': 'K', 'THR': 'T', 'PHE': 'F', 'ALA': 'A', 'HIS': 'H', 'GLY': 'G', 'ASP': 'D', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 'GLU': 'E', 'TYR': 'Y'}
@@ -108,52 +107,41 @@ class SampleConditions(object):
                 self.temperature = (val, unit)
             else:
                 logging.debug(f'Skipping sample condition {t} = {val} {unit}')
-    
-    #def convert_unit(self, val, unit, target_unit):
-    #    '''too slow...'''
-    #    ureg = pint.UnitRegistry()
-    #    try:
-    #        factor = ureg.parse_expression(unit).to(target_unit).magnitude
-    #    except:
-    #        if target_unit == 'M' and val > 10:
-    #            assumed_unit = 'mM'
-    #        elif target_unit == 'K' and val < 150:
-    #            assumed_unit = '°C'
-    #        else:
-    #            assumed_unit = target_unit
-    #        logging.warning(f'Could not parse unit string for sample condition {self.id}: {val} "{unit}" , assuming {assumed_unit}')
-    #        factor = ureg.parse_expression(assumed_unit).to(target_unit).magnitude
-    #    return val * factor
 
     def convert_val(self, val):
         try:
             val = float(val)
         except:
-            logging.warning(f'failed to convert value {val}')
+            logging.debug(f'failed to convert value {val}')
             val = np.nan
         return val
 
-    def get_pH(self):
+    def get_pH(self, return_default=True):
         val = self.convert_val(self.pH[0])
-        if np.isnan(val):
-            logging.warning(f'No information on pH for sample condition {self.id}, assuming 7.0')
+        if np.isnan(val) and return_default:
+            logging.info(f'No information on pH for sample condition {self.id}, assuming 7.0')
             return 7.0
         return val
     
-    def get_temperature(self, fix_outliers=True):
+    def get_temperature(self, return_default=True, assume_si=True, fix_outliers=True):
         val = self.convert_val(self.temperature[0])
         if np.isnan(val):
-            logging.warning(f'No information on temperature for sample condition {self.id}, assuming 298 K')
-            return 298.
+            if return_default:
+                logging.info(f'No information on temperature for sample condition {self.id}, assuming 298 K')
+                return 298.
+            else:
+                return np.nan
         if 'C' in self.temperature[1]:
             const0, const1, factor = 0., 273.15, 1.
         elif 'F' in self.temperature[1]:
             const0, const1, factor = -32., 273.15, 1.8
         elif self.temperature[1] == 'K':
             const0, const1, factor = 0., 0., 1.
-        else:
+        elif assume_si:
             const0, const1, factor = 0., 0., 1.
             logging.info(f'Temperature unit unknown: {self.temperature[1]}, assuming K')
+        else:
+            return None
         if fix_outliers and const1 == 0.: # not explicitly °C or °F
             if 15 <= val < 50:
                 logging.info(f'Very low temperature: {val}, assuming unit should be °C')
@@ -162,33 +150,35 @@ class SampleConditions(object):
                 const0, const1, factor = -32., 273.15, 1.8
                 logging.info(f'Low temperature: {val}, assuming unit should be °F')
         return (val + const0) * factor + const1
-        #return self.convert_unit(val, self.temperature[1], 'K')
     
     def get_pressure(self):
         # TODO: implement
         return
-        #return self.convert_unit(self.pressure[0], self.pressure[1], 'atm')
     
-    def get_ionic_strength(self, fix_outliers=True):
+    def get_ionic_strength(self, return_default=True, assume_si=True, fix_outliers=True):
         val = self.convert_val(self.ionic_strength[0])
         if np.isnan(val):
-            logging.warning(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
-            return 0.1
+            if return_default:
+                logging.info(f'No information on ionic strength for sample condition {self.id}, assuming 0.1 M')
+                return 0.1
+            else:
+                return None
         if self.ionic_strength[1] == 'M':
             const1, factor = 0., 1.
         elif self.ionic_strength[1] == 'mM':
             const1, factor = 0., 0.001
         elif self.ionic_strength[1] == 'mu':
             const1, factor = 0., 0.000001
-        else:
+        elif assume_si:
             const1, factor = 0., 1.
             logging.info(f'Ionic strength unit unknown: {self.ionic_strength[1]}, assuming K')
+        else:
+            return np.nan
         if fix_outliers and factor == 1.:
             if val > 5:
                 logging.info(f'High ionic strength: {val}, assuming unit should be mM')
                 factor = 0.001
         return val * factor + const1
-        #return self.convert_unit(val, self.ionic_strength[1], 'M')
 
     def __str__(self):
         return f'(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)'
@@ -310,7 +300,7 @@ class BmrbEntry(object):
         self.entry_path = os.path.join(bmrb_dir, f"bmr{id_}")
         fn3 = os.path.join(self.entry_path, f"bmr{id_}_3.str")
         if not os.path.exists(fn3):
-            logging.info(f'Bio-Star file for BMRB entry {id_} not found in directory {self.entry_path}')
+            logging.debug(f'Bio-Star file for BMRB entry {id_} not found in directory {self.entry_path}')
             # try to find str file in bmrb_dir
             self.entry_path = bmrb_dir
             fn3 = os.path.join(bmrb_dir, f"bmr{id_}_3.str")
@@ -346,7 +336,7 @@ class BmrbEntry(object):
             self.citation_journal = get_tag_vals(citations[0], '_Citation.Journal_abbrev', indices=0)
             self.citation_PubMed_ID = get_tag_vals(citations[0], '_Citation.PubMed_ID', indices=0)
             self.citation_DOI = get_tag_vals(citations[0], '_Citation.DOI', indices=0)
-            self.citation_keywords = get_tag_vals(citations[0], '_Citation_keyword.Keyword')
+            self.citation_keywords = get_tag_vals(citations[0], '_Citation_keyword.Keyword', default=[])
 
         # Assembly info
         entry_assemblies = entry.get_saveframes_by_category('assembly')
@@ -391,8 +381,8 @@ class BmrbEntry(object):
         
         entry_experiment_lists = entry.get_saveframes_by_category('experiment_list')
         if len(entry_experiment_lists) != 1:
-            logging.error(f'BMRB entry {id_} contains no or more than one experiment list')
-            raise ValueError
+            logging.error(f'BMRB entry {id_} contains no or more than one experiment list, currently not supported')
+            raise ValueError # TODO: find a solution to include these as well
         self.experiment_list = ExperimentList(entry_experiment_lists[0])
         self.experiment_dict = {e[0] : e for e in self.experiment_list.experiments}
 
@@ -429,7 +419,7 @@ class BmrbEntry(object):
                 logging.error(f'skipping shift table {stID} due to missing experiment entry: {eID}')
                 continue
             if len(sampleIDs) == 0:
-                logging.warning(f'missing sample ID references in shift table, trying to retrive from list of experiment IDs')
+                logging.debug(f'missing sample ID references in shift table, trying to retrive from list of experiment IDs')
                 sampleIDs = [self.experiment_dict[eID][3] for eID in experimentIDs]
             #if len(set(sampleIDs)) != 1:
             #    #logging.error(f'skipping shift table {stID}, sampleIDs could not be safely determined')
@@ -437,14 +427,17 @@ class BmrbEntry(object):
             #    #continue
             #    # TODO: double-check that all experiments share the same experiment conditions
             #sampleIDs = sampleIDs[0]
-            sampleIDs = tuple(set(sampleIDs))
+            try:
+                sampleIDs = tuple(set(sampleIDs))
+            except:
+                breakpoint()
             sample_missing = False
             for sID in sampleIDs:
                 if sID not in self.samples:
                     sample_missing = True
                     break
             if sample_missing:
-                logging.error(f'skipping shift table {stID}, sample ID unknown: {sID}')
+                logging.error(f'skipping shift table {stID}, sample ID unknown.')
                 continue
             for (entity_assemID,entityID),shifts in st.shifts.items():
                 # check if there is ambiguity if the entityID tag in matching assemblies is not tested (might be empty)
@@ -479,7 +472,8 @@ class BmrbEntry(object):
                         logging.error(f'skipping shifts for assembly {entity_assemID} due to missing polymer type for entity: {entityID}')
                         continue
                     if entity.polymer_type == 'polypeptide(L)':
-                        peptide_shifts[(stID, condID, assemID, entity_assemID, entityID, sampleIDs)] = shifts
+                        #peptide_shifts[(stID, condID, assemID, entity_assemID, entityID, sampleIDs)] = shifts
+                        peptide_shifts[(stID,entity_assemID,entityID)] = (shifts, condID, assemID, sampleIDs)
         return peptide_shifts
 
     

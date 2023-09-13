@@ -849,10 +849,14 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
     bbatns=['C','CA','CB','HA','H','N','HB']
     dct=get_phshifts()
     Ion=max(0.0001,ion)
-    pkadct=read_csv_pkaoutput(seq,temperature,ion,pkacsvfilename)
+    if pkacsvfilename == False:
+        pkadct=None
+    else:
+        pkadct=read_csv_pkaoutput(seq,temperature,ion,pkacsvfilename)
     if pkadct==None:
         pkadct=calc_pkas_from_seq('n'+seq+'c',temperature,Ion)
-        write_csv_pkaoutput(pkadct,seq,temperature,ion)
+        if pkacsvfilename != False:
+            write_csv_pkaoutput(pkadct,seq,temperature,ion)
     outdct={}
     for i in pkadct:
         if VERB:print('pkares: %6.3f %6.3f %1s'%pkadct[i],i)

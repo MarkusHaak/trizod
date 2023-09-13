@@ -28,12 +28,12 @@ Z_CORRECTION = {
  18: 0.08172784553947854,
  19: 0.048333648566945,
  20: 0.016453664764633225,
- 21: -0.014116118689604495}
+ 21: 0.}#-0.014116118689604495}
 
 def convChi2CDF(rss,k):
-    # I expect to see RuntimeWarnings in this block
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        # I expect to see RuntimeWarnings in this block
+        # k can be 0 at some 
         res = ((((rss/k)**(1.0/6))-0.50*((rss/k)**(1.0/3))+1.0/3*((rss/k)**(1.0/2)))\
             - (5.0/6-1.0/9/k-7.0/648/(k**2)+25.0/2187/(k**3)))\
             / np.sqrt(1.0/18/k+1.0/162/(k**2)-37.0/11664/(k**3))
@@ -111,10 +111,17 @@ def compute_running_offsets(cmparr, mask, minAIC=999.):
 
 def compute_offsets(shw_, accdct_, minAIC=999.):
     anum_ = np.sum(accdct_, axis=0)
-    newoffdct_ = np.mean(shw_, axis=0, where=accdct_)
-    astd0_ = np.sqrt(np.mean(shw_ ** 2, axis=0, where=accdct_))
-    astdc_ = np.std(shw_, axis=0, where=accdct_)
-    adAIC_ = np.log(astd0_ / astdc_) * anum_ - 1
+    # I expect to see RuntimeWarnings in this block
+    # accdct_ can contain fully-False columns
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        newoffdct_ = np.nanmean(shw_, axis=0, where=accdct_)
+        astd0_ = np.sqrt(np.nanmean(shw_ ** 2, axis=0, where=accdct_))
+        astdc_ = np.nanstd(shw_, axis=0, where=accdct_)
+        with np.errstate(divide='ignore'):
+            # for anum_ == 1, astdc_ is 0. resulting in an adAIC_ of inf as consequence of division-by-zero
+            # this would be problematic if not all offsets with anum_ < 4 were rejected anyways
+            adAIC_ = np.log(astd0_ / astdc_) * anum_ - 1
     reject_mask = (adAIC_ < minAIC) | (anum_ < 4)
     astdc_[reject_mask] = astd0_[reject_mask]
     newoffdct_[reject_mask] = 0.
@@ -159,7 +166,7 @@ def compute_zscores(ashwi3, k3, mask, corr=False):
         for k in range(1,22):
             m = totn3f_ == k
             cdfs3_[m] += cdfs3_[m] * Z_CORRECTION[k]
-    cdfs3_[k3 == 0] = np.nan
+    #cdfs3_[k3 == 0] = np.nan # already nan due to division-by-zero
     cdfs3_[:mini] = np.nan
     cdfs3_[maxi+1:] = np.nan
     return cdfs3_#, cdfs_
@@ -202,7 +209,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
         return
     
     # compare predicted to actual shifts
-    cmparr, BBATNS, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
+    cmparr, _, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
     totbbsh = np.sum(cmp_mask)
     if totbbsh == 0:
         logging.error(f'no comparable backbone shifts')
