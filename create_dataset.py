@@ -18,10 +18,53 @@ class OffsetTooLargeException(Exception): pass
 class OffsetCausedFilterException(Exception): pass
 class FilterException(Exception): pass
 
+class ArgHelpFormatter(argparse.HelpFormatter):
+    '''
+    Formatter adding default values to help texts.
+    '''
+    def __init__(self, prog):
+        super().__init__(prog)
+
+    def _get_help_string(self, action):
+        text = action.help
+        if  action.default is not None and \
+            action.default != argparse.SUPPRESS and \
+            'default:' not in text.lower():
+            text += ' (default: {})'.format(action.default)
+        return text
+
+filter_defaults = pd.DataFrame({
+    'temperature-range' : [[-np.inf, +np.inf], [263.0, 333.0], [273.0, 313.0], [273.0, 313.0]],
+    'ionic-strength-range' : [[0., np.inf], [0., 5.], [0., 3.], [0., 3.]],
+    'pH-range' : [[-np.inf, np.inf], [2., 12.], [3., 11.], [4., 9.]],
+    'unit-assumptions' : [True, True, True, False],
+    'unit-corrections' : [True, True, False, False],
+    'default-conditions' : [True, True, True, False],
+    'peptide-length-range' : [[5], [5], [10], [15]],
+    'min-backbone-shift-types' : [1, 2, 3, 5],
+    'min-backbone-shift-positions' : [3, 3, 8, 12],
+    'min-backbone-shift-fraction' : [0., 0., 0.6, 0.8],
+    'keywords-blacklist' : [[], 
+                            ['denatur'], 
+                            ['denatur', 'unfold', 'misfold'], 
+                            ['denatur', 'unfold', 'misfold', 'interact', 'bound']],#, 'bind'
+    'chemical-denaturants' : [[], 
+                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'], 
+                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'], 
+                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol', 
+                               'TFA', 'trifluoroethanol', 'Potassium Pyrophosphate', 'acetic acid', 'CD3COOH',
+                               'DTT', 'dithiothreitol', 'dss', 'deuterated sodium acetate']],
+    'exp-method-whitelist' : [['', '.'], ['','solution', 'structures'], ['','solution', 'structures'], ['solution','structures']],
+    'exp-method-blacklist' : [[], ['solid', 'state'], ['solid', 'state'], ['solid', 'state']],
+    'max-offset' : [np.inf, 3., 3., 2.],
+    'reject-shift-type-only' : [True, True, False, False],
+}, index=['unfiltered', 'tolerant', 'moderate', 'strict'])
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description='')
+    init_parser = argparse.ArgumentParser(description='', add_help=False)
     
-    io_grp = parser.add_argument_group('Input/Output Options')
+    io_grp = init_parser.add_argument_group('Input/Output Options')
     io_grp.add_argument(
         '--input-dir', '-d', default='.',
         help='Directory that is searched recursively for BMRB .str files.')
@@ -38,78 +81,106 @@ def parse_args():
         '--BMRB-file-pattern', default="bmr(\d+)_3\.str",
         help="regular expression pattern for BMRB files.")
     
+
+    filter_defaults_grp = init_parser.add_argument_group('Filter Default Settings')
+    filter_defaults_arg = filter_defaults_grp.add_argument(
+        '--filter-defaults', choices=list(filter_defaults.index), default='tolerant',
+        help='Sets defaults for all filter options, from unfiltered to strict.')
+    args_init, remaining_argv = init_parser.parse_known_args()
+
+    parser = argparse.ArgumentParser(
+        parents=[init_parser],
+        description=__doc__,
+        formatter_class=ArgHelpFormatter,#formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
     filter_grp = parser.add_argument_group('Filtering Options')
     filter_grp.add_argument(
-        '--temperature-range', nargs=2, type=float, default=[273.0, 313.0],
+        '--temperature-range', nargs=2, type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'temperature-range'],
         help='Minimum and maximum temperature in Kelvin.')
     filter_grp.add_argument(
-        '--ionic-strength-range', nargs=2, type=float, default=[0., 3.],
+        '--ionic-strength-range', nargs=2, type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'ionic-strength-range'],
         help='Minimum and maximum ionic strength in Mol.')
     filter_grp.add_argument(
-        '--pH-range', nargs=2, type=float, default=[3., 11.],
+        '--pH-range', nargs=2, type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'pH-range'],
         help='Minimum and maximum pH.')
     filter_grp.add_argument(
-        '--no-unit-assumptions', action="store_false",
+        '--unit-assumptions', action=argparse.BooleanOptionalAction, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'unit-assumptions'],
         help='Do not assume units if they are not given and exclude entries instead.')
     filter_grp.add_argument(
-        '--no-unit-corrections', action="store_false",
+        '--unit-corrections', action=argparse.BooleanOptionalAction, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'unit-corrections'],
         help='Do not correct values if units are most likely wrong.')
     filter_grp.add_argument(
-        '--no-default-conditions', action="store_false",
+        '--default-conditions', action=argparse.BooleanOptionalAction, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'default-conditions'],
         help='Do not assume standard conditions if pH (7), ionic strength (0.1 M) or temperature (298 K) are missing and exclude entries instead.')
     filter_grp.add_argument(
-        '--peptide-length-range', nargs='+', type=int, default=[5],
+        '--peptide-length-range', nargs='+', type=int, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'peptide-length-range'],
         help='Minimum (and optionally maximum) peptide sequence length.')
     filter_grp.add_argument(
-        '--min-backbone-shift-types', type=int, default=2,
+        '--min-backbone-shift-types', type=int, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'min-backbone-shift-types'],
         help='Minimum number of different backbone shift types (max 7).')
     filter_grp.add_argument(
-        '--min-backbone-shift-positions', type=int, default=5,
+        '--min-backbone-shift-positions', type=int, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'min-backbone-shift-positions'],
         help='Minimum number of positions with at least one backbone shift.')
     filter_grp.add_argument(
-        '--min-backbone-shift-fraction', type=float, default=0.,
+        '--min-backbone-shift-fraction', type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'min-backbone-shift-fraction'],
         help='Minimum fraction of positions with at least one backbone shift.')
     filter_grp.add_argument(
-        '--keywords-blacklist', nargs='*', default=['denatur', 'unfold', 'misfold'],#, 'interact', 'bound', 'bind'],
+        '--keywords-blacklist', nargs='*', 
+        default=filter_defaults.loc[args_init.filter_defaults, 'keywords-blacklist'],
         help='Exclude entries with any of these keywords mentioned anywhere in the BMRB file, case ignored.')
     filter_grp.add_argument(
-        '--chemical-denaturants', nargs='*', default=[
-            'guanidin', 'GdmCl', 'Gdn-Hcl',
-            'urea',
-            'BME', '2-ME', 'mercaptoethanol'],
+        '--chemical-denaturants', nargs='*', 
+        default=filter_defaults.loc[args_init.filter_defaults, 'chemical-denaturants'],
         help='Exclude entries with any of these chemicals as substrings of sample components, case ignored.')
     filter_grp.add_argument(
-        '--exp-method-whitelist', nargs='*', default=['solution', 'structures'],
+        '--exp-method-whitelist', nargs='*', 
+        default=filter_defaults.loc[args_init.filter_defaults, 'exp-method-whitelist'],
         help='Include only entries with any of these keywords as substring of the experiment subtype, case ignored.')
     filter_grp.add_argument(
-        '--exp-method-blacklist', nargs='*', default=['state'],
+        '--exp-method-blacklist', nargs='*', 
+        default=filter_defaults.loc[args_init.filter_defaults, 'exp-method-blacklist'],
         help='Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.')
     
     scores_grp = parser.add_argument_group('Scoring Options')
     scores_grp.add_argument(
-        '--scores-type', choices=['zscores', 'chezod', 'pscores'], default='zscores',
+        '--scores-type', choices=['zscores', 'chezod', 'pscores'], 
+        default='zscores',
         help='Which type of scores are created: Observation count-independent zscores (zscores), '
         'original CheZOD zscores (chezod) or geometric mean of observation probabilities (pscores).')
     scores_grp.add_argument(
         '--no-offset-correction', action='store_false',
         help='Do not compute correction offsets for random coil chemical shifts')
     scores_grp.add_argument(
-        '--max-offset', type=float, default=np.inf,
+        '--max-offset', type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'max-offset'],
         help='Maximum valid offset for any random coil chemical shift type.')
     scores_grp.add_argument(
-        '--reject-shift-type-only', action='store_true',
+        '--reject-shift-type-only', action=argparse.BooleanOptionalAction,
+        default=filter_defaults.loc[args_init.filter_defaults, 'reject-shift-type-only'],
         help='Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry.')
 
     other_grp = parser.add_argument_group('Other Options')
     other_grp.add_argument(
-        '--processes', default=None, type=int,
-        help='Number of processes to spawn in multiprocessing. Defaults to number of CPU cores.')
+        '--processes', default=8, type=int,
+        help='Number of processes to spawn in multiprocessing.')
     other_grp.add_argument(
-        '--hide_progress', action='store_true',
+        '--progress', action=argparse.BooleanOptionalAction,
+        default=True,
         help='Do not show progress bars.')
 
     parser.add_argument('--debug', action='store_true')
-    args = parser.parse_args()
+    args = parser.parse_args(sys.argv[1:])
+    #args = argparse.Namespace(**vars(args_init), **vars(args))
 
 
     if not os.path.exists(args.input_dir):
@@ -158,7 +229,7 @@ def find_bmrb_files(input_dir, pattern="bmr(\d+)_3\.str"):
                     bmrb_files[m.group(1)] = os.path.join(d, m.group(0))
     return bmrb_files
 
-def load_bmrb_entries(bmrb_files, cache_dir=None):
+def load_bmrb_entries(bmrb_files, cache_dir=None, progress=False):
     bmrb_entries, failed = {}, []
     # read cached data
     if cache_dir:
@@ -170,7 +241,8 @@ def load_bmrb_entries(bmrb_files, cache_dir=None):
     missing_bmrb_files = {id_ : fp for id_,fp in bmrb_files.items() if not (id_ in bmrb_entries or id_ in failed)}
     if missing_bmrb_files:
         missing_bmrb_entries, missing_failed = {}, []
-        for id_ in tqdm(missing_bmrb_files):
+        it = tqdm(missing_bmrb_files) if progress else missing_bmrb_files
+        for id_ in it:
             try:
                 entry = bmrb.BmrbEntry(id_, os.path.dirname(missing_bmrb_files[id_]))
             except:
@@ -200,18 +272,30 @@ def prefilter_dataframe(df,
                         keywords,
                         chemical_denaturants,
                         ):
-    missing_vals = ~df[['exp_method', 'exp_method_subtype', 'ionic_strength', 'pH', 'temperature', 'seq', 'total_bbshifts']].isna().any(axis=1)
+    missing_vals = ~df[['exp_method', 'temperature', 'ionic_strength', 'pH', 'seq', 'total_bbshifts']].isna().any(axis=1)
+    method_sel = df.exp_method.str.lower().str.contains('nmr')
+    method_whitelist_ = [l.lower() for l in method_whitelist]
+    if method_whitelist_:
+        method_sel &= (df.exp_method_subtype.str.lower().str.contains("|".join(method_whitelist_), regex=True))
+    else:
+        method_sel = False
+    method_blacklist_ = [l.lower() for l in method_blacklist]
+    if method_blacklist_:
+        method_sel &= (~df.exp_method_subtype.str.lower().str.contains("|".join(method_blacklist_), regex=True))
+    if '' in method_whitelist and '' not in method_blacklist:
+        method_sel |= df.exp_method.str.lower().str.contains('nmr') & pd.isna(df.exp_method_subtype)
+    else:
+        method_sel = sels_pre["method (sub-)type"].fillna(False)
+        missing_vals &= ~pd.isna(df.exp_method_subtype)
     sels_pre = {
-        #"missing values" : ~df[['exp_method', 'exp_method_subtype','ionic_strength', 'pH', 'temperature','seq','total_bbshifts', 'bbshift_types']].isna().any(axis=1),
-        "method (sub-)type" : df.exp_method.str.lower().str.contains('nmr') & \
-                             (df.exp_method_subtype.str.lower().str.contains("|".join([l.lower() for l in method_whitelist]), regex=True)) & \
-                            (~df.exp_method_subtype.str.lower().str.contains("|".join([l.lower() for l in method_blacklist]), regex=True)),
+        #"missing values" : ~df[['ionic_strength', 'pH', 'temperature','seq','total_bbshifts', 'bbshift_types']].isna().any(axis=1),
+        "method (sub-)type" : method_sel,
         "temperature" : (df.temperature >= temperature_range[0]) & \
                         (df.temperature <= temperature_range[1]),
         "ionic strength" : (df.ionic_strength >= ionic_strength_range[0]) & \
                            (df.ionic_strength <= ionic_strength_range[1]),
-        "pH strength" : (df.pH >= pH_range[0]) & \
-                        (df.pH <= pH_range[1]),
+        "pH" : (df.pH >= pH_range[0]) & \
+               (df.pH <= pH_range[1]),
         "peptide length" : (df.seq.str.len() >= peptide_length_range[0]) & \
                            (df.seq.str.len() <= peptide_length_range[1]),
         "backbone shift types" : (df.bbshift_types >= min_backbone_shift_types),
@@ -278,24 +362,26 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
                 uniq |= ~other_sel
         uniq = ~sel & ~uniq
         print(f"{filter:<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}} {(uniq & ~missing_vals).sum():>{w_num}}")
-    print()
-    print(f"{'keyword':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")
-    for filter, sel in sels_kws.items():
-        uniq = pd.Series(np.full((len(sel),), False))
-        for other_filter, other_sel in sels_all_pre.items():
-            if other_filter != filter:
-                uniq |= ~other_sel
-        uniq = ~sel & ~uniq
-        print(f"{'.*'+filter+'.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}")
-    print()
-    print(f"{'chemical denaturant':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")
-    for filter, sel in sels_denat.items():
-        uniq = pd.Series(np.full((len(sel),), False))
-        for other_filter, other_sel in sels_all_pre.items():
-            if other_filter != filter:
-                uniq |= ~other_sel
-        uniq = ~sel & ~uniq
-        print(f"{'.*'+filter+'.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}")
+    if sels_kws:
+        print()
+        print(f"{'keyword':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")
+        for filter, sel in sels_kws.items():
+            uniq = pd.Series(np.full((len(sel),), False))
+            for other_filter, other_sel in sels_all_pre.items():
+                if other_filter != filter:
+                    uniq |= ~other_sel
+            uniq = ~sel & ~uniq
+            print(f"{'.*'+filter+'.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}")
+    if sels_denat:
+        print()
+        print(f"{'chemical denaturant':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")
+        for filter, sel in sels_denat.items():
+            uniq = pd.Series(np.full((len(sel),), False))
+            for other_filter, other_sel in sels_all_pre.items():
+                if other_filter != filter:
+                    uniq |= ~other_sel
+            uniq = ~sel & ~uniq
+            print(f"{'.*'+filter+'.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}")
     
     print("-" * total_width)
     passing_pre = df['pass_pre'].copy()
@@ -340,8 +426,8 @@ def fill_row_data(row, chemical_denaturants, keywords,
     shifts, condID, assemID, sampleIDs = peptide_shifts[(row['stID'], row['entity_assemID'], row['entityID'])]
     row['citation_title'] = entry.citation_title
     row['citation_DOI'] = entry.citation_DOI
-    row['exp_method'] = entry.exp_method.lower() if entry.exp_method else pd.NA
-    row['exp_method_subtype'] = entry.exp_method_subtype.lower() if entry.exp_method_subtype else pd.NA
+    row['exp_method'] = entry.exp_method if entry.exp_method else pd.NA
+    row['exp_method_subtype'] = entry.exp_method_subtype if entry.exp_method_subtype else pd.NA
     row['ionic_strength'] = entry.conditions[condID].get_ionic_strength(return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
     row['pH'] = entry.conditions[condID].get_pH(return_default=return_default)
     row['temperature'] = entry.conditions[condID].get_temperature(return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
@@ -408,14 +494,15 @@ def fill_row_data(row, chemical_denaturants, keywords,
 
 def create_peptide_dataframe_parallel(bmrb_entries,
                              chemical_denaturants, keywords,
-                             return_default=True, assume_si=True, fix_outliers=True
+                             return_default=True, assume_si=True, fix_outliers=True,
+                             progress=False
                              ):
     data = []
     columns = ['id', #'entry', 
                'stID', 'entity_assemID', 'entityID'
             ]
-
-    for id_,entry in tqdm(bmrb_entries.items()):
+    it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
+    for id_,entry in it:
         peptide_shifts = entry.get_peptide_shifts()
         for (stID, entity_assemID, entityID) in peptide_shifts:
             data.append([])
@@ -424,13 +511,15 @@ def create_peptide_dataframe_parallel(bmrb_entries,
             data[-1].extend([stID, entity_assemID, entityID])
     df = pd.DataFrame(data, columns=columns)
 
-    df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), return_default=True, assume_si=True, fix_outliers=True)
+    df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), 
+                           return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
     df = df.astype({col : "string" for col in ['id', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
     return df
 
 def create_peptide_dataframe(bmrb_entries,
                              chemical_denaturants, keywords,
-                             return_default=True, assume_si=True, fix_outliers=True
+                             return_default=True, assume_si=True, fix_outliers=True,
+                             progress=False
                              ):
     data = []
     columns = ['id', 'citation_title', 'citation_DOI',
@@ -442,7 +531,8 @@ def create_peptide_dataframe(bmrb_entries,
             ]
     columns.extend(keywords)
     columns.extend(chemical_denaturants)
-    for id_,entry in tqdm(bmrb_entries.items()):
+    it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
+    for id_,entry in it:
         peptide_shifts = entry.get_peptide_shifts()
         for (stID, entity_assemID, entityID) in peptide_shifts:
             shifts, condID, assemID, sampleIDs = peptide_shifts[(stID, entity_assemID, entityID)]
@@ -545,11 +635,11 @@ def compute_scores(entry, stID, entity_assemID, entityID,
             usephcor = (pH != 7.0)
             predshiftdct = potenci.getpredshifts(seq, temperature, pH, ion, usephcor, pkacsvfile=False)
         except:
-            logging.getLogger('trizod').error(f"POTENCI failed for {(entry.id, stID, entity_assemID, entityID)} due to the following error:", exc_info=True)
+            logging.getLogger('trizod.trizod').error(f"POTENCI failed for {(entry.id, stID, entity_assemID, entityID)} due to the following error:", exc_info=True)
             raise ZscoreComputationError
         ret = trizod.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
         if ret is None:
-            logging.getLogger('trizod').error(f'TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs.')
+            logging.getLogger('trizod.trizod').error(f'TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs.')
             raise ZscoreComputationError
         shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
         if cache_dir:
@@ -628,7 +718,7 @@ def main():
     logging.getLogger('trizod').info('Loading BMRB files.')
     bmrb_files = find_bmrb_files(args.input_dir, args.BMRB_file_pattern)
     global bmrb_entries
-    bmrb_entries, failed = load_bmrb_entries(bmrb_files, args.cache_dir)
+    bmrb_entries, failed = load_bmrb_entries(bmrb_files, cache_dir=args.cache_dir, progress=args.progress)
     if failed:
         logging.getLogger('trizod').warning(f"Could not load {len(failed)} of {len(bmrb_files)} BMRB files")
     logging.getLogger('trizod').info('Parsing and filtering relevant information.')
@@ -636,9 +726,10 @@ def main():
         bmrb_entries, 
         chemical_denaturants=args.chemical_denaturants, 
         keywords=args.keywords_blacklist, 
-        return_default=args.no_default_conditions, 
-        assume_si=args.no_unit_assumptions, 
-        fix_outliers=args.no_unit_corrections)
+        return_default=args.default_conditions, 
+        assume_si=args.unit_assumptions, 
+        fix_outliers=args.unit_corrections,
+        progress=args.progress)
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
         df,
         method_whitelist=args.exp_method_whitelist, 
@@ -655,7 +746,7 @@ def main():
         )
     print()
     logging.getLogger('trizod').info('Computing scores for each remaining entry.')
-    df = df.parallel_apply(compute_scores_row, axis=1)
+    df = df.apply(compute_scores_row, axis=1)
     print()
     logging.getLogger('trizod').info('Filtering results.')
     sels_post, sels_off, sels_all_post = postfilter_dataframe(
@@ -671,7 +762,10 @@ def main():
 
 if __name__ == '__main__':
     args = parse_args()
-    pandarallel.initialize(verbose=0, nb_workers=args.processes, progress_bar=(not args.hide_progress))
+    if args.processes is None:
+        pandarallel.initialize(verbose=0, progress_bar=args.progress)
+    else:
+        pandarallel.initialize(verbose=0, nb_workers=args.processes, progress_bar=args.progress)
     level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(level=level, format=f'%(levelname)s : %(message)s')
     # reject most logging messages for sub-routines like parsing database files:

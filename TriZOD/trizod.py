@@ -212,6 +212,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     cmparr, _, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
     totbbsh = np.sum(cmp_mask)
     if totbbsh == 0:
+        breakpoint()
         logging.getLogger('trizod.trizod').error(f'no comparable backbone shifts')
         return
     logging.getLogger('trizod.trizod').info(f"total number of backbone shifts: {totbbsh}")
