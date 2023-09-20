@@ -7,9 +7,9 @@ import re
 import pprint
 sys.path.append("..")
 
-import TriZOD.potenci as potenci
-import TriZOD.trizod as trizod
-import TriZOD.bmrb as bmrb
+import trizod.potenci.potenci as potenci
+import trizod.scoring.scoring as scoring
+import trizod.bmrb.bmrb as bmrb
 
 class BiostarV2FileMissing(Exception):
     pass
@@ -125,32 +125,33 @@ def test_equaltity_to_chezod(id_):
             raise BMRBEntryError
         return 
     peptide_shifts = entry.get_peptide_shifts()
-    for (stID, condID, assemID, assem_entityID, entityID), shifts in peptide_shifts.items():
+    for (stID, entity_assemID, entityID) in peptide_shifts:
+        shifts, condID, assemID, sampleIDs = peptide_shifts[(stID, entity_assemID, entityID)]
         # get polymer sequence and chemical backbone shifts
         seq = entry.entities[entityID].seq
         if seq is None:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, no sequence information")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, no sequence information")
             continue
         elif len(seq) < 5:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, sequence shorter than 5 residues")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, sequence shorter than 5 residues")
             continue
         # try to parse CheZOD zscores with this seq - fails in case of amino acid mismatches!
         try:
             chezod_zscores,_,_ = parse_zscore_file(zscores_fn, seq=seq, fill=np.nan)
             chezod_zscores = np.array(chezod_zscores)
         except ValueError:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, sequence mismatch")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, sequence mismatch")
             continue
         try:
             chezod_shifts, chezod_offsets = parse_shift_file(shifts_fn, seq=seq)
         except ValueError:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, duplicates or sequence mismatch in chezod shifts file")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, duplicates or sequence mismatch in chezod shifts file")
             continue
         # check if shift data is identical
         bbshifts,_,_ = bmrb.get_valid_bbshifts(shifts, seq)
         trizod_shifts = {(pos,at) : bbshifts[pos][at][0] for pos in bbshifts for at in bbshifts[pos] if pos not in [0,len(seq)-1]}
         if set(chezod_shifts.keys()) != set(trizod_shifts.keys()):
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, backbone shift count not identical")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, backbone shift count not identical")
             #breakpoint()
             continue
         all_close = True
@@ -160,7 +161,7 @@ def test_equaltity_to_chezod(id_):
         else:
             all_close = True
         if not all_close:
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, backbone shifts not identical")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, backbone shifts not identical")
             continue
             #breakpoint()
         # use POTENCI to predict shifts
@@ -168,41 +169,41 @@ def test_equaltity_to_chezod(id_):
         pH = entry.conditions[condID].get_pH()
         temperature = entry.conditions[condID].get_temperature()
         if not np.allclose(np.array((temperature, ion, pH)), np.array(chezod_conditions), atol=0.01):
-            logging.warning(f"skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)}, experiment conditions do not match")
+            logging.warning(f"skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)}, experiment conditions do not match")
             continue
         # reject if out of certain ranges
         #if ion > 3. or pH > 13. or temperature < 273.15 or temperature > 373.15:
-        #    logging.error(f"skipping {(stID, condID, assemID, assem_entityID, entityID)} due to extreme experiment conditions")
+        #    logging.error(f"skipping {(stID, condID, assemID, entity_assemID, entityID)} due to extreme experiment conditions")
         #    continue
         # predict random coil chemical shifts using POTENCI
         usephcor = pH != 7.0
         try:
             predshiftdct = potenci.getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile=None)
         except:
-            logging.error(f"POTENCI failed for {(stID, condID, assemID, assem_entityID, entityID)} due to the following error:", exc_info=True)
+            logging.error(f"POTENCI failed for {(stID, condID, assemID, entity_assemID, entityID)} due to the following error:", exc_info=True)
             if __name__ == '__main__':
                 raise PotenciError
             continue
-        ret = trizod.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
+        ret = scoring.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
         if ret is None:
-            logging.warning(f'skipping shifts for {(stID, condID, assemID, assem_entityID, entityID)} due to a previous error')
+            logging.warning(f'skipping shifts for {(stID, condID, assemID, entity_assemID, entityID)} due to a previous error')
             if __name__ == '__main__':
                 raise TriZODError
             continue
         shw, ashwi, cmp_mask, olf, offf = ret
-        ashwi3, k3 = trizod.convert_to_triplet_data(ashwi, cmp_mask)
-        zscores = trizod.compute_zscores(ashwi3, k3, cmp_mask)
+        ashwi3, k3 = scoring.convert_to_triplet_data(ashwi, cmp_mask)
+        zscores = scoring.compute_zscores(ashwi3, k3, cmp_mask)
         # compare zscores
         try:
             np.testing.assert_allclose(chezod_zscores, zscores, atol=0.1, equal_nan=True)
             break
         except:
-            logging.exception(f'{id_}, {(id_, stID, condID, assemID, assem_entityID, entityID)}: Z-scores diverge substantially between CheZOD and TriZOD')
+            logging.exception(f'{id_}, {(id_, stID, condID, assemID, entity_assemID, entityID)}: Z-scores diverge substantially between CheZOD and TriZOD')
             if __name__ == '__main__':
                 raise ZscoreDiversion(f'Z-scores diverge substantially between CheZOD and TriZOD')
     else:
         raise AssertionError(f'No matching entities found for BMRB entry {id_}')
-    return (id_, stID, condID, assemID, assem_entityID, entityID)
+    return (id_, stID, condID, assemID, entity_assemID, entityID)
 
 if __name__ == '__main__':
     logfile = os.path.join(os.path.dirname(__file__), "test_results.csv")

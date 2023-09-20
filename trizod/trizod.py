@@ -1,9 +1,12 @@
+#!/usr/bin/env python3
 import os, sys
 import logging
 import argparse
-import TriZOD.potenci as potenci
-import TriZOD.bmrb as bmrb
-import TriZOD.trizod as trizod
+import trizod.potenci.potenci as potenci
+import trizod.bmrb.bmrb as bmrb
+import trizod.scoring.scoring as scoring
+from trizod.constants import BBATNS
+from trizod.utils import ArgHelpFormatter
 import numpy as np
 import pandas as pd
 import traceback
@@ -11,27 +14,13 @@ import re
 import pickle
 from tqdm import tqdm
 from pandarallel import pandarallel
+import time
 
 class Found(Exception): pass
 class ZscoreComputationError(Exception): pass
 class OffsetTooLargeException(Exception): pass
 class OffsetCausedFilterException(Exception): pass
 class FilterException(Exception): pass
-
-class ArgHelpFormatter(argparse.HelpFormatter):
-    '''
-    Formatter adding default values to help texts.
-    '''
-    def __init__(self, prog):
-        super().__init__(prog)
-
-    def _get_help_string(self, action):
-        text = action.help
-        if  action.default is not None and \
-            action.default != argparse.SUPPRESS and \
-            'default:' not in text.lower():
-            text += ' (default: {})'.format(action.default)
-        return text
 
 filter_defaults = pd.DataFrame({
     'temperature-range' : [[-np.inf, +np.inf], [263.0, 333.0], [273.0, 313.0], [273.0, 313.0]],
@@ -158,7 +147,7 @@ def parse_args():
         help='Which type of scores are created: Observation count-independent zscores (zscores), '
         'original CheZOD zscores (chezod) or geometric mean of observation probabilities (pscores).')
     scores_grp.add_argument(
-        '--no-offset-correction', action='store_false',
+        '--offset-correction', action=argparse.BooleanOptionalAction, default=True,
         help='Do not compute correction offsets for random coil chemical shifts')
     scores_grp.add_argument(
         '--max-offset', type=float, 
@@ -176,7 +165,7 @@ def parse_args():
     other_grp.add_argument(
         '--progress', action=argparse.BooleanOptionalAction,
         default=True,
-        help='Do not show progress bars.')
+        help='Show progress bars.')
 
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args(sys.argv[1:])
@@ -200,10 +189,14 @@ def parse_args():
         args.peptide_length_range.append(np.inf)
 
     args.cache_dir = os.path.abspath(args.cache_dir)
-    if not os.path.exists(args.cache_dir):
-        logging.getLogger('trizod').debug(f"Directory {args.cache_dir} does not exist and is created.")
-        os.makedirs(args.cache_dir)
-        os.makedirs(os.path.join(args.cache_dir, 'wSCS'))
+    dirs = [args.cache_dir,
+            os.path.join(args.cache_dir, 'wSCS'),
+            os.path.join(args.cache_dir, 'bmrb_entries')]
+    if not np.all([os.path.exists(d) for d in dirs]):
+        if not os.path.exists(args.cache_dir):
+            logging.getLogger('trizod').debug(f"Directory {args.cache_dir} does not exist and is created.")
+        for d in dirs:
+            os.makedirs(d, exist_ok=True)
     elif not os.path.isdir(args.cache_dir):
         logging.getLogger('trizod').error(f"Path {args.cache_dir} is not a directory.")
         exit(1)
@@ -229,6 +222,7 @@ def find_bmrb_files(input_dir, pattern="bmr(\d+)_3\.str"):
                     bmrb_files[m.group(1)] = os.path.join(d, m.group(0))
     return bmrb_files
 
+'''
 def load_bmrb_entries(bmrb_files, cache_dir=None, progress=False):
     bmrb_entries, failed = {}, []
     # read cached data
@@ -259,6 +253,43 @@ def load_bmrb_entries(bmrb_files, cache_dir=None, progress=False):
     bmrb_entries = {id_:entry for id_,entry in bmrb_entries.items() if id_ in bmrb_files}
     failed = [id_ for id_ in failed if id_ in bmrb_files]
     return bmrb_entries, failed
+'''
+
+def parse_bmrb_file(row, cache_dir=None):
+    try:
+        entry = bmrb.BmrbEntry(row.name, row.dir)
+        if cache_dir:
+            with open(row.cache_fp, 'wb') as f:
+                pickle.dump(entry, f)
+        return entry
+    except:
+        return None
+
+def load_bmrb_entries(bmrb_files, cache_dir=None):
+    entries, failed = {}, []
+    columns = ['entry', 'dir']
+    # read cached data
+    if cache_dir:
+        columns.append('cache_fp')
+        for id_, fp in bmrb_files.items():
+            cache_fp = os.path.join(cache_dir, "bmrb_entries", f"{id_}.pkl")
+            entry = None
+            if os.path.exists(cache_fp):
+                try:
+                    with open(cache_fp, "rb") as f:
+                        entry = pickle.load(f)
+                except:
+                    logging.getLogger('trizod.bmrb').debug(f"cache file {cache_fp} corrupt or formatted wrong")
+            entries[id_] = (entry, os.path.dirname(fp), cache_fp)
+    else:
+        for id_, fp in bmrb_files.items():
+            entries[id_] = (None, os.path.dirname(fp))
+    df = pd.DataFrame(entries.values(), index=entries.keys(), columns=columns)
+    sel = pd.isna(df.entry)
+    df.loc[sel, entry] = df.loc[sel].parallel_apply(parse_bmrb_file, axis=1, cache_dir=cache_dir)
+    sel = pd.isna(df.entry)
+    failed = df.loc[sel].index.to_list()
+    return df.loc[~sel], failed
 
 def prefilter_dataframe(df,
                         method_whitelist, method_blacklist,
@@ -331,12 +362,12 @@ def postfilter_dataframe(df,
     }
     if not reject_shift_type_only:
         any_offsets_too_large = pd.Series(np.full((df.shape[0],), False))
-        for at in trizod.BBATNS:
+        for at in scoring.BBATNS:
             any_offsets_too_large |= pd.isna(df[f"off_{at}"])
         sels_post.update({"rejected due to any offset" : ~any_offsets_too_large})
 
     sels_off = {
-        f"off_{at}" : ~pd.isna(df[f"off_{at}"]) for at in trizod.BBATNS 
+        f"off_{at}" : ~pd.isna(df[f"off_{at}"]) for at in BBATNS 
     }
     sels_all_post = sels_post #| sels_off
 
@@ -421,7 +452,7 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
 
 def fill_row_data(row, chemical_denaturants, keywords,
                   return_default=True, assume_si=True, fix_outliers=True):
-    entry = bmrb_entries[row['id']] #row['entry']
+    entry = bmrb_entries.loc[row['id'], 'entry'] #row['entry']
     peptide_shifts = entry.get_peptide_shifts()
     shifts, condID, assemID, sampleIDs = peptide_shifts[(row['stID'], row['entity_assemID'], row['entityID'])]
     row['citation_title'] = entry.citation_title
@@ -434,17 +465,18 @@ def fill_row_data(row, chemical_denaturants, keywords,
     seq = entry.entities[row['entityID']].seq
     row['seq'] = seq
     # retrieve # backbone shifts (H,HA,HB,C,CA,CB,N)
-    total_bbshifts, bbshift_types_post, bbshift_positions_post = None, None, None
+    total_bbshifts, bbshift_types, bbshift_positions = None, None, None
     if seq:
         ret = bmrb.get_valid_bbshifts(shifts, seq)
         if ret:
-            bbshifts, bbshifts_arr, bbshifts_mask = ret
+            #bbshifts, bbshifts_arr, bbshifts_mask = ret
+            bbshifts_arr, bbshifts_mask = ret
             total_bbshifts = np.sum(bbshifts_mask) # total backbone shifts
-            bbshift_types_post = np.any(bbshifts_mask, axis=0).sum() # different backbone shifts
-            bbshift_positions_post = np.any(bbshifts_mask, axis=1).sum() # positions with backbone shifts
+            bbshift_types = np.any(bbshifts_mask, axis=0).sum() # different backbone shifts
+            bbshift_positions = np.any(bbshifts_mask, axis=1).sum() # positions with backbone shifts
     row['total_bbshifts'] = total_bbshifts
-    row['bbshift_types'] = bbshift_types_post
-    row['bbshift_positions'] = bbshift_positions_post
+    row['bbshift_types'] = bbshift_types
+    row['bbshift_positions'] = bbshift_positions
     # check if keywords are present
     fields = [entry.title, entry.details, entry.citation_title,
             entry.assemblies[assemID].name, entry.assemblies[assemID].details, 
@@ -488,34 +520,11 @@ def fill_row_data(row, chemical_denaturants, keywords,
     row['total_bbshifts_post'] = np.nan
     row['bbshift_types_post'] = np.nan
     row['bbshift_positions_post'] = np.nan
-    for at in trizod.BBATNS:
+    for at in BBATNS:
         row[f'off_{at}'] = pd.NA
     return row
 
-def create_peptide_dataframe_parallel(bmrb_entries,
-                             chemical_denaturants, keywords,
-                             return_default=True, assume_si=True, fix_outliers=True,
-                             progress=False
-                             ):
-    data = []
-    columns = ['id', #'entry', 
-               'stID', 'entity_assemID', 'entityID'
-            ]
-    it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
-    for id_,entry in it:
-        peptide_shifts = entry.get_peptide_shifts()
-        for (stID, entity_assemID, entityID) in peptide_shifts:
-            data.append([])
-            data[-1].append(id_)
-            #data[-1].append(entry)
-            data[-1].extend([stID, entity_assemID, entityID])
-    df = pd.DataFrame(data, columns=columns)
-
-    df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), 
-                           return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
-    df = df.astype({col : "string" for col in ['id', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
-    return df
-
+'''
 def create_peptide_dataframe(bmrb_entries,
                              chemical_denaturants, keywords,
                              return_default=True, assume_si=True, fix_outliers=True,
@@ -554,7 +563,8 @@ def create_peptide_dataframe(bmrb_entries,
                 if not ret:
                     data[-1].extend([None,None,None])
                 else:
-                    bbshifts, bbshifts_arr, bbshifts_mask = ret
+                    #bbshifts, bbshifts_arr, bbshifts_mask = ret
+                    bbshifts_arr, bbshifts_mask = ret
                     data[-1].append(np.sum(bbshifts_mask)) # total backbone shifts
                     data[-1].append(np.any(bbshifts_mask, axis=0).sum()) # different backbone shifts
                     data[-1].append(np.any(bbshifts_mask, axis=1).sum()) # positions with backbone shifts
@@ -607,8 +617,41 @@ def create_peptide_dataframe(bmrb_entries,
     df['total_bbshifts_post'] = np.nan
     df['bbshift_types_post'] = np.nan
     df['bbshift_positions_post'] = np.nan
-    for at in trizod.BBATNS:
+    for at in BBATNS:
         df[f'off_{at}'] = pd.NA
+    return df
+'''
+
+def create_peptide_dataframe(bmrb_entries,
+                             chemical_denaturants, keywords,
+                             return_default=True, assume_si=True, fix_outliers=True,
+                             progress=False
+                             ):
+    data = []
+    columns = ['id', #'entry', 
+               'stID', 'entity_assemID', 'entityID'
+            ]
+    #it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
+    #for id_,entry in it:
+    #    peptide_shifts = entry.get_peptide_shifts()
+    #    for (stID, entity_assemID, entityID) in peptide_shifts:
+    #        data.append([])
+    #        data[-1].append(id_)
+    #        #data[-1].append(entry)
+    #        data[-1].extend([stID, entity_assemID, entityID])
+    it = tqdm(bmrb_entries.iterrows()) if progress else bmrb_entries.iterrows()
+    for id_,row in it:
+        peptide_shifts = row.entry.get_peptide_shifts()
+        for (stID, entity_assemID, entityID) in peptide_shifts:
+            data.append([])
+            data[-1].append(id_)
+            #data[-1].append(entry)
+            data[-1].extend([stID, entity_assemID, entityID])
+    df = pd.DataFrame(data, columns=columns)
+
+    df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), 
+                           return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
+    df = df.astype({col : "string" for col in ['id', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
     return df
 
 def compute_scores(entry, stID, entity_assemID, entityID,
@@ -617,12 +660,13 @@ def compute_scores(entry, stID, entity_assemID, entityID,
                    max_offset=np.inf, reject_shift_type_only=False,
                    #min_backbone_shift_types=1, min_backbone_shift_positions=1, min_backbone_shift_fraction=0.,
                    cache_dir=None):
+    exe_times = [np.nan, np.nan, np.nan]
     wSCS_cache_fp = os.path.join(cache_dir, 'wSCS', f'{entry.id}_{stID}_{entity_assemID}_{entityID}.npz')
     if cache_dir and os.path.exists(wSCS_cache_fp):
         try:
             z = np.load(wSCS_cache_fp)
             shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = z['shw'], z['ashwi'], z['cmp_mask'], z['olf'], z['offf'], z['shw0'], z['ashwi0'], z['ol0'], z['off0']
-            offf, off0 = {at:off for at,off in zip(trizod.BBATNS, offf)}, {at:off for at,off in zip(trizod.BBATNS, off0)}
+            offf, off0 = {at:off for at,off in zip(BBATNS, offf)}, {at:off for at,off in zip(BBATNS, off0)}
         except:
             logging.getLogger('trizod').debug(f"cache file {wSCS_cache_fp} corrupt or formatted wrong, delete and repeat computation")
             os.remove(wSCS_cache_fp)
@@ -633,27 +677,32 @@ def compute_scores(entry, stID, entity_assemID, entityID,
         try:
             # predict random coil chemical shifts using POTENCI
             usephcor = (pH != 7.0)
+            start_time = time.time()
             predshiftdct = potenci.getpredshifts(seq, temperature, pH, ion, usephcor, pkacsvfile=False)
+            exe_times[0] = time.time() - start_time
         except:
-            logging.getLogger('trizod.trizod').error(f"POTENCI failed for {(entry.id, stID, entity_assemID, entityID)} due to the following error:", exc_info=True)
+            logging.getLogger('trizod').error(f"POTENCI failed for {(entry.id, stID, entity_assemID, entityID)} due to the following error:", exc_info=True)
             raise ZscoreComputationError
-        ret = trizod.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
+        start_time = time.time()
+        ret = scoring.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
         if ret is None:
-            logging.getLogger('trizod.trizod').error(f'TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs.')
+            logging.getLogger('trizod').error(f'TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs.')
             raise ZscoreComputationError
+        else:
+            exe_times[1] = time.time() - start_time
         shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
         if cache_dir:
             np.savez(wSCS_cache_fp, 
                      shw=shw, ashwi=ashwi, cmp_mask=cmp_mask, 
-                     olf=olf, offf=np.array([offf[at] for at in trizod.BBATNS]),
-                     shw0=shw0, ashwi0=ashwi0, ol0=ol0, off0=np.array([off0[at] for at in trizod.BBATNS]))
+                     olf=olf, offf=np.array([offf[at] for at in BBATNS]),
+                     shw0=shw0, ashwi0=ashwi0, ol0=ol0, off0=np.array([off0[at] for at in BBATNS]))
     offsets = offf
     if offset_correction == False:
         ashwi = ashwi0
         offsets = off0
     elif not (max_offset == None or np.isinf(max_offset)):
         # check if any offsets are too large
-        for i,at in enumerate(trizod.BBATNS):
+        for i,at in enumerate(BBATNS):
             if np.abs(offf[at]) > max_offset:
                 offsets[at] = np.nan
                 if reject_shift_type_only:
@@ -662,43 +711,52 @@ def compute_scores(entry, stID, entity_assemID, entityID,
                 #else:
                 #    raise OffsetTooLargeException
     if np.any(cmp_mask):
-        ashwi3, k3 = trizod.convert_to_triplet_data(ashwi, cmp_mask)
+        start_time = time.time()
+        ashwi3, k3 = scoring.convert_to_triplet_data(ashwi, cmp_mask)
         if scores_type == 'zscores':
-            scores = trizod.compute_zscores(ashwi3, k3, cmp_mask, corr=True)
+            scores = scoring.compute_zscores(ashwi3, k3, cmp_mask, corr=True)
         elif scores_type == 'chezod':
-            scores = trizod.compute_zscores(ashwi3, k3, cmp_mask)
+            scores = scoring.compute_zscores(ashwi3, k3, cmp_mask)
         elif scores_type == 'pscores':
-            scores = trizod.compute_pscores(ashwi3, k3, cmp_mask)
+            scores = scoring.compute_pscores(ashwi3, k3, cmp_mask)
         else:
             raise ValueError
         # set positions where score is nan to 0 to avoid confusion
         k = k3
         k[np.isnan(scores)] = 0
+        exe_times[2] = time.time() - start_time
     else:
         scores, k = np.full((cmp_mask.shape[0],), np.nan), np.full((cmp_mask.shape[0],), np.nan)
-    return scores, k, cmp_mask, offsets
+    return scores, k, cmp_mask, offsets, exe_times
 
-def compute_scores_row(row):
+def compute_scores_row(row, scores_type='zscores', offset_correction=True, 
+                       max_offset=np.inf, reject_shift_type_only=False,
+                       cache_dir=None):
     if not row['pass_pre']:
         return row
     try:
-        scores, k, cmp_mask, offsets = compute_scores(
-            bmrb_entries[row['id']], row['stID'], row['entity_assemID'], row['entityID'],
+        start_time = time.time()
+        scores, k, cmp_mask, offsets, exe_times = compute_scores(
+            bmrb_entries.loc[row['id'], 'entry'], row['stID'], row['entity_assemID'], row['entityID'],
             row['seq'], row['ionic_strength'], row['pH'], row['temperature'],
-            scores_type=args.scores_type, offset_correction=args.no_offset_correction, 
-            max_offset=args.max_offset, reject_shift_type_only=args.reject_shift_type_only,
+            scores_type=scores_type, offset_correction=offset_correction, 
+            max_offset=max_offset, reject_shift_type_only=reject_shift_type_only,
             #min_backbone_shift_types=args.min_backbone_shift_types,
             #min_backbone_shift_positions=args.min_backbone_shift_positions,
             #min_backbone_shift_fraction=args.min_backbone_shift_fraction,
-            cache_dir=args.cache_dir)
+            cache_dir=cache_dir)
         row['scores'] = scores
         row['k'] = k
         #row['cmp_mask'] = cmp_mask
-        for at in trizod.BBATNS:
+        for at in BBATNS:
             row[f'off_{at}'] = offsets[at]
         row['total_bbshifts_post'] = np.sum(cmp_mask)
         row['bbshift_types_post'] = np.any(cmp_mask, axis=0).sum()
         row['bbshift_positions_post'] = np.any(cmp_mask, axis=1).sum()
+        row['tpotenci'] = exe_times[0]
+        row['ttrizod'] = exe_times[1]
+        row['tscores'] = exe_times[2]
+        row['ttotal'] = time.time() - start_time
     except ZscoreComputationError:
         pass
     return row
@@ -715,14 +773,26 @@ def output_dataset(df, output_prefix, output_format):
         raise ValueError(f"Unknown output format: {output_format}")
 
 def main():
+    args = parse_args()
+    if args.processes is None:
+        pandarallel.initialize(verbose=0, progress_bar=args.progress)
+    else:
+        pandarallel.initialize(verbose=0, nb_workers=args.processes, progress_bar=args.progress)
+    level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=level, format=f'%(levelname)s : %(message)s')
+    # reject most logging messages for sub-routines like parsing database files:
+    logging.getLogger('trizod.bmrb').setLevel(logging.CRITICAL)
+    logging.getLogger('trizod.scoring').setLevel(logging.CRITICAL)
+
     logging.getLogger('trizod').info('Loading BMRB files.')
     bmrb_files = find_bmrb_files(args.input_dir, args.BMRB_file_pattern)
     global bmrb_entries
-    bmrb_entries, failed = load_bmrb_entries(bmrb_files, cache_dir=args.cache_dir, progress=args.progress)
+    bmrb_entries, failed = load_bmrb_entries(bmrb_files, cache_dir=args.cache_dir)
+    print()
     if failed:
         logging.getLogger('trizod').warning(f"Could not load {len(failed)} of {len(bmrb_files)} BMRB files")
     logging.getLogger('trizod').info('Parsing and filtering relevant information.')
-    df = create_peptide_dataframe_parallel(
+    df = create_peptide_dataframe(
         bmrb_entries, 
         chemical_denaturants=args.chemical_denaturants, 
         keywords=args.keywords_blacklist, 
@@ -730,6 +800,7 @@ def main():
         assume_si=args.unit_assumptions, 
         fix_outliers=args.unit_corrections,
         progress=args.progress)
+    breakpoint()
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
         df,
         method_whitelist=args.exp_method_whitelist, 
@@ -746,7 +817,13 @@ def main():
         )
     print()
     logging.getLogger('trizod').info('Computing scores for each remaining entry.')
-    df = df.apply(compute_scores_row, axis=1)
+    df = df.parallel_apply(
+        compute_scores_row, axis=1, 
+        scores_type=args.scores_type, 
+        offset_correction=args.offset_correction, 
+        max_offset=args.max_offset, 
+        reject_shift_type_only=args.reject_shift_type_only,
+        cache_dir=args.cache_dir)
     print()
     logging.getLogger('trizod').info('Filtering results.')
     sels_post, sels_off, sels_all_post = postfilter_dataframe(
@@ -761,14 +838,4 @@ def main():
     output_dataset(df, args.output_prefix, args.output_format)
 
 if __name__ == '__main__':
-    args = parse_args()
-    if args.processes is None:
-        pandarallel.initialize(verbose=0, progress_bar=args.progress)
-    else:
-        pandarallel.initialize(verbose=0, nb_workers=args.processes, progress_bar=args.progress)
-    level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(level=level, format=f'%(levelname)s : %(message)s')
-    # reject most logging messages for sub-routines like parsing database files:
-    logging.getLogger('trizod.bmrb').setLevel(logging.CRITICAL)
-    logging.getLogger('trizod.trizod').setLevel(logging.CRITICAL)
     main()

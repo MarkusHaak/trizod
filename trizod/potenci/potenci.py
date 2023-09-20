@@ -1,6 +1,6 @@
 #!/bin/bash python3
 
-# python3 version of the POTENCI script, adapted by haak@rostlab.org
+# version of the POTENCI script, adapted by haak@rostlab.org
 # original by fmulder@chem.au.dk
 # original taken from https://github.com/protein-nmr/POTENCI on 03.05.2023, commit 17dd2e6f3733c702323894697238c87e6723f934
 # original version (filename): pytenci1_3.py
@@ -10,17 +10,13 @@ import string
 from scipy.special import erfc
 from scipy.optimize import curve_fit
 import numpy as np
+import pandas as pd
+import os
 ##from matplotlib import pyplot as pl
-
-VERB=False #change this to True for verbose logfile
-
-#constants
-R = 8.314472
-e = 79.0
-a = 5.0
-b = 7.5
-cutoff = 2
-ncycles = 5
+from trizod.potenci.constants import R, e, a, b, cutoff, ncycles
+import logging
+import pkgutil
+from io import StringIO
 
 def smallmatrixlimits(ires, cutoff, len):
     ileft = max(1, ires - cutoff)
@@ -750,6 +746,9 @@ NEICORRS =initcorneis()
 COMBCORRS=initcorrcomb()
 ##dct[atn][segment]=key,eval(lin[-1])
 
+data = pkgutil.get_data(__name__, "data_tables/phshifts.csv")
+PHSHIFTS = pd.read_csv(StringIO(data.decode()), header=0, comment='#')
+
 def predPentShift(pent,atn):
     aac=pent[2]
     sh=CENTSHIFTS[aac][atn]
@@ -828,7 +827,7 @@ def write_csv_pkaoutput(pkadct,seq,temperature,ion):
 
 def read_csv_pkaoutput(seq,temperature,ion,name=None):
     seq=seq[:min(150,len(seq))]
-    if VERB:print('reading csv',name)
+    logging.getLogger('trizod.potenci').debug(f'reading csv {name}')
     if name==None:name='outpepKalc_%s_T%6.2f_I%4.2f.csv'%(seq,temperature,ion)
     try:out=open(name,'r')
     except IOError:return None
@@ -859,7 +858,7 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
             write_csv_pkaoutput(pkadct,seq,temperature,ion)
     outdct={}
     for i in pkadct:
-        if VERB:print('pkares: %6.3f %6.3f %1s'%pkadct[i],i)
+        logging.getLogger('trizod.potenci').debug('pkares: %6.3f %6.3f %1s'%pkadct[i] + str(i))
         pKa,nH,resi=pkadct[i]
         frac =fun(pH,pKa,nH)
         frac7=fun(7.0,pK0[resi],nH)
@@ -867,7 +866,7 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
         else:
             for atn in bbatns:
                 if not atn in outdct:outdct[atn]={}
-                if VERB:print('data:',atn,pKa,nH,resi,i,atn,pH)
+                logging.getLogger('trizod.potenci').debug(f'data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}')
                 dctresi=dct[resi]
                 try:
                     delta=dctresi[atn]
@@ -876,7 +875,7 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
                     key=(resi,atn)
                 except KeyError:
                     ##if not (resi in 'RKCY' and atn=='H') and not (resi == 'R' and atn=='N'):
-                    print('warning no key:',resi,i,atn)
+                    logging.getLogger('trizod.potenci').waring(f'no key: {resi}, {i}, {atn}')
                     delta=999;jump=999;jump7=999
                 if delta<99:
                     jumpdelta=jump-jump7
@@ -884,7 +883,7 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
                     else:
                         outdct[atn][i][0]=resi
                         outdct[atn][i][1]+=jumpdelta
-                    if VERB:print('%3s %5.2f %6.4f %s %3d %5s %8.5f %8.5f %4.2f'%(atn,pKa,nH,resi,i,atn,jump,jump7,pH))
+                    logging.getLogger('trizod.potenci').debug('%3s %5.2f %6.4f %s %3d %5s %8.5f %8.5f %4.2f'%(atn,pKa,nH,resi,i,atn,jump,jump7,pH))
                     if resi+'p' in dct and atn in dct[resi+'p']:
                         for n in range(2):
                             ni=i+2*n-1
@@ -898,12 +897,74 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
                             else:outdct[atn][ni][1]+=jumpdelta
     return outdct
 
+def getphcorrs_arr(seq,temperature,pH,ion,pkacsvfilename=None):
+    bbatns=['C','CA','CB','HA','H','N','HB']
+    #dct=get_phshifts()
+    
+    Ion=max(0.0001,ion)
+    if pkacsvfilename == False:
+        pkadct=None
+    else:
+        pkadct=read_csv_pkaoutput(seq,temperature,ion,pkacsvfilename)
+    if pkadct==None:
+        pkadct=calc_pkas_from_seq('n'+seq+'c',temperature,Ion)
+        if pkacsvfilename != False:
+            write_csv_pkaoutput(pkadct,seq,temperature,ion)
+    #outdct={}
+    residues = [[None]*7 for i in range(len(seq))]
+    outarr = np.zeros(shape=(len(seq), len(bbatns)), dtype=np.float)
+    for i in pkadct:
+        logging.getLogger('trizod.potenci').debug('pkares: %6.3f %6.3f %1s'%pkadct[i] + str(i))
+        pKa,nH,resi=pkadct[i]
+        frac  = fun(pH,pKa,nH)
+        frac7 = fun(7.0,pK0[resi],nH)
+        if resi in 'nc':
+            jump = 0.0#so far
+        else:
+            for col,atn in enumerate(bbatns):
+                #if not atn in outdct:outdct[atn]={}
+                logging.getLogger('trizod.potenci').debug(f'data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}')
+                dctresi = dct[resi]
+                try:
+                    delta = dctresi[atn]
+                    jump  = frac *delta
+                    jump7 = frac7*delta
+                    #key=(resi,atn)
+                except KeyError:
+                    ##if not (resi in 'RKCY' and atn=='H') and not (resi == 'R' and atn=='N'):
+                    logging.getLogger('trizod.potenci').waring(f'no key: {resi}, {i}, {atn}')
+                    delta=999;jump=999;jump7=999
+                if delta<99:
+                    jumpdelta = jump - jump7
+                    #if not i in outdct[atn]:outdct[atn][i]=[resi,jumpdelta]
+                    #else:
+                    #    outdct[atn][i][0]=resi
+                    #    outdct[atn][i][1]+=jumpdelta
+                    residues[i][col] = resi
+                    outarr[i][col] += jumpdelta
+                    logging.getLogger('trizod.potenci').debug('%3s %5.2f %6.4f %s %3d %5s %8.5f %8.5f %4.2f'%(atn,pKa,nH,resi,i,atn,jump,jump7,pH))
+                    if resi+'p' in dct and atn in dct[resi+'p']:
+                        for n in range(2):
+                            ni=i+2*n-1
+                            ##if ni is somewhere in seq...
+                            nresi=resi+'ps'[n]
+                            ndelta=dct[nresi][atn]
+                            jump = frac  * ndelta
+                            jump7= frac7 * ndelta
+                            jumpdelta = jump - jump7
+                            #if not ni in outdct[atn]:outdct[atn][ni]=[None,jumpdelta]
+                            #else:outdct[atn][ni][1]+=jumpdelta
+                            residues[i][col] = None
+                            outarr[ni][col] += jumpdelta
+    return outarr
+
 def getpredshifts(seq,temperature,pH,ion,usephcor=True,pkacsvfile=None,identifier=''):
     tempdct=gettempkoeff()
-    bbatns =['C','CA','CB','HA','H','N','HB']
+    bbatns = ['C','CA','CB','HA','H','N','HB']
     if usephcor:
         phcorrs=getphcorrs(seq,temperature,pH,ion,pkacsvfile)
-    else:phcorrs={}
+    else:
+        phcorrs={}
     shiftdct={}
     for i in range(1,len(seq)-1):
         if seq[i] in AAstandard:#else: do nothing
@@ -913,12 +974,50 @@ def getpredshifts(seq,temperature,pH,ion,usephcor=True,pkacsvfile=None,identifie
             shiftdct[(i+1,seq[i])]={}
             for at in bbatns:
                 if not (trip[1],at) in [('G','CB'),('G','HB'),('P','H')]:
-                    if i==1:
-                        pent='n'+     trip+seq[i+2]
+                    if i == 1:
+                        pent = 'n'      + trip + seq[i+2]
                     elif i==len(seq)-2:
-                        pent=seq[i-2]+trip+'c'
+                        pent = seq[i-2] + trip + 'c'
                     else:
-                        pent=seq[i-2]+trip+seq[i+2]
+                        pent = seq[i-2] + trip + seq[i+2]
+                    shp=predPentShift(pent,at)
+                    if shp!=None:
+                        if at!='HB':shp+=gettempcorr(trip[1],at,tempdct,temperature)
+                        if at in phcorrs and i in phcorrs[at]:
+                            phdata=phcorrs[at][i]
+                            resi=phdata[0]
+                            ##assert resi==seq[i]
+                            if seq[i] in 'CDEHRKY' and resi != seq[i]:
+                                logging.getLogger('trizod.potenci').warning(f'residue mismatch: {resi},{seq[i]},{i},{phdata},{at}')
+                            phcorr=phdata[1]
+                            if abs(phcorr)<9.9:
+                                shp-=phcorr
+                        shiftdct[(i+1,seq[i])][at]=shp
+                        logging.getLogger('trizod.potenci').debug('predictedshift: %5s %3d %1s %2s %8.4f'%(identifier,i,seq[i],at,shp) + ' ' + str(phcorr))
+    return shiftdct
+
+def getpredshifts_arr(seq,temperature,pH,ion,usephcor=True,pkacsvfile=None,identifier=''):
+    tempdct=gettempkoeff()
+    bbatns = ['C','CA','CB','HA','H','N','HB']
+    if usephcor:
+        phcorrs=getphcorrs_arr(seq,temperature,pH,ion,pkacsvfile)
+    else:
+        phcorrs={}
+    shiftdct={}
+    for i in range(1,len(seq)-1):
+        if seq[i] in AAstandard:#else: do nothing
+            res=str(i+1)
+            trip=seq[i-1]+seq[i]+seq[i+1]
+            phcorr=None
+            shiftdct[(i+1,seq[i])]={}
+            for at in bbatns:
+                if not (trip[1],at) in [('G','CB'),('G','HB'),('P','H')]:
+                    if i == 1:
+                        pent = 'n'      + trip + seq[i+2]
+                    elif i==len(seq)-2:
+                        pent = seq[i-2] + trip + 'c'
+                    else:
+                        pent = seq[i-2] + trip + seq[i+2]
                     shp=predPentShift(pent,at)
                     if shp!=None:
                         if at!='HB':shp+=gettempcorr(trip[1],at,tempdct,temperature)
@@ -927,12 +1026,12 @@ def getpredshifts(seq,temperature,pH,ion,usephcor=True,pkacsvfile=None,identifie
                             resi=phdata[0]
                             ##assert resi==seq[i]
                             if seq[i] in 'CDEHRKY' and resi!=seq[i]:
-                                print('WARNING: residue mismatch',resi,seq[i],i,phdata,at)
+                                logging.getLogger('trizod.potenci').warning(f'residue mismatch: {resi},{seq[i]},{i},{phdata},{at}')
                             phcorr=phdata[1]
                             if abs(phcorr)<9.9:
                                 shp-=phcorr
                         shiftdct[(i+1,seq[i])][at]=shp
-                        if VERB:print('predictedshift: %5s %3d %1s %2s %8.4f'%(identifier,i,seq[i],at,shp),phcorr)
+                        logging.getLogger('trizod.potenci').debug('predictedshift: %5s %3d %1s %2s %8.4f'%(identifier,i,seq[i],at,shp) + ' ' + str(phcorr))
     return shiftdct
 
 def writeOutput(name,dct):
@@ -965,11 +1064,10 @@ def main():
     #NOTE:pH corrections is applied if pH is not 7.0
     #NOTE:pKa predictions are stored locally and reloaded if the seq, temp and ion is the same.
     #NOTE:at least 5 residues are required. Chemical shift predictions are not given for terminal residues.
-    #NOTE:change the value of VERB in the top of this script to have verbose logfile
     args=sys.argv[1:]#first is scriptname
     if len(args)<4:
-        print('FAILED: please provide 4 arguments (exiting)') 
-        print('usage: potenci1_2.py seqstring pH temperature ionicstrength [pkacsvfile] > logfile')
+        logging.getLogger('trizod.potenci').error('FAILED: please provide 4 arguments (exiting)') 
+        logging.getLogger('trizod.potenci').info('usage: potenci1_2.py seqstring pH temperature ionicstrength [pkacsvfile] > logfile')
         raise SystemExit
     seq=args[0] #one unbroken line with single-letter amino acid labels
     pH=float(args[1])#e.g. 7.0
@@ -981,14 +1079,14 @@ def main():
     name='outPOTENCI_%s_T%6.2f_I%4.2f_pH%4.2f.txt'%(seq[:min(150,len(seq))],temperature,ion,pH)
     usephcor = pH<6.99 or pH>7.01
     if len(seq)<5:
-        print('FAILED: at least 5 residues are required (exiting)') 
+        logging.getLogger('trizod.potenci').error('FAILED: at least 5 residues are required (exiting)') 
         raise SystemExit
     #------------- now ready to generate predicted shifts ---------------------
-    print('predicting random coil chemical shift with POTENCI using:',seq,pH,temperature,ion,pkacsvfile)
+    logging.getLogger('trizod.potenci').info('predicting random coil chemical shift with POTENCI using:',seq,pH,temperature,ion,pkacsvfile)
     shiftdct=getpredshifts(seq,temperature,pH,ion,usephcor,pkacsvfile)
     #------------- write output nicely is SHIFTY format -----------------------$
     writeOutput(name,shiftdct)
-    print('chemical shift succesfully predicted, see output:',name)
+    logging.getLogger('trizod.potenci').info('chemical shift succesfully predicted, see output:',name)
 
 if __name__ == '__main__':
     main()

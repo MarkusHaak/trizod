@@ -1,34 +1,10 @@
 import numpy as np
 import pandas as pd
 import logging
-import TriZOD.bmrb as bmrb
+import trizod.bmrb.bmrb as bmrb
 import scipy
 import warnings
-
-BBATNS = ['C','CA','CB','HA','H','N','HB']
-REFINED_WEIGHTS = {'C':0.1846, 'CA':0.1982, 'CB':0.1544, 'HA':0.02631, 'H':0.06708, 'N':0.4722, 'HB':0.02154}
-Z_CORRECTION = {
- 1: 4.05308849681796,
- 2: 2.277173086010837,
- 3: 1.6090276518015432,
- 4: 1.2447910781901539,
- 5: 1.009432092595334,
- 6: 0.8413717245284563,
- 7: 0.7131281335003391,
- 8: 0.6105038279581856,
- 9: 0.5253913758783114,
- 10: 0.4528092358941966,
- 11: 0.3895201437851491,
- 12: 0.3333250286536015,
- 13: 0.2826753620267024,
- 14: 0.23644774008331337,
- 15: 0.1938064669517393,
- 16: 0.15411640792754794,
- 17: 0.11688583537247893,
- 18: 0.08172784553947854,
- 19: 0.048333648566945,
- 20: 0.016453664764633225,
- 21: 0.}#-0.014116118689604495}
+from trizod.constants import BBATNS, REFINED_WEIGHTS, Z_CORRECTION
 
 def convChi2CDF(rss,k):
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -99,12 +75,12 @@ def compute_running_offsets(cmparr, mask, minAIC=999.):
         std0 = runstd0s_.loc[min_idx_][col]
         stdc = runstds_.loc[min_idx_][col]
         dAIC = np.log(std0/stdc) * 9 - 1 # difference in Akaike’s information criterion, 9 is width of window
-        logging.getLogger('trizod.trizod').info(f'minimum running average: {at} {roff} {dAIC}')
+        logging.getLogger('trizod.scoring').info(f'minimum running average: {at} {roff} {dAIC}')
         if dAIC > minAIC:
-            logging.getLogger('trizod.trizod').info(f'using offset correction: {at} {roff} {dAIC}')
+            logging.getLogger('trizod.scoring').info(f'using offset correction: {at} {roff} {dAIC}')
             offdct_[at] = roff
         else:
-            logging.getLogger('trizod.trizod').info(f'rejecting offset correction due to low dAIC: {at} {roff} {dAIC}')
+            logging.getLogger('trizod.scoring').info(f'rejecting offset correction due to low dAIC: {at} {roff} {dAIC}')
             #offdct_[at] = 0.0
 
     return offdct_ #with the running offsets
@@ -203,19 +179,20 @@ def convert_to_triplet_data(ashwi_, mask):
 
 def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     # get polymer sequence and chemical backbone shifts
-    bbshifts, bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq)
-    if bbshifts is None:
-        logging.getLogger('trizod.trizod').error(f'retrieving backbone shifts failed')
+    #bbshifts, bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq)
+    ret = bmrb.get_valid_bbshifts(shifts, seq)
+    if ret is None:
+        logging.getLogger('trizod.scoring').error(f'retrieving backbone shifts failed')
         return
+    bbshifts_arr, bbshifts_mask = ret
     
     # compare predicted to actual shifts
     cmparr, _, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
     totbbsh = np.sum(cmp_mask)
     if totbbsh == 0:
-        breakpoint()
-        logging.getLogger('trizod.trizod').error(f'no comparable backbone shifts')
+        logging.getLogger('trizod.scoring').error(f'no comparable backbone shifts')
         return
-    logging.getLogger('trizod.trizod').info(f"total number of backbone shifts: {totbbsh}")
+    logging.getLogger('trizod.scoring').info(f"total number of backbone shifts: {totbbsh}")
 
     off0 = {at:0.0 for at in BBATNS}
     #armsd0,fra0,noff0,cdfs30 = results_w_offset(cmparr, cmp_mask, BBATNS, offdct=off0, minAIC=6.0)
@@ -231,7 +208,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
 
     offr = compute_running_offsets(cmparr, cmp_mask, minAIC=6.0)
     if offr is None:
-        logging.getLogger('trizod.trizod').warning(f'no running offset could be estimated')
+        logging.getLogger('trizod.scoring').warning(f'no running offset could be estimated')
     elif np.any([v != 0. for v in offr.values()]):
         #armsdc,frac,noffc,cdfs3c = results_w_offset(cmparr, cmp_mask, BBATNS, offdct=offr, minAIC=6.0)
         shwc, ashwic = get_std_norm_diffs(cmparr, cmp_mask, offr)

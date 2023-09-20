@@ -2,9 +2,8 @@ import os
 import logging
 import pynmrstar
 import numpy as np
-
-aa3to1 = {'CYS': 'C', 'GLN': 'Q', 'ILE': 'I', 'SER': 'S', 'VAL': 'V', 'MET': 'M', 'ASN': 'N', 'PRO': 'P', 'LYS': 'K', 'THR': 'T', 'PHE': 'F', 'ALA': 'A', 'HIS': 'H', 'GLY': 'G', 'ASP': 'D', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W', 'GLU': 'E', 'TYR': 'Y'}
-aa1to3 = {v:k for k,v in aa3to1.items()}
+import pandas as pd
+from trizod.constants import AA3TO1
 
 def get_tag_vals(sf, tag, warn=None, default=None, strip_str=False, indices=None, empty_val_str='.'):
     try:
@@ -503,7 +502,6 @@ class BmrbEntry(object):
 
 def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
     bb_atm_ids = ['C','CA','CB','HA','H','N','HB']
-    bbshifts = {}
     # 0: '_Atom_chem_shift.Entity_assembly_ID'
     # 1: '_Atom_chem_shift.Entity_ID'
     # 2: '_Atom_chem_shift.Seq_ID'
@@ -513,12 +511,14 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
     # 6: '_Atom_chem_shift.Val'
     # 7: '_Atom_chem_shift.Val_err'
     # 8: '_Atom_chem_shift.Ambiguity_code'
+    """
+    bbshifts = {}
     for (_,_,pos1,aa3,atm_id,atm_type,val,err,ambc) in shifts:
         pos0 = int(pos1) - 1
         if pos0 >= len(seq):
             logging.getLogger('trizod.bmrb').error(f'shift array sequence longer than polymer sequence')
             return
-        if aa3 in aa3to1:
+        if aa3 in AA3TO1:
             # covert to floats
             try:
                 val = float(val)
@@ -530,7 +530,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
             except:
                 logging.getLogger('trizod.bmrb').debug(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
                 err = np.nan #0. # TODO: correct default value?
-            if seq[pos0] != aa3to1[aa3]:
+            if seq[pos0] != AA3TO1[aa3]:
                 logging.getLogger('trizod.bmrb').error(f'canonical amino acid mismatch at 0-based position {pos0}')
                 return
             if max_err is not None:
@@ -592,4 +592,68 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
                 if atm_id in bbshifts[i]:
                     bbshifts_arr[i,j] = bbshifts[i][atm_id][0]
                     bbshifts_mask[i,j] = True
-    return bbshifts, bbshifts_arr, bbshifts_mask
+    """
+    df = pd.DataFrame(shifts, columns=['entity_assemID','entityID','pos','aa3','atm_id','atm_type','val','err','ambc'])
+    # convert sequence index
+    try:
+        df['pos'] = df['pos'].astype(int) - 1
+        assert np.all(df['pos'] >= 0)
+    except (ValueError, AssertionError):
+        logging.getLogger('trizod.bmrb').error(f'conversion to integer failed for at least one position index')
+        return
+    if np.any(df['pos'] >= len(seq)):
+        logging.getLogger('trizod.bmrb').error(f'shift array sequence longer than polymer sequence')
+        return
+    # only process canonical bases, check if AAs match sequence
+    df = df.loc[df['aa3'].isin(AA3TO1.keys())]
+    df['aa1'] = df['aa3'].replace(AA3TO1)
+    if np.any(df['aa1'] != df['pos'].replace({i:aa for i,aa in enumerate(seq)})):
+        logging.getLogger('trizod.bmrb').error(f'canonical amino acid mismatch between sequence and shift array')
+        return
+    # convert value and error
+    try:
+        df['val'] = df['val'].astype(float) # will throw error on failed conversion
+    except ValueError:
+        logging.getLogger('trizod.bmrb').error(f'conversion to float failed for at least one shift value')
+        return
+    df['err'] = pd.to_numeric(df['err']) # will create NaN for non-numeric entries, which is intended
+    # filter data with large measurement errors
+    if max_err:
+        df = df.loc[(df['err'] <= max_err) | pd.isna(df['err'])]
+    # filter certain ambiguous codes
+    df = df.loc[df['ambc'].isin(['1', '2', '', '.'])]
+    # filter non-backbone atoms
+    # TODO: maybe move this up to fasten processing
+    df = df.loc[df['atm_id'].isin(bb_atm_ids + ['HA2', 'HA3' ,'HB1', 'HB2', 'HB3'])]
+    df['atm_id_single'] = df['atm_id']
+    # look for non-standard shifts
+    df.loc[(df['aa3'] != 'ALA') & df['atm_id'].isin(['HB2', 'HB3']), 'atm_id_single'] = 'HB'
+    df.loc[(df['aa3'] == 'ALA') & df['atm_id'].isin(['HB1', 'HB2', 'HB3']), 'atm_id_single'] = 'HB'
+    df.loc[(df['aa3'] == 'GLY') & df['atm_id'].isin(['HA2', 'HA3']), 'atm_id_single'] = 'HA'
+    if np.any(~df['atm_id_single'].isin(bb_atm_ids)):
+        logging.getLogger('trizod.bmrb').error(f'found unexpected shift for a canonical amino acid in shift table')
+        return
+    # duplicated shifts
+    dupl = df[['pos', 'atm_id_single', 'atm_id', 'val', 'err']].duplicated() # identical rows
+    if np.any(dupl):
+        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for the same position and atom_id')
+    df = df.loc[~dupl]
+    # conflicting data
+    #conflicting_ = df.set_index(['pos', 'atm_id_single', 'atm_id']).index.duplicated(keep=False)
+    conflicting = df[['pos', 'atm_id_single', 'atm_id']].duplicated(keep=False)
+    #if not np.array_equal(conflicting.to_numpy(), conflicting_):
+    #    breakpoint()
+    if np.any(conflicting):
+        logging.getLogger('trizod.bmrb').error(f'multiple shifts found for the same position and atom_id')
+        return
+    # averaging 
+    df = df.groupby(['pos', 'atm_id_single'])[['val']].agg('mean').reset_index()
+    #df['atm_col'] = df['atm_id_single'].replace({atm_id:i for i,atm_id in enumerate(bb_atm_ids)})
+    bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
+    bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)
+    for i,atm_id in enumerate(bb_atm_ids):
+        sel = df['atm_id_single'] == atm_id
+        bbshifts_arr[df.loc[sel, 'pos'], i] = df.loc[sel, 'val']
+        bbshifts_mask[df.loc[sel, 'pos'], i] = True
+    #"""
+    return bbshifts_arr, bbshifts_mask

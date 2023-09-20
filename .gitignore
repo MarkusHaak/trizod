@@ -7,6 +7,6 @@ tmp*
 *.txt
 __pycache__
 data
-tests
 *.csv
 notebooks
+*.egg-info
