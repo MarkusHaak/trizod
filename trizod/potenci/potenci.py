@@ -9,14 +9,23 @@ import sys
 import string
 from scipy.special import erfc
 from scipy.optimize import curve_fit
+from scipy import sparse
 import numpy as np
 import pandas as pd
 import os
 ##from matplotlib import pyplot as pl
-from trizod.potenci.constants import R, e, a, b, cutoff, ncycles
+from trizod.potenci.constants import R, e, a, b, cutoff, ncycles, pK0
 import logging
 import pkgutil
 from io import StringIO
+
+outer_matrices = []
+alltuples_ = []
+for smallN in range(0,6):
+    alltuples = np.array([[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))])
+    outerm = np.array([np.outer(c,c) for c in alltuples])
+    outer_matrices.append(outerm)
+    alltuples_.append(alltuples)
 
 def smallmatrixlimits(ires, cutoff, len):
     ileft = max(1, ires - cutoff)
@@ -34,7 +43,11 @@ def smallmatrixpos(ires, cutoff, len):
     return resi
 
 def fun(pH, pK, nH):
-    return (10 ** ( nH*(pK - pH) ) ) / (1. + (10 **( nH*(pK - pH) ) ) )
+    #return (10 ** ( nH*(pK - pH) ) ) / (1. + (10 **( nH*(pK - pH) ) ) )
+    return 1. - 1. / ((10 ** ( nH*(pK - pH) ) ) + 1.) # identical
+
+def log_fun(pH, pK, nH):
+    return -np.log10(1 + 10**(nH*(pH - pK)))
 
 #def W(r,Ion=0.1):
 #    k = np.sqrt(Ion) / 3.08 #Ion=0.1 is default
@@ -58,14 +71,10 @@ def W(r,Ion=0.1):
 def w2logp(x,T=293.15):
     return x * 4181.2 / (R * T * np.log(10)) 
 
-pK0 = {"n":8.23, "D":3.86, "E":4.34, "H":6.45, "C":8.49, "K":10.34, "R":13.9, "Y":9.76, "c":3.55}
-
+'''
 def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
     #pH range
     pHs = np.arange(1.99, 10.01, 0.15)
-    #titratable groups
-    ##pK0 = {"n":7.5, "D":4.0, "E":4.4, "H":6.6, "C":8.6, "K":10.4, "R":12.0, "Y":9.6, "c":3.5} #was these values!
-    pK0 = {"n":8.23, "D":3.86, "E":4.34, "H":6.45, "C":8.49, "K":10.34, "R":13.9, "Y":9.76, "c":3.55}
   
     pos = np.array([i for i in range(len(seq)) if seq[i] in pK0.keys()])
     N = pos.shape[0]
@@ -74,24 +83,23 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
     neg = np.array([i for i in range(len(sites)) if sites[i] in 'DEYc'])
     l = np.array([abs(pos - pos[i]) for i in range(N)])
     d = a + np.sqrt(l) * b
-  
+
     tmp = W(d,Ion)
     tmp[I == 1] = 0
-  
+    
     ww = w2logp(tmp,T) / 2
-  
+    
     chargesempty = np.zeros(pos.shape[0])
     if len(neg): chargesempty[neg] = -1
-  
+    
     pK0s = [pK0[c] for c in sites]
     nH0s = [0.9 for c in sites]
-  
+    
     titration = np.zeros((N,len(pHs)))
     smallN = min(2 * cutoff+1, len(pos))
-    smallI = np.diag(np.ones(smallN))
+    #smallI = np.diag(np.ones(smallN))
   
-    alltuples =  [[int(c) for c in np.binary_repr(i, smallN)]
-                  for i in range(2 ** (smallN))]
+    alltuples = [[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))]
     gmatrix = [np.zeros((smallN, smallN)) for p in range(len(pHs))]
   
     #perform iterative fitting.........................
@@ -114,10 +122,11 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
                 gmatrixfull =  ww + ww0 + pHs[p] * I - np.diag(pK0s) 
                 gmatrix[p] = gmatrixfull[ileft - 1 : iright, ileft - 1 : iright]
       
+            breakpoint()
             E_all = np.array([sum([10 ** -(gmatrix[p] * np.outer(c,c)).sum() for c in alltuples]) for p in range(len(pHs))])
             E_sel = np.array([sum([10 ** -(gmatrix[p] * np.outer(c,c)).sum() for c in alltuples if c[resi-1] == 1]) for p in range(len(pHs))])
             titration[ires-1] = E_sel/E_all
-        sol=np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
+        sol = np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
         (pKs, nHs) = sol.transpose()
         ##print (sol)
   
@@ -125,6 +134,88 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
     for p,i in enumerate(pos):
       ##print (p,i,seq[i],pKs[p],nHs[p])
       dct[i-1]=(pKs[p],nHs[p],seq[i])
+  
+    return dct
+'''
+
+def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
+    #pH range
+    pHs = np.arange(1.99, 10.01, 0.15)
+
+    pos = np.array([i for i in range(len(seq)) if seq[i] in pK0.keys()])
+    N = pos.shape[0]
+    I = np.diag(np.ones(N))
+    sites = ''.join([seq[i] for i in pos])
+    neg = np.array([i for i in range(len(sites)) if sites[i] in 'DEYc'])
+    l = np.array([abs(pos - pos[i]) for i in range(N)])
+    d = a + np.sqrt(l) * b
+
+    tmp = W(d,Ion)
+    tmp[I == 1] = 0
+
+    ww = w2logp(tmp,T) / 2
+
+    chargesempty = np.zeros(pos.shape[0])
+    if len(neg): chargesempty[neg] = -1
+
+    pK0s = np.array([pK0[c] for c in sites])
+    nH0s = np.array([0.9 for c in sites])
+    #pK0s_ = [pK0[c] for c in sites]
+    #nH0s_ = [0.9 for c in sites]
+
+    titration = np.zeros((N,len(pHs)))
+
+    smallN = min(2 * cutoff + 1, len(pos))  
+    #alltuples = [[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))]
+    #outerm = np.array([np.outer(c,c) for c in alltuples])
+    alltuples = alltuples_[smallN]
+    outerm = outer_matrices[smallN]
+    gmatrix = [np.zeros((smallN, smallN)) for _ in range(len(pHs))]
+
+    #perform iterative fitting.........................
+    for icycle in range(ncycles):
+        ##print (icycle)
+
+        if icycle == 0:
+            fractionhold = np.array([[fun(pHs[p], pK0s[i], nH0s[i]) for i in range(N)] for p in range(len(pHs))])
+            #fractionhold = fun(np.expand_dims(pHs,-1), pK0s, nH0s)
+            #if not np.array_equal(fractionhold_, fractionhold):
+            #    breakpoint()
+        else:
+            fractionhold = titration.transpose()
+
+        for ires in range(1, N+1):
+            (ileft,iright) = smallmatrixlimits(ires, cutoff, N)
+            resi = smallmatrixpos(ires, cutoff, N)
+            ##for p in range(len(pHs)):
+            ##    fraction = fractionhold[p].copy()
+            ##    fraction[ileft - 1 : iright] = 0
+            ##    charges = chargesempty + fraction  
+            ##    ww0 = np.diag(np.dot(ww, charges) * 2) 
+            ##    gmatrixfull =  ww + ww0 + pHs[p] * I - np.diag(pK0s) 
+            ##    gmatrix[p] = gmatrixfull[ileft - 1 : iright, ileft - 1 : iright]
+            fraction = fractionhold.copy()
+            fraction[:,ileft - 1:iright] = 0
+            charges = fraction + chargesempty
+            ww0 = 2 * (ww * np.expand_dims(charges, axis=1)).sum(axis=-1)
+            ww0 = (np.expand_dims(ww0, 1) * I) # array of diagonal matrices
+            gmatrixfull = (ww + ww0 + np.expand_dims(pHs,(1,2)) * I - np.diag(pK0s))
+            gmatrix = gmatrixfull[:, ileft - 1 : iright, ileft - 1 : iright]
+            
+            ##E_all = np.array([sum(np.array([10 ** -(gmatrix[p] * outerm[i]).sum() for i,c in enumerate(alltuples)])) for p in range(len(pHs))])
+            ##E_sel = np.array([sum([10 ** -(gmatrix[p] * outerm[i]).sum() for i,c in enumerate(alltuples) if c[resi-1] == 1]) for p in range(len(pHs))])
+            E = (10 ** -(np.expand_dims(gmatrix, axis=1) * outerm).sum(axis=(2,3)))#.sum(axis=-1)
+            E_all = E.sum(axis=-1)
+            E_sel = E[:,(alltuples[:,resi-1] == 1)].sum(axis=-1)
+            titration[ires-1] = E_sel/E_all
+        sol = np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
+        (pKs, nHs) = sol.transpose()
+        ##print (sol)
+
+    dct={}
+    for p,i in enumerate(pos):
+        ##print (p,i,seq[i],pKs[p],nHs[p])
+        dct[i-1]=(pKs[p],nHs[p],seq[i])
   
     return dct
 
@@ -746,8 +837,8 @@ NEICORRS =initcorneis()
 COMBCORRS=initcorrcomb()
 ##dct[atn][segment]=key,eval(lin[-1])
 
-data = pkgutil.get_data(__name__, "data_tables/phshifts.csv")
-PHSHIFTS = pd.read_csv(StringIO(data.decode()), header=0, comment='#')
+data = pkgutil.get_data(__name__, "data_tables/phshifts2.csv")
+PHSHIFTS = pd.read_csv(StringIO(data.decode()), header=0, comment='#', index_col=['resn', 'atn'])
 
 def predPentShift(pent,atn):
     aac=pent[2]
@@ -846,7 +937,7 @@ def read_csv_pkaoutput(seq,temperature,ion,name=None):
 
 def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
     bbatns=['C','CA','CB','HA','H','N','HB']
-    dct=get_phshifts()
+    #dct=get_phshifts()
     Ion=max(0.0001,ion)
     if pkacsvfilename == False:
         pkadct=None
@@ -867,9 +958,10 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
             for atn in bbatns:
                 if not atn in outdct:outdct[atn]={}
                 logging.getLogger('trizod.potenci').debug(f'data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}')
-                dctresi=dct[resi]
+                #dctresi=dct[resi]
                 try:
-                    delta=dctresi[atn]
+                    #delta=dctresi[atn]
+                    delta = PHSHIFTS.loc[(resi,atn), 'shd']
                     jump =frac *delta
                     jump7=frac7*delta
                     key=(resi,atn)
@@ -884,12 +976,14 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
                         outdct[atn][i][0]=resi
                         outdct[atn][i][1]+=jumpdelta
                     logging.getLogger('trizod.potenci').debug('%3s %5.2f %6.4f %s %3d %5s %8.5f %8.5f %4.2f'%(atn,pKa,nH,resi,i,atn,jump,jump7,pH))
-                    if resi+'p' in dct and atn in dct[resi+'p']:
+                    #if resi+'p' in dct and atn in dct[resi+'p']:
+                    if (resi+'p', atn) in PHSHIFTS.index:
                         for n in range(2):
                             ni=i+2*n-1
                             ##if ni is somewhere in seq...
                             nresi=resi+'ps'[n]
-                            ndelta=dct[nresi][atn]
+                            #ndelta=dct[nresi][atn]
+                            ndelta = PHSHIFTS.loc[(nresi,atn), 'shd']
                             jump =frac *ndelta
                             jump7=frac7*ndelta
                             jumpdelta=jump-jump7
@@ -897,19 +991,13 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
                             else:outdct[atn][ni][1]+=jumpdelta
     return outdct
 
-def getphcorrs_arr(seq,temperature,pH,ion,pkacsvfilename=None):
+def getphcorrs_arr(seq,temperature,pH,ion):
     bbatns=['C','CA','CB','HA','H','N','HB']
     #dct=get_phshifts()
     
     Ion=max(0.0001,ion)
-    if pkacsvfilename == False:
-        pkadct=None
-    else:
-        pkadct=read_csv_pkaoutput(seq,temperature,ion,pkacsvfilename)
-    if pkadct==None:
-        pkadct=calc_pkas_from_seq('n'+seq+'c',temperature,Ion)
-        if pkacsvfilename != False:
-            write_csv_pkaoutput(pkadct,seq,temperature,ion)
+
+    pkadct=calc_pkas_from_seq('n'+seq+'c',temperature,Ion)
     #outdct={}
     residues = [[None]*7 for i in range(len(seq))]
     outarr = np.zeros(shape=(len(seq), len(bbatns)), dtype=np.float)

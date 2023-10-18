@@ -800,7 +800,6 @@ def main():
         assume_si=args.unit_assumptions, 
         fix_outliers=args.unit_corrections,
         progress=args.progress)
-    breakpoint()
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
         df,
         method_whitelist=args.exp_method_whitelist, 
