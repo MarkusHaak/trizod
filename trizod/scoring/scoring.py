@@ -157,13 +157,13 @@ def compute_pscores(ashwi3, k3, mask, quotient=2.0, limit=4.0):
 
     if limit:
         p = np.prod(scipy.stats.norm.pdf(np.minimum(ashwi3, limit) / quotient) / scipy.stats.norm.pdf(0.), axis=1)
-        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are expected 
+        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are ok
             p = p ** (1/k3)
         minimum = scipy.stats.norm.pdf(limit / quotient) / scipy.stats.norm.pdf(0.)
         p = (p - minimum) / (1. - minimum)
     else:
         p = np.prod(scipy.stats.norm.pdf(ashwi3 / quotient) / scipy.stats.norm.pdf(0.), axis=1)
-        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are expected 
+        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are ok
             p = p ** (1/k3)
     p[k3 == 0] = np.nan
     p[:mini] = np.nan

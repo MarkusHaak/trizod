@@ -142,8 +142,8 @@ def parse_args():
     
     scores_grp = parser.add_argument_group('Scoring Options')
     scores_grp.add_argument(
-        '--scores-type', choices=['zscores', 'chezod', 'pscores'], 
-        default='zscores',
+        '--score-types', nargs='+', choices=['zscores', 'pscores', 'corrected'], 
+        default=['zscores','pscores'],
         help='Which type of scores are created: Observation count-independent zscores (zscores), '
         'original CheZOD zscores (chezod) or geometric mean of observation probabilities (pscores).')
     scores_grp.add_argument(
@@ -313,10 +313,11 @@ def prefilter_dataframe(df,
     method_blacklist_ = [l.lower() for l in method_blacklist]
     if method_blacklist_:
         method_sel &= (~df.exp_method_subtype.str.lower().str.contains("|".join(method_blacklist_), regex=True))
-    if '' in method_whitelist and '' not in method_blacklist:
+    if '' in method_whitelist_ and '' not in method_blacklist_:
         method_sel |= df.exp_method.str.lower().str.contains('nmr') & pd.isna(df.exp_method_subtype)
     else:
-        method_sel = sels_pre["method (sub-)type"].fillna(False)
+        #method_sel = sels_pre["method (sub-)type"].fillna(False)
+        method_sel &= ~pd.isna(df.exp_method_subtype)
         missing_vals &= ~pd.isna(df.exp_method_subtype)
     sels_pre = {
         #"missing values" : ~df[['ionic_strength', 'pH', 'temperature','seq','total_bbshifts', 'bbshift_types']].isna().any(axis=1),
@@ -353,12 +354,16 @@ def postfilter_dataframe(df,
                          min_backbone_shift_types,
                          min_backbone_shift_positions,
                          min_backbone_shift_fraction,
-                         reject_shift_type_only):
+                         reject_shift_type_only,
+                         score_types):
+    comp_error = np.full((len(df),), False)
+    for score_type in score_types:
+        comp_error |= pd.isna(df[score_type])
     sels_post = {
         "backbone shift types" : (df.bbshift_types_post >= min_backbone_shift_types),
         "backbone shift positions" : (df.bbshift_positions_post >= min_backbone_shift_positions),
         "backbone shift fraction" : ((df.bbshift_positions_post / df.seq.str.len()) >= min_backbone_shift_fraction),
-        "error in computation" : (~pd.isna(df.scores))
+        "error in computation" : (~comp_error)
     }
     if not reject_shift_type_only:
         any_offsets_too_large = pd.Series(np.full((df.shape[0],), False))
@@ -656,7 +661,7 @@ def create_peptide_dataframe(bmrb_entries,
 
 def compute_scores(entry, stID, entity_assemID, entityID,
                    seq, ion, pH, temperature,
-                   scores_type='zscores', offset_correction=True, 
+                   score_types=['zscores'], offset_correction=True, 
                    max_offset=np.inf, reject_shift_type_only=False,
                    #min_backbone_shift_types=1, min_backbone_shift_positions=1, min_backbone_shift_fraction=0.,
                    cache_dir=None):
@@ -713,23 +718,25 @@ def compute_scores(entry, stID, entity_assemID, entityID,
     if np.any(cmp_mask):
         start_time = time.time()
         ashwi3, k3 = scoring.convert_to_triplet_data(ashwi, cmp_mask)
-        if scores_type == 'zscores':
-            scores = scoring.compute_zscores(ashwi3, k3, cmp_mask, corr=True)
-        elif scores_type == 'chezod':
-            scores = scoring.compute_zscores(ashwi3, k3, cmp_mask)
-        elif scores_type == 'pscores':
-            scores = scoring.compute_pscores(ashwi3, k3, cmp_mask)
-        else:
-            raise ValueError
+        scores = []
+        for score_type in score_types:
+            if 'corrected' == score_type:
+                scores.append(scoring.compute_zscores(ashwi3, k3, cmp_mask, corr=True))
+            elif 'zscores' == score_type:
+                scores.append(scoring.compute_zscores(ashwi3, k3, cmp_mask))
+            elif 'pscores' == score_type:
+                scores.append(scoring.compute_pscores(ashwi3, k3, cmp_mask))
+            else:
+                raise ValueError
         # set positions where score is nan to 0 to avoid confusion
         k = k3
-        k[np.isnan(scores)] = 0
+        k[np.isnan(scores[0])] = 0
         exe_times[2] = time.time() - start_time
     else:
-        scores, k = np.full((cmp_mask.shape[0],), np.nan), np.full((cmp_mask.shape[0],), np.nan)
+        scores, k = [np.full((cmp_mask.shape[0],), np.nan) for i in range(len(score_types))], np.full((cmp_mask.shape[0],), np.nan)
     return scores, k, cmp_mask, offsets, exe_times
 
-def compute_scores_row(row, scores_type='zscores', offset_correction=True, 
+def compute_scores_row(row, score_types=['zscores'], offset_correction=True, 
                        max_offset=np.inf, reject_shift_type_only=False,
                        cache_dir=None):
     if not row['pass_pre']:
@@ -739,13 +746,14 @@ def compute_scores_row(row, scores_type='zscores', offset_correction=True,
         scores, k, cmp_mask, offsets, exe_times = compute_scores(
             bmrb_entries.loc[row['id'], 'entry'], row['stID'], row['entity_assemID'], row['entityID'],
             row['seq'], row['ionic_strength'], row['pH'], row['temperature'],
-            scores_type=scores_type, offset_correction=offset_correction, 
+            score_types=score_types, offset_correction=offset_correction, 
             max_offset=max_offset, reject_shift_type_only=reject_shift_type_only,
             #min_backbone_shift_types=args.min_backbone_shift_types,
             #min_backbone_shift_positions=args.min_backbone_shift_positions,
             #min_backbone_shift_fraction=args.min_backbone_shift_fraction,
             cache_dir=cache_dir)
-        row['scores'] = scores
+        for score_type, scores_ in zip(score_types, scores):
+            row[score_type] = scores_
         row['k'] = k
         #row['cmp_mask'] = cmp_mask
         for at in BBATNS:
@@ -761,14 +769,16 @@ def compute_scores_row(row, scores_type='zscores', offset_correction=True,
         pass
     return row
 
-def output_dataset(df, output_prefix, output_format):
+def output_dataset(df, output_prefix, output_format, score_types):
     if output_format == 'csv':
         df.loc[df.pass_post, 'seq'] = df[df.pass_post].seq.apply(lambda x: list(x))
-        dout = df.loc[df.pass_post].reset_index()[['id', 'stID', 'entity_assemID', 'entityID', 'seq', 'scores', 'k']]
+        dout = df.loc[df.pass_post].reset_index()[['id', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types]
         dout['seq'] = dout.seq.apply(lambda x: list(x))
         dout['seq_index'] = dout.seq.apply(lambda x: list(range(1,len(x)+1)))
-        dout = dout.explode(['seq_index', 'seq', 'scores', 'k'])
-        dout[['id', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'scores', 'k']].to_csv(output_prefix + '.csv', float_format='%.3f')
+        dout = dout.explode(['seq_index', 'seq', 'k'] + score_types)
+        dout[['id', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types].to_csv(output_prefix + '.csv', float_format='%.3f')
+    elif output_format == 'json':
+        breakpoint()
     else:
         raise ValueError(f"Unknown output format: {output_format}")
 
@@ -818,23 +828,24 @@ def main():
     logging.getLogger('trizod').info('Computing scores for each remaining entry.')
     df = df.parallel_apply(
         compute_scores_row, axis=1, 
-        scores_type=args.scores_type, 
+        score_types=args.score_types, 
         offset_correction=args.offset_correction, 
         max_offset=args.max_offset, 
         reject_shift_type_only=args.reject_shift_type_only,
         cache_dir=args.cache_dir)
-    print()
+    if args.progress : print() # prevents overwriting last line of progress bars
     logging.getLogger('trizod').info('Filtering results.')
     sels_post, sels_off, sels_all_post = postfilter_dataframe(
         df,
         min_backbone_shift_types=args.min_backbone_shift_types,
         min_backbone_shift_positions=args.min_backbone_shift_positions,
         min_backbone_shift_fraction=args.min_backbone_shift_fraction,
-        reject_shift_type_only=args.reject_shift_type_only)
+        reject_shift_type_only=args.reject_shift_type_only,
+        score_types=args.score_types)
     logging.getLogger('trizod').info('Output filtering results.')
     print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre, sels_post, sels_off, sels_all_post)
     logging.getLogger('trizod').info('Writing dataset to file.')
-    output_dataset(df, args.output_prefix, args.output_format)
+    output_dataset(df, args.output_prefix, args.output_format, args.score_types)
 
 if __name__ == '__main__':
     main()
