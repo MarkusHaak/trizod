@@ -157,6 +157,9 @@ def parse_args():
         '--reject-shift-type-only', action=argparse.BooleanOptionalAction,
         default=filter_defaults.loc[args_init.filter_defaults, 'reject-shift-type-only'],
         help='Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry.')
+    scores_grp.add_argument(
+        '--precision', type=int, default=4,
+        help='Number of decimal digits that are output to human readable files.')
 
     other_grp = parser.add_argument_group('Other Options')
     other_grp.add_argument(
@@ -728,9 +731,8 @@ def compute_scores(entry, stID, entity_assemID, entityID,
                 scores.append(scoring.compute_pscores(ashwi3, k3, cmp_mask))
             else:
                 raise ValueError
-        # set positions where score is nan to 0 to avoid confusion
         k = k3
-        k[np.isnan(scores[0])] = 0
+        #k[np.isnan(scores[0])] = 0 # set positions where score is nan to 0 to avoid confusion
         exe_times[2] = time.time() - start_time
     else:
         scores, k = [np.full((cmp_mask.shape[0],), np.nan) for i in range(len(score_types))], np.full((cmp_mask.shape[0],), np.nan)
@@ -769,16 +771,27 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
         pass
     return row
 
-def output_dataset(df, output_prefix, output_format, score_types):
+def output_dataset(df, output_prefix, output_format, score_types, precision):
     if output_format == 'csv':
         df.loc[df.pass_post, 'seq'] = df[df.pass_post].seq.apply(lambda x: list(x))
         dout = df.loc[df.pass_post].reset_index()[['id', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types]
         dout['seq'] = dout.seq.apply(lambda x: list(x))
         dout['seq_index'] = dout.seq.apply(lambda x: list(range(1,len(x)+1)))
         dout = dout.explode(['seq_index', 'seq', 'k'] + score_types)
-        dout[['id', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types].to_csv(output_prefix + '.csv', float_format='%.3f')
+        dout[score_types] = dout[score_types].astype(float).apply(np.round, args=(precision,))
+        dout[['id', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types]\
+            .to_csv(output_prefix + '.csv', 
+                    float_format='%.{}f'.format(precision))
     elif output_format == 'json':
-        breakpoint()
+        dout = df.loc[df.pass_post].reset_index()[['id', 'stID', 'entity_assemID', 'entityID',
+                                                   'exp_method', 'exp_method_subtype', 'citation_DOI', 'citation_title',
+                                                   'ionic_strength', 'pH', 'temperature',
+                                                   'off_C', 'off_CA', 'off_CB', 'off_H', 'off_HA', 'off_HB', 'off_N',
+                                                   'bbshift_positions_post', 'bbshift_types_post',
+                                                   'seq', 'k'] + score_types]
+        for score_type in score_types:
+            dout[score_type] = dout[score_type].apply(np.round, args=(precision,))
+        dout.to_json(output_prefix + '.json', orient='records', lines=True)
     else:
         raise ValueError(f"Unknown output format: {output_format}")
 
@@ -845,7 +858,7 @@ def main():
     logging.getLogger('trizod').info('Output filtering results.')
     print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre, sels_post, sels_off, sels_all_post)
     logging.getLogger('trizod').info('Writing dataset to file.')
-    output_dataset(df, args.output_prefix, args.output_format, args.score_types)
+    output_dataset(df, args.output_prefix, args.output_format, args.score_types, args.precision)
 
 if __name__ == '__main__':
     main()
