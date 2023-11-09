@@ -71,6 +71,9 @@ def parse_args():
     io_grp.add_argument(
         '--BMRB-file-pattern', default="bmr(\d+)_3\.str",
         help="regular expression pattern for BMRB files.")
+    io_grp.add_argument(
+        '--include-shifts', action='store_true',
+        help='Add raw backbone atom shift data to the output.')
     
 
     filter_defaults_grp = init_parser.add_argument_group('Filter Default Settings')
@@ -473,7 +476,8 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
     print(f"{'final dataset entries':<{w_str}} : {(passing_post).sum():>{w_num}} of {len(df):>{w_num-3}} ({(passing_post).sum() / len(df) * 100.:>{w_num-1}.2f} %)")
 
 def fill_row_data(row, chemical_denaturants, keywords,
-                  return_default=True, assume_si=True, fix_outliers=True):
+                  return_default=True, assume_si=True, fix_outliers=True,
+                  include_shifts=False):
     entry = bmrb_entries.loc[row['entryID'], 'entry'] #row['entry']
     peptide_shifts = entry.get_peptide_shifts()
     shifts, condID, assemID, sampleIDs = peptide_shifts[(row['stID'], row['entity_assemID'], row['entityID'])]
@@ -487,7 +491,7 @@ def fill_row_data(row, chemical_denaturants, keywords,
     seq = entry.entities[row['entityID']].seq
     row['seq'] = seq
     # retrieve # backbone shifts (H,HA,HB,C,CA,CB,N)
-    total_bbshifts, bbshift_types, bbshift_positions = None, None, None
+    total_bbshifts, bbshift_types, bbshift_positions, bbshifts_arr = None, None, None, None
     if seq:
         ret = bmrb.get_valid_bbshifts(shifts, seq)
         if ret:
@@ -496,13 +500,18 @@ def fill_row_data(row, chemical_denaturants, keywords,
             if len(bbshifts_mask) >= 2:
                 # backbone shift of terminal amino acids are not counted
                 total_bbshifts = np.sum(bbshifts_mask[1:-1]) # total backbone shifts
+                if include_shifts:
+                    bbshifts_arr[~bbshifts_mask] = np.nan
             else:
                 total_bbshifts = 0
+                bbshifts_arr = None
             bbshift_types = np.any(bbshifts_mask, axis=0).sum() # different backbone shifts
             bbshift_positions = np.any(bbshifts_mask, axis=1).sum() # positions with backbone shifts
     row['total_bbshifts'] = total_bbshifts
     row['bbshift_types'] = bbshift_types
     row['bbshift_positions'] = bbshift_positions
+    if include_shifts:
+        row['bbshifts'] = bbshifts_arr
     # check if keywords are present
     fields = [entry.title, entry.details, entry.citation_title,
             entry.assemblies[assemID].name, entry.assemblies[assemID].details, 
@@ -654,6 +663,7 @@ def create_peptide_dataframe(bmrb_entries,
 def create_peptide_dataframe(bmrb_entries,
                              chemical_denaturants, keywords,
                              return_default=True, assume_si=True, fix_outliers=True,
+                             include_shifts=False,
                              progress=False
                              ):
     data = []
@@ -678,7 +688,8 @@ def create_peptide_dataframe(bmrb_entries,
             data[-1].extend([stID, entity_assemID, entityID])
     df = pd.DataFrame(data, columns=columns)
     df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), 
-                           return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
+                           return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers,
+                           include_shifts=include_shifts)
     df = df.astype({col : "string" for col in ['entryID', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
     return df
 
@@ -791,17 +802,25 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
         pass
     return row
 
-def output_dataset(df, output_prefix, output_format, score_types, precision):
+def output_dataset(df, output_prefix, output_format, score_types, precision, include_shifts):
     #df = df.rename(columns={"id": "entryID"})
     df['ID'] = df['entryID']+'_'+df['stID']+'_'+df['entity_assemID']+'_'+df['entityID']
+    for score_type in score_types:
+        df.loc[df.pass_post, score_type] = df.loc[df.pass_post, score_type].apply(np.round, args=(precision,))
+    shifts = []
+    if include_shifts:
+        shifts = BBATNS
+        for i,at in enumerate(BBATNS):
+            df.loc[df.pass_post, at] = df.loc[df.pass_post, 'bbshifts'].apply(lambda x: x[:,i])
+            df.loc[df.pass_post, at] = df.loc[df.pass_post, at].apply(np.round, args=(precision,))
     if output_format == 'csv':
         df.loc[df.pass_post, 'seq'] = df[df.pass_post].seq.apply(lambda x: list(x))
-        dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types]
+        dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types + shifts]
         dout['seq'] = dout.seq.apply(lambda x: list(x))
         dout['seq_index'] = dout.seq.apply(lambda x: list(range(1,len(x)+1)))
-        dout = dout.explode(['seq_index', 'seq', 'k'] + score_types)
-        dout[score_types] = dout[score_types].astype(float).apply(np.round, args=(precision,))
-        dout[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types]\
+        dout = dout.explode(['seq_index', 'seq', 'k'] + score_types + shifts)
+        #dout[score_types] = dout[score_types].astype(float).apply(np.round, args=(precision,))
+        dout[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types + shifts]\
             .to_csv(output_prefix + '.csv', 
                     float_format='%.{}f'.format(precision))
     elif output_format == 'json':
@@ -810,9 +829,9 @@ def output_dataset(df, output_prefix, output_format, score_types, precision):
                                                    'ionic_strength', 'pH', 'temperature',
                                                    'off_C', 'off_CA', 'off_CB', 'off_H', 'off_HA', 'off_HB', 'off_N',
                                                    'bbshift_positions_post', 'bbshift_types_post', 'total_bbshifts',
-                                                   'seq', 'k'] + score_types]
-        for score_type in score_types:
-            dout[score_type] = dout[score_type].apply(np.round, args=(precision,))
+                                                   'seq', 'k'] + score_types + shifts]
+        #for score_type in score_types:
+        #    dout[score_type] = dout[score_type].apply(np.round, args=(precision,))
         dout.to_json(output_prefix + '.json', orient='records', lines=True)
     else:
         raise ValueError(f"Unknown output format: {output_format}")
@@ -844,6 +863,7 @@ def main():
         return_default=args.default_conditions, 
         assume_si=args.unit_assumptions, 
         fix_outliers=args.unit_corrections,
+        include_shifts=args.include_shifts,
         progress=args.progress)
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
         df,
@@ -881,7 +901,7 @@ def main():
     logging.getLogger('trizod').info('Output filtering results.')
     print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre, sels_post, sels_off, sels_all_post)
     logging.getLogger('trizod').info('Writing dataset to file.')
-    output_dataset(df, args.output_prefix, args.output_format, args.score_types, args.precision)
+    output_dataset(df, args.output_prefix, args.output_format, args.score_types, args.precision, args.include_shifts)
 
 if __name__ == '__main__':
     main()
