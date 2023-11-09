@@ -5,7 +5,7 @@ import argparse
 import trizod.potenci.potenci as potenci
 import trizod.bmrb.bmrb as bmrb
 import trizod.scoring.scoring as scoring
-from trizod.constants import BBATNS
+from trizod.constants import BBATNS, CAN_TRANS
 from trizod.utils import ArgHelpFormatter
 import numpy as np
 import pandas as pd
@@ -25,7 +25,7 @@ class FilterException(Exception): pass
 filter_defaults = pd.DataFrame({
     'temperature-range' : [[-np.inf, +np.inf], [263.0, 333.0], [273.0, 313.0], [273.0, 313.0]],
     'ionic-strength-range' : [[0., np.inf], [0., 5.], [0., 3.], [0., 3.]],
-    'pH-range' : [[-np.inf, np.inf], [2., 12.], [3., 11.], [4., 9.]],
+    'pH-range' : [[-np.inf, np.inf], [2., 12.], [4., 10.], [6., 8.]],
     'unit-assumptions' : [True, True, True, False],
     'unit-corrections' : [True, True, False, False],
     'default-conditions' : [True, True, True, False],
@@ -33,10 +33,12 @@ filter_defaults = pd.DataFrame({
     'min-backbone-shift-types' : [1, 2, 3, 5],
     'min-backbone-shift-positions' : [3, 3, 8, 12],
     'min-backbone-shift-fraction' : [0., 0., 0.6, 0.8],
+    'max-noncanonical-fraction' : [1.,0.1,0.025,0.],
+    'max-x-fraction' : [1., 0.2, 0.05, 0.],
     'keywords-blacklist' : [[], 
                             ['denatur'], 
                             ['denatur', 'unfold', 'misfold'], 
-                            ['denatur', 'unfold', 'misfold', 'interact', 'bound']],#, 'bind'
+                            ['denatur', 'unfold', 'misfold', 'interacti', 'bound']], # interacti[on/ng]
     'chemical-denaturants' : [[], 
                               ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'], 
                               ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'], 
@@ -123,6 +125,14 @@ def parse_args():
         '--min-backbone-shift-fraction', type=float, 
         default=filter_defaults.loc[args_init.filter_defaults, 'min-backbone-shift-fraction'],
         help='Minimum fraction of positions with at least one backbone shift.')
+    filter_grp.add_argument(
+        '--max-noncanonical-fraction', type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'max-noncanonical-fraction'],
+        help='Maximum fraction of non-canonical amino acids (X count as arbitrary canonical) in the amino acid sequence.')
+    filter_grp.add_argument(
+        '--max-x-fraction', type=float, 
+        default=filter_defaults.loc[args_init.filter_defaults, 'max-x-fraction'],
+        help='Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence.')
     filter_grp.add_argument(
         '--keywords-blacklist', nargs='*', 
         default=filter_defaults.loc[args_init.filter_defaults, 'keywords-blacklist'],
@@ -261,12 +271,12 @@ def load_bmrb_entries(bmrb_files, cache_dir=None, progress=False):
 def parse_bmrb_file(row, cache_dir=None):
     try:
         entry = bmrb.BmrbEntry(row.name, row.dir)
-        if cache_dir:
-            with open(row.cache_fp, 'wb') as f:
-                pickle.dump(entry, f)
-        return entry
     except:
         return None
+    if cache_dir:
+        with open(row.cache_fp, 'wb') as f:
+            pickle.dump(entry, f)
+    return entry
 
 def load_bmrb_entries(bmrb_files, cache_dir=None):
     entries, failed = {}, []
@@ -289,7 +299,7 @@ def load_bmrb_entries(bmrb_files, cache_dir=None):
             entries[id_] = (None, os.path.dirname(fp))
     df = pd.DataFrame(entries.values(), index=entries.keys(), columns=columns)
     sel = pd.isna(df.entry)
-    df.loc[sel, entry] = df.loc[sel].parallel_apply(parse_bmrb_file, axis=1, cache_dir=cache_dir)
+    df.loc[sel, 'entry'] = df.loc[sel].parallel_apply(parse_bmrb_file, axis=1, cache_dir=cache_dir)
     sel = pd.isna(df.entry)
     failed = df.loc[sel].index.to_list()
     return df.loc[~sel], failed
@@ -303,6 +313,8 @@ def prefilter_dataframe(df,
                         min_backbone_shift_types,
                         min_backbone_shift_positions,
                         min_backbone_shift_fraction,
+                        max_noncanonical_fraction,
+                        max_x_fraction,
                         keywords,
                         chemical_denaturants,
                         ):
@@ -336,6 +348,8 @@ def prefilter_dataframe(df,
         "backbone shift types" : (df.bbshift_types >= min_backbone_shift_types),
         "backbone shift positions" : (df.bbshift_positions >= min_backbone_shift_positions),
         "backbone shift fraction" : ((df.bbshift_positions / df.seq.str.len()) >= min_backbone_shift_fraction),
+        "non-canonical fraction" : ((1. - df.seq.str.translate(CAN_TRANS).str.count('#') / df.seq.str.len()) <= max_noncanonical_fraction),
+        "X fraction" : (df.seq.str.count('X') / df.seq.str.len() <= max_x_fraction),
     }
     sels_kws = {
         kw : ~df[kw] for kw in keywords
@@ -460,7 +474,7 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
 
 def fill_row_data(row, chemical_denaturants, keywords,
                   return_default=True, assume_si=True, fix_outliers=True):
-    entry = bmrb_entries.loc[row['id'], 'entry'] #row['entry']
+    entry = bmrb_entries.loc[row['entryID'], 'entry'] #row['entry']
     peptide_shifts = entry.get_peptide_shifts()
     shifts, condID, assemID, sampleIDs = peptide_shifts[(row['stID'], row['entity_assemID'], row['entityID'])]
     row['citation_title'] = entry.citation_title
@@ -479,7 +493,11 @@ def fill_row_data(row, chemical_denaturants, keywords,
         if ret:
             #bbshifts, bbshifts_arr, bbshifts_mask = ret
             bbshifts_arr, bbshifts_mask = ret
-            total_bbshifts = np.sum(bbshifts_mask) # total backbone shifts
+            if len(bbshifts_mask) >= 2:
+                # backbone shift of terminal amino acids are not counted
+                total_bbshifts = np.sum(bbshifts_mask[1:-1]) # total backbone shifts
+            else:
+                total_bbshifts = 0
             bbshift_types = np.any(bbshifts_mask, axis=0).sum() # different backbone shifts
             bbshift_positions = np.any(bbshifts_mask, axis=1).sum() # positions with backbone shifts
     row['total_bbshifts'] = total_bbshifts
@@ -513,6 +531,9 @@ def fill_row_data(row, chemical_denaturants, keywords,
     # check if chemical detergents are present
     for den_comp in chemical_denaturants:
         row[den_comp] = False
+        if len(sampleIDs) == 0 and entry.samples:
+            # if no sampleID is referenced, conservatively assume and search all sample entries
+            sampleIDs = list(entry.samples.keys())
         try:
             for sID in sampleIDs:
                 for comp in entry.samples[sID].components:
@@ -636,7 +657,7 @@ def create_peptide_dataframe(bmrb_entries,
                              progress=False
                              ):
     data = []
-    columns = ['id', #'entry', 
+    columns = ['entryID', #'entry', 
                'stID', 'entity_assemID', 'entityID'
             ]
     #it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
@@ -656,10 +677,9 @@ def create_peptide_dataframe(bmrb_entries,
             #data[-1].append(entry)
             data[-1].extend([stID, entity_assemID, entityID])
     df = pd.DataFrame(data, columns=columns)
-
     df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), 
                            return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
-    df = df.astype({col : "string" for col in ['id', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
+    df = df.astype({col : "string" for col in ['entryID', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
     return df
 
 def compute_scores(entry, stID, entity_assemID, entityID,
@@ -746,7 +766,7 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
     try:
         start_time = time.time()
         scores, k, cmp_mask, offsets, exe_times = compute_scores(
-            bmrb_entries.loc[row['id'], 'entry'], row['stID'], row['entity_assemID'], row['entityID'],
+            bmrb_entries.loc[row['entryID'], 'entry'], row['stID'], row['entity_assemID'], row['entityID'],
             row['seq'], row['ionic_strength'], row['pH'], row['temperature'],
             score_types=score_types, offset_correction=offset_correction, 
             max_offset=max_offset, reject_shift_type_only=reject_shift_type_only,
@@ -772,22 +792,24 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
     return row
 
 def output_dataset(df, output_prefix, output_format, score_types, precision):
+    #df = df.rename(columns={"id": "entryID"})
+    df['ID'] = df['entryID']+'_'+df['stID']+'_'+df['entity_assemID']+'_'+df['entityID']
     if output_format == 'csv':
         df.loc[df.pass_post, 'seq'] = df[df.pass_post].seq.apply(lambda x: list(x))
-        dout = df.loc[df.pass_post].reset_index()[['id', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types]
+        dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types]
         dout['seq'] = dout.seq.apply(lambda x: list(x))
         dout['seq_index'] = dout.seq.apply(lambda x: list(range(1,len(x)+1)))
         dout = dout.explode(['seq_index', 'seq', 'k'] + score_types)
         dout[score_types] = dout[score_types].astype(float).apply(np.round, args=(precision,))
-        dout[['id', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types]\
+        dout[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types]\
             .to_csv(output_prefix + '.csv', 
                     float_format='%.{}f'.format(precision))
     elif output_format == 'json':
-        dout = df.loc[df.pass_post].reset_index()[['id', 'stID', 'entity_assemID', 'entityID',
+        dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID',
                                                    'exp_method', 'exp_method_subtype', 'citation_DOI', 'citation_title',
                                                    'ionic_strength', 'pH', 'temperature',
                                                    'off_C', 'off_CA', 'off_CB', 'off_H', 'off_HA', 'off_HB', 'off_N',
-                                                   'bbshift_positions_post', 'bbshift_types_post',
+                                                   'bbshift_positions_post', 'bbshift_types_post', 'total_bbshifts',
                                                    'seq', 'k'] + score_types]
         for score_type in score_types:
             dout[score_type] = dout[score_type].apply(np.round, args=(precision,))
@@ -813,7 +835,7 @@ def main():
     bmrb_entries, failed = load_bmrb_entries(bmrb_files, cache_dir=args.cache_dir)
     print()
     if failed:
-        logging.getLogger('trizod').warning(f"Could not load {len(failed)} of {len(bmrb_files)} BMRB files")
+        logging.getLogger('trizod').warning(f"Failed loading {len(failed)} of {len(bmrb_files)} BMRB files")
     logging.getLogger('trizod').info('Parsing and filtering relevant information.')
     df = create_peptide_dataframe(
         bmrb_entries, 
@@ -834,9 +856,10 @@ def main():
         min_backbone_shift_types=args.min_backbone_shift_types,
         min_backbone_shift_positions=args.min_backbone_shift_positions,
         min_backbone_shift_fraction=args.min_backbone_shift_fraction,
+        max_noncanonical_fraction=args.max_noncanonical_fraction,
+        max_x_fraction=args.max_x_fraction,
         keywords=args.keywords_blacklist,
-        chemical_denaturants=args.chemical_denaturants,
-        )
+        chemical_denaturants=args.chemical_denaturants)
     print()
     logging.getLogger('trizod').info('Computing scores for each remaining entry.')
     df = df.parallel_apply(

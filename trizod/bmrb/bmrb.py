@@ -426,18 +426,23 @@ class BmrbEntry(object):
             #    #continue
             #    # TODO: double-check that all experiments share the same experiment conditions
             #sampleIDs = sampleIDs[0]
-            try:
-                sampleIDs = tuple(set(sampleIDs))
-            except:
-                breakpoint()
+            #try:
+            sampleIDs = set(sampleIDs)
+            #except:
+            #    breakpoint()
             sample_missing = False
             for sID in sampleIDs:
-                if sID not in self.samples:
+                if sID and sID not in self.samples:
                     sample_missing = True
                     break
             if sample_missing:
-                logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID}, sample ID unknown.')
+                # conservatively reject entries with false links to non-existing samples
+                logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID}, sample ID {sID} unknown.')
                 continue
+            sampleIDs = [sID.strip() for sID in set(sampleIDs) if sID in self.samples]
+            if not sampleIDs:
+                # do not require link to samples - only necessary if filtered for denaturants
+                logging.getLogger('trizod.bmrb').warning(f'sample ID(s) unknown for shift table {stID}.')
             for (entity_assemID,entityID),shifts in st.shifts.items():
                 # check if there is ambiguity if the entityID tag in matching assemblies is not tested (might be empty)
                 assemID = [(self.assemblies[assem].id, e[1]) for assem in self.assemblies for e in self.assemblies[assem].entities if e[0] == entity_assemID and e[1] in ['', None, entityID]]
