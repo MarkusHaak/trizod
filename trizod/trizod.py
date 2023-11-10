@@ -302,7 +302,8 @@ def load_bmrb_entries(bmrb_files, cache_dir=None):
             entries[id_] = (None, os.path.dirname(fp))
     df = pd.DataFrame(entries.values(), index=entries.keys(), columns=columns)
     sel = pd.isna(df.entry)
-    df.loc[sel, 'entry'] = df.loc[sel].parallel_apply(parse_bmrb_file, axis=1, cache_dir=cache_dir)
+    if not df.loc[sel].empty:
+        df.loc[sel, 'entry'] = df.loc[sel].parallel_apply(parse_bmrb_file, axis=1, cache_dir=cache_dir)
     sel = pd.isna(df.entry)
     failed = df.loc[sel].index.to_list()
     return df.loc[~sel], failed
@@ -339,20 +340,30 @@ def prefilter_dataframe(df,
         missing_vals &= ~pd.isna(df.exp_method_subtype)
     sels_pre = {
         #"missing values" : ~df[['ionic_strength', 'pH', 'temperature','seq','total_bbshifts', 'bbshift_types']].isna().any(axis=1),
-        "method (sub-)type" : method_sel,
-        "temperature" : (df.temperature >= temperature_range[0]) & \
-                        (df.temperature <= temperature_range[1]),
-        "ionic strength" : (df.ionic_strength >= ionic_strength_range[0]) & \
-                           (df.ionic_strength <= ionic_strength_range[1]),
-        "pH" : (df.pH >= pH_range[0]) & \
-               (df.pH <= pH_range[1]),
-        "peptide length" : (df.seq.str.len() >= peptide_length_range[0]) & \
-                           (df.seq.str.len() <= peptide_length_range[1]),
-        "backbone shift types" : (df.bbshift_types >= min_backbone_shift_types),
-        "backbone shift positions" : (df.bbshift_positions >= min_backbone_shift_positions),
-        "backbone shift fraction" : ((df.bbshift_positions / df.seq.str.len()) >= min_backbone_shift_fraction),
-        "non-canonical fraction" : ((1. - df.seq.str.translate(CAN_TRANS).str.count('#') / df.seq.str.len()) <= max_noncanonical_fraction),
-        "X fraction" : (df.seq.str.count('X') / df.seq.str.len() <= max_x_fraction),
+        ("method (sub-)type", "") : 
+            method_sel,
+        ("temperature", f"{list(temperature_range)}") : 
+            (df.temperature >= temperature_range[0]) & \
+            (df.temperature <= temperature_range[1]),
+        ("ionic strength", f"{list(ionic_strength_range)}") : 
+            (df.ionic_strength >= ionic_strength_range[0]) & \
+            (df.ionic_strength <= ionic_strength_range[1]),
+        ("pH", f"{list(pH_range)}") : 
+            (df.pH >= pH_range[0]) & \
+            (df.pH <= pH_range[1]),
+        ("peptide length", f"{list(peptide_length_range)}") : 
+            (df.seq.str.len() >= peptide_length_range[0]) & \
+            (df.seq.str.len() <= peptide_length_range[1]),
+        ("bb shift types", f"[{min_backbone_shift_types}, inf]") : 
+            (df.bbshift_types >= min_backbone_shift_types),
+        ("bb shift positions", f"[{min_backbone_shift_positions}, inf]") : 
+            (df.bbshift_positions >= min_backbone_shift_positions),
+        ("bb shift fraction", f"[{min_backbone_shift_fraction}, inf]") : 
+            ((df.bbshift_positions / df.seq.str.len()) >= min_backbone_shift_fraction),
+        ("non-canonical frac", f"[0, {max_noncanonical_fraction}]") : 
+            ((1. - df.seq.str.translate(CAN_TRANS).str.count('#') / df.seq.str.len()) <= max_noncanonical_fraction),
+        ("X fraction", f"[0, {max_x_fraction}]") : 
+            (df.seq.str.count('X') / df.seq.str.len() <= max_x_fraction),
     }
     sels_kws = {
         kw : ~df[kw] for kw in keywords
@@ -360,7 +371,7 @@ def prefilter_dataframe(df,
     sels_denat = {
         cd : ~df[cd] for cd in chemical_denaturants
     }
-    sels_all_pre = sels_pre | sels_kws | sels_denat
+    sels_all_pre = {k[0]:v for k,v in sels_pre.items()} | sels_kws | sels_denat
     
     passing = missing_vals.copy()
     for filter, sel in sels_all_pre.items():
@@ -380,21 +391,25 @@ def postfilter_dataframe(df,
     for score_type in score_types:
         comp_error |= pd.isna(df[score_type])
     sels_post = {
-        "backbone shift types" : (df.bbshift_types_post >= min_backbone_shift_types),
-        "backbone shift positions" : (df.bbshift_positions_post >= min_backbone_shift_positions),
-        "backbone shift fraction" : ((df.bbshift_positions_post / df.seq.str.len()) >= min_backbone_shift_fraction),
-        "error in computation" : (~comp_error)
+        ("bb shift types", f"[{min_backbone_shift_types}, inf]") : 
+            (df.bbshift_types_post >= min_backbone_shift_types),
+        ("bb shift positions", f"[{min_backbone_shift_positions}, inf]") : 
+            (df.bbshift_positions_post >= min_backbone_shift_positions),
+        ("bb shift fraction", f"[{min_backbone_shift_fraction}, inf]") : 
+            ((df.bbshift_positions_post / df.seq.str.len()) >= min_backbone_shift_fraction),
+        ("error in computation", "") : 
+            (~comp_error)
     }
     if not reject_shift_type_only:
         any_offsets_too_large = pd.Series(np.full((df.shape[0],), False))
         for at in scoring.BBATNS:
             any_offsets_too_large |= pd.isna(df[f"off_{at}"])
-        sels_post.update({"rejected due to any offset" : ~any_offsets_too_large})
+        sels_post.update({("rejected due to any offset", "") : ~any_offsets_too_large})
 
     sels_off = {
         f"off_{at}" : ~pd.isna(df[f"off_{at}"]) for at in BBATNS 
     }
-    sels_all_post = sels_post #| sels_off
+    sels_all_post = {k[0]:v for k,v in sels_post.items()} #| sels_off
 
     passing = df['pass_pre'].copy()
     for filter, sel in sels_all_post.items():
@@ -406,18 +421,19 @@ def postfilter_dataframe(df,
     return sels_post, sels_off, sels_all_post
 
 def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre, sels_post, sels_off, sels_all_post):
-    w_str, w_num = np.max([len(key)+4 for key in sels_all_pre] + [len(key)+4 for key in sels_all_post] + [40]), 10
-    total_width = (w_str + 3*w_num + 8)
+    w_str, w_num = np.max([len(key[0])+len(key[1])+5 for key in sels_all_pre] + [len(key[0])+len(key[1])+4 for key in sels_all_post] + [40]), 10
+    total_width = (w_str + 2*w_num + 7 + 8)
     print("\nPre-computation filtering results")
     print("=" * total_width)
-    print(f"{'criterium':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}} {'missing':<{w_num}}")
-    for filter, sel in sels_pre.items():
+    print(f"{'criterium':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")# {'missing':<{w_num}}")
+    for (filter,crit), sel in sels_pre.items():
         uniq = pd.Series(np.full((len(sel),), False))
         for other_filter, other_sel in sels_all_pre.items():
             if other_filter != filter:
                 uniq |= ~other_sel
         uniq = ~sel & ~uniq
-        print(f"{filter:<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}} {(uniq & ~missing_vals).sum():>{w_num}}")
+        s = f"{filter}{'':<{w_str-(len(filter)+len(crit))}}{crit}" 
+        print(f"{s} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}")# {(uniq & ~missing_vals).sum():>{w_num}}")
     if sels_kws:
         print()
         print(f"{'keyword':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")
@@ -441,10 +457,10 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
     
     print("-" * total_width)
     passing_pre = df['pass_pre'].copy()
-    print(f"{'total filtered':<{w_str}} : {(~passing_pre).sum():>{w_num}} of {len(df):>{w_num-3}} ({(~passing_pre).sum() / len(df) * 100.:>{w_num-1}.2f} %)")
+    print(f"{'total filtered':<{w_str}} : {(~passing_pre).sum():>{w_num}} of {len(df):>{w_num-3}} ({(~passing_pre).sum() / len(df) * 100.:>{6}.2f} %)")
     print("=" * total_width)
     print()
-    print(f"{'remaining for scores computation':<{w_str}} : {(passing_pre).sum():>{w_num}} of {len(df):>{w_num-3}} ({(passing_pre).sum() / len(df) * 100.:>{w_num-1}.2f} %)")
+    print(f"{'remaining for scores computation':<{w_str}} : {(passing_pre).sum():>{w_num}} of {len(df):>{w_num-3}} ({(passing_pre).sum() / len(df) * 100.:>{6}.2f} %)")
     print()
     print("\nRejected offsets stats")
     print("=" * total_width)
@@ -461,19 +477,20 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
     print("\nPost-computation filtering results")
     print("=" * total_width)
     print(f"{'criterium':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}")
-    for filter, sel in sels_post.items():
+    for (filter,crit), sel in sels_post.items():
         uniq = pd.Series(np.full((len(sel),), False))
         for other_filter, other_sel in sels_all_post.items():
             if other_filter != filter:
                 uniq |= ~other_sel
         uniq = ~sel & ~uniq & passing_pre
-        print(f"{filter:<{w_str}} : {(~sel & passing_pre).sum():>{w_num}} {uniq.sum():>{w_num}}")
+        s = f"{filter}{'':<{w_str-(len(filter)+len(crit))}}{crit}" 
+        print(f"{s} : {(~sel & passing_pre).sum():>{w_num}} {uniq.sum():>{w_num}}")
     print("-" * total_width)
     passing_post = df['pass_post']
-    print(f"{'total filtered':<{w_str}} : {(~passing_post & passing_pre).sum():>{w_num}} of {passing_pre.sum():>{w_num-3}} ({(~passing_post & passing_pre).sum() / passing_pre.sum() * 100.:>{w_num-1}.2f} %)")
+    print(f"{'total filtered':<{w_str}} : {(~passing_post & passing_pre).sum():>{w_num}} of {passing_pre.sum():>{w_num-3}} ({(~passing_post & passing_pre).sum() / passing_pre.sum() * 100.:>{6}.2f} %)")
     print("=" * total_width)
     print()
-    print(f"{'final dataset entries':<{w_str}} : {(passing_post).sum():>{w_num}} of {len(df):>{w_num-3}} ({(passing_post).sum() / len(df) * 100.:>{w_num-1}.2f} %)")
+    print(f"{'final dataset entries':<{w_str}} : {(passing_post).sum():>{w_num}} of {len(df):>{w_num-3}} ({(passing_post).sum() / len(df) * 100.:>{6}.2f} %)")
 
 def fill_row_data(row, chemical_denaturants, keywords,
                   return_default=True, assume_si=True, fix_outliers=True,
