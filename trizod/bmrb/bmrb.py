@@ -3,7 +3,7 @@ import logging
 import pynmrstar
 import numpy as np
 import pandas as pd
-from trizod.constants import AA3TO1
+from trizod.constants import AA3TO1, BBATNS
 
 def get_tag_vals(sf, tag, warn=None, default=None, strip_str=False, indices=None, empty_val_str='.'):
     try:
@@ -36,7 +36,7 @@ class Entity(object):
         self.polymer_author_seq_details = get_tag_vals(sf, '_Entity.Polymer_author_seq_details', indices=0)
         self.seq = get_tag_vals(sf, '_Entity.Polymer_seq_one_letter_code', indices=0)
         if self.seq is not None and self.seq not in ['', '.']:
-            self.seq = self.seq.replace('\n', '')
+            self.seq = self.seq.replace('\n', '').strip().upper()
         else:
             self.seq = None
         self.fragment = get_tag_vals(sf, '_Entity.Fragment')
@@ -505,8 +505,8 @@ class BmrbEntry(object):
     def __repr__(self):
         return f'<bmr{self.id}>'
 
-def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
-    bb_atm_ids = ['C','CA','CB','HA','H','N','HB']
+def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True):
+    bb_atm_ids = BBATNS[:]
     # 0: '_Atom_chem_shift.Entity_assembly_ID'
     # 1: '_Atom_chem_shift.Entity_ID'
     # 2: '_Atom_chem_shift.Seq_ID'
@@ -652,7 +652,11 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3):
         logging.getLogger('trizod.bmrb').error(f'multiple shifts found for the same position and atom_id')
         return
     # averaging 
-    df = df.groupby(['pos', 'atm_id_single'])[['val']].agg('mean').reset_index()
+    if averaging:
+        df = df.groupby(['pos', 'atm_id_single'])[['val']].agg('mean').reset_index()
+    else:
+        df['atm_id_single'] = df['atm_id']
+        bb_atm_ids = bb_atm_ids + ['HA2', 'HA3' ,'HB1', 'HB2', 'HB3']
     #df['atm_col'] = df['atm_id_single'].replace({atm_id:i for i,atm_id in enumerate(bb_atm_ids)})
     bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
     bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)

@@ -23,8 +23,8 @@ class OffsetCausedFilterException(Exception): pass
 class FilterException(Exception): pass
 
 filter_defaults = pd.DataFrame({
-    'temperature-range' : [[-np.inf, +np.inf], [263.0, 333.0], [273.0, 313.0], [273.0, 313.0]],
-    'ionic-strength-range' : [[0., np.inf], [0., 5.], [0., 3.], [0., 3.]],
+    'temperature-range' : [[-np.inf, +np.inf], [263.0, 333.0], [273.0, 323.0], [273.0, 313.0]],
+    'ionic-strength-range' : [[0., np.inf], [0., 7.], [0., 5.], [0., 3.]],
     'pH-range' : [[-np.inf, np.inf], [2., 12.], [4., 10.], [6., 8.]],
     'unit-assumptions' : [True, True, True, False],
     'unit-corrections' : [True, True, False, False],
@@ -33,15 +33,15 @@ filter_defaults = pd.DataFrame({
     'min-backbone-shift-types' : [1, 2, 3, 5],
     'min-backbone-shift-positions' : [3, 3, 8, 12],
     'min-backbone-shift-fraction' : [0., 0., 0.6, 0.8],
-    'max-noncanonical-fraction' : [1.,0.1,0.025,0.],
+    'max-noncanonical-fraction' : [1., 0.1, 0.025, 0.],
     'max-x-fraction' : [1., 0.2, 0.05, 0.],
     'keywords-blacklist' : [[], 
                             ['denatur'], 
                             ['denatur', 'unfold', 'misfold'], 
                             ['denatur', 'unfold', 'misfold', 'interacti', 'bound']], # interacti[on/ng]
     'chemical-denaturants' : [[], 
-                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'], 
-                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'], 
+                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea'], 
+                              ['guanidin', 'GdmCl', 'Gdn-Hcl','urea'], 
                               ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol', 
                                'TFA', 'trifluoroethanol', 'Potassium Pyrophosphate', 'acetic acid', 'CD3COOH',
                                'DTT', 'dithiothreitol', 'dss', 'deuterated sodium acetate']],
@@ -74,6 +74,9 @@ def parse_args():
     io_grp.add_argument(
         '--include-shifts', action='store_true',
         help='Add raw backbone atom shift data to the output.')
+    io_grp.add_argument(
+        '--no-shift-averaging', action='store_true',
+        help='Do not average over Proton groups for HA and HB shifts.')
     
 
     filter_defaults_grp = init_parser.add_argument_group('Filter Default Settings')
@@ -103,15 +106,15 @@ def parse_args():
     filter_grp.add_argument(
         '--unit-assumptions', action=argparse.BooleanOptionalAction, 
         default=filter_defaults.loc[args_init.filter_defaults, 'unit-assumptions'],
-        help='Do not assume units if they are not given and exclude entries instead.')
+        help='Assume units for Temp., Ionic str. and pH if they are not given and exclude entries instead.')
     filter_grp.add_argument(
         '--unit-corrections', action=argparse.BooleanOptionalAction, 
         default=filter_defaults.loc[args_init.filter_defaults, 'unit-corrections'],
-        help='Do not correct values if units are most likely wrong.')
+        help='Correct values for Temp., Ionic str. and pH if units are most likely wrong.')
     filter_grp.add_argument(
         '--default-conditions', action=argparse.BooleanOptionalAction, 
         default=filter_defaults.loc[args_init.filter_defaults, 'default-conditions'],
-        help='Do not assume standard conditions if pH (7), ionic strength (0.1 M) or temperature (298 K) are missing and exclude entries instead.')
+        help='Assume standard conditions if pH (7), ionic strength (0.1 M) or temperature (298 K) are missing and exclude entries instead.')
     filter_grp.add_argument(
         '--peptide-length-range', nargs='+', type=int, 
         default=filter_defaults.loc[args_init.filter_defaults, 'peptide-length-range'],
@@ -161,11 +164,11 @@ def parse_args():
         'original CheZOD zscores (chezod) or geometric mean of observation probabilities (pscores).')
     scores_grp.add_argument(
         '--offset-correction', action=argparse.BooleanOptionalAction, default=True,
-        help='Do not compute correction offsets for random coil chemical shifts')
+        help='Compute correction offsets for random coil chemical shifts')
     scores_grp.add_argument(
         '--max-offset', type=float, 
         default=filter_defaults.loc[args_init.filter_defaults, 'max-offset'],
-        help='Maximum valid offset for any random coil chemical shift type.')
+        help='Maximum valid offset correction for any random coil chemical shift type.')
     scores_grp.add_argument(
         '--reject-shift-type-only', action=argparse.BooleanOptionalAction,
         default=filter_defaults.loc[args_init.filter_defaults, 'reject-shift-type-only'],
@@ -494,7 +497,7 @@ def print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_a
 
 def fill_row_data(row, chemical_denaturants, keywords,
                   return_default=True, assume_si=True, fix_outliers=True,
-                  include_shifts=False):
+                  include_shifts=False, no_shift_averaging=False):
     entry = bmrb_entries.loc[row['entryID'], 'entry'] #row['entry']
     peptide_shifts = entry.get_peptide_shifts()
     shifts, condID, assemID, sampleIDs = peptide_shifts[(row['stID'], row['entity_assemID'], row['entityID'])]
@@ -502,6 +505,7 @@ def fill_row_data(row, chemical_denaturants, keywords,
     row['citation_DOI'] = entry.citation_DOI
     row['exp_method'] = entry.exp_method if entry.exp_method else pd.NA
     row['exp_method_subtype'] = entry.exp_method_subtype if entry.exp_method_subtype else pd.NA
+    row['entity_name'] = entry.entities[row['entityID']].name
     row['ionic_strength'] = entry.conditions[condID].get_ionic_strength(return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
     row['pH'] = entry.conditions[condID].get_pH(return_default=return_default)
     row['temperature'] = entry.conditions[condID].get_temperature(return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers)
@@ -517,13 +521,17 @@ def fill_row_data(row, chemical_denaturants, keywords,
             if len(bbshifts_mask) >= 2:
                 # backbone shift of terminal amino acids are not counted
                 total_bbshifts = np.sum(bbshifts_mask[1:-1]) # total backbone shifts
+                bbshift_types = np.any(bbshifts_mask, axis=0).sum() # different backbone shifts
+                bbshift_positions = np.any(bbshifts_mask, axis=1).sum() # positions with backbone shifts
                 if include_shifts:
+                    if no_shift_averaging:
+                        bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq, averaging=False)
                     bbshifts_arr[~bbshifts_mask] = np.nan
             else:
                 total_bbshifts = 0
                 bbshifts_arr = None
-            bbshift_types = np.any(bbshifts_mask, axis=0).sum() # different backbone shifts
-            bbshift_positions = np.any(bbshifts_mask, axis=1).sum() # positions with backbone shifts
+                bbshift_types = 0
+                bbshift_positions = 0
     row['total_bbshifts'] = total_bbshifts
     row['bbshift_types'] = bbshift_types
     row['bbshift_positions'] = bbshift_positions
@@ -681,6 +689,7 @@ def create_peptide_dataframe(bmrb_entries,
                              chemical_denaturants, keywords,
                              return_default=True, assume_si=True, fix_outliers=True,
                              include_shifts=False,
+                             no_shift_averaging=False,
                              progress=False
                              ):
     data = []
@@ -706,8 +715,8 @@ def create_peptide_dataframe(bmrb_entries,
     df = pd.DataFrame(data, columns=columns)
     df = df.parallel_apply(fill_row_data, axis=1, args=(chemical_denaturants, keywords), 
                            return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers,
-                           include_shifts=include_shifts)
-    df = df.astype({col : "string" for col in ['entryID', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
+                           include_shifts=include_shifts, no_shift_averaging=no_shift_averaging)
+    df = df.astype({col : "string" for col in ['entryID', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'entity_name', 'seq']})
     return df
 
 def compute_scores(entry, stID, entity_assemID, entityID,
@@ -819,30 +828,31 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
         pass
     return row
 
-def output_dataset(df, output_prefix, output_format, score_types, precision, include_shifts):
+def output_dataset(df, output_prefix, output_format, score_types, precision, include_shifts, no_shift_averaging):
     #df = df.rename(columns={"id": "entryID"})
     df['ID'] = df['entryID']+'_'+df['stID']+'_'+df['entity_assemID']+'_'+df['entityID']
     for score_type in score_types:
         df.loc[df.pass_post, score_type] = df.loc[df.pass_post, score_type].apply(np.round, args=(precision,))
     shifts = []
     if include_shifts:
-        shifts = BBATNS
-        for i,at in enumerate(BBATNS):
+        if no_shift_averaging:
+            shifts = BBATNS + ['HA2', 'HA3' ,'HB1', 'HB2', 'HB3']
+        for i,at in enumerate(shifts):
             df.loc[df.pass_post, at] = df.loc[df.pass_post, 'bbshifts'].apply(lambda x: x[:,i])
             df.loc[df.pass_post, at] = df.loc[df.pass_post, at].apply(np.round, args=(precision,))
     if output_format == 'csv':
         df.loc[df.pass_post, 'seq'] = df[df.pass_post].seq.apply(lambda x: list(x))
-        dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq', 'k'] + score_types + shifts]
+        dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'entity_name', 'seq', 'k'] + score_types + shifts]
         dout['seq'] = dout.seq.apply(lambda x: list(x))
         dout['seq_index'] = dout.seq.apply(lambda x: list(range(1,len(x)+1)))
         dout = dout.explode(['seq_index', 'seq', 'k'] + score_types + shifts)
         #dout[score_types] = dout[score_types].astype(float).apply(np.round, args=(precision,))
-        dout[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'seq_index', 'seq', 'k'] + score_types + shifts]\
+        dout[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'entity_name', 'seq_index', 'seq', 'k'] + score_types + shifts]\
             .to_csv(output_prefix + '.csv', 
                     float_format='%.{}f'.format(precision))
     elif output_format == 'json':
         dout = df.loc[df.pass_post].reset_index()[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID',
-                                                   'exp_method', 'exp_method_subtype', 'citation_DOI', 'citation_title',
+                                                   'entity_name', 'exp_method', 'exp_method_subtype', 'citation_DOI', 'citation_title',
                                                    'ionic_strength', 'pH', 'temperature',
                                                    'off_C', 'off_CA', 'off_CB', 'off_H', 'off_HA', 'off_HB', 'off_N',
                                                    'bbshift_positions_post', 'bbshift_types_post', 'total_bbshifts',
@@ -881,6 +891,7 @@ def main():
         assume_si=args.unit_assumptions, 
         fix_outliers=args.unit_corrections,
         include_shifts=args.include_shifts,
+        no_shift_averaging=args.no_shift_averaging,
         progress=args.progress)
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
         df,
@@ -918,7 +929,7 @@ def main():
     logging.getLogger('trizod').info('Output filtering results.')
     print_filter_losses(df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre, sels_post, sels_off, sels_all_post)
     logging.getLogger('trizod').info('Writing dataset to file.')
-    output_dataset(df, args.output_prefix, args.output_format, args.score_types, args.precision, args.include_shifts)
+    output_dataset(df, args.output_prefix, args.output_format, args.score_types, args.precision, args.include_shifts, args.no_shift_averaging)
 
 if __name__ == '__main__':
     main()

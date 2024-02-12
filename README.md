@@ -1,92 +1,74 @@
-# CheZOD3
-
-
-
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://git.rostlab.org/haak/chezod3.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](https://git.rostlab.org/haak/chezod3/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
+# TriZOD
 
 ## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+
+## Datasets
+
+The folder ./datasets/latest/ contains ready-to-use datasets that where created by running TriZOD on the full BMRB database using four different filtering presets, namely `unfiltered`, `tolerant`, `moderate` and `strict`. Since the stringency of the filtering criteria are monotonically increasing from unfiltered to strict, the respective dataset sizes are decreasing and each dataset is a superset of those with more stringent criteria. However, since filtering also affects which and how the data is processed, the computed scores can differ for the same entry in two differently filtered TriZOD datasets. Therefore, the data should always be loaded from the respective dataset file. These are given in two formats: The .csv files contain less information but are potentially simpler to read than the .json files. However, the latter contain additional information such as sample conditions.
+
+Sequence redundancy reduction was performed using mmseqs2 on the filtered datasets. The test set was selected from the strict dataset only assuring assuring a maximum of 50% sequence identity with 80% coverage inbetween test set members. The IDs and peptide sequences of the test set members are found in the fasta file ./datasets/latest/TriZOD\_test\_set.fasta. All entries with less than 30% sequence identity to test set entries at 80% coverage were clustered with a 50% sequence identity threshold at 80% coverage in an iterative cluster-update approach, starting with the strict dataset members. The resulting redundancy reduced cluster representatives for the `unfiltered`, `tolerant`, `moderate` and `strict` datasets can be found in respective \<filter-default\>\_rest\_set.fasta files.
+
+### Filter defaults
+
+TriZOD filters the peptide shift data entries in the BMRB database given a set of filter criteria. Though these criteria can be set individually with corresponding command line arguments, it is most convinient to use one of four filter default options to adapt the overall stringency of the filters. The command line argument `--filter-defaults` sets default values for all data filtering criteria. The accepted options with increasing stringency are `unfiltered`, `tolerant`, `moderate` and `strict`. The affected filters are:
+
+| Filter | Description | 
+| :--- | --- |
+| temperature-range | Minimum and maximum temperature in Kelvin. |
+| ionic-strength-range | Minimum and maximum ionic strength in Mol. |
+| pH-range | Minimum and maximum pH. |
+| unit-assumptions | Assume units for Temp., Ionic str. and pH if they are not given and exclude entries instead. |
+| unit-corrections | Correct values for Temp., Ionic str. and pH if units are most likely wrong. |
+| default-conditions | Assume standard conditions if pH (7), ionic strength (0.1 M) or temperature (298 K) are missing and exclude entries instead. |
+| peptide-length-range | Minimum (and optionally maximum) peptide sequence length. |
+| min-backbone-shift-types | Minimum number of different backbone shift types (max 7). |
+| min-backbone-shift-positions | Minimum number of positions with at least one backbone shift. |
+| min-backbone-shift-fraction | Minimum fraction of positions with at least one backbone shift. |
+| max-noncanonical-fraction | Maximum fraction of non-canonical amino acids (X count as arbitrary canonical) in the amino acid sequence. |
+| max-x-fraction | Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence. |
+| keywords-blacklist | Exclude entries with any of these keywords mentioned anywhere in the BMRB file, case ignored. |
+| chemical-denaturants | Exclude entries with any of these chemicals as substrings of sample components, case ignored. |
+| exp-method-whitelist | Include only entries with any of these keywords as substring of the experiment subtype, case ignored. |
+| exp-method-blacklist | Exclude entries with any of these keywords as substring of the experiment subtype, case ignored. |
+| max-offset | Maximum valid offset correction for any random coil chemical shift type. |
+| reject-shift-type-only | Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry. |
+
+The following table lists the respective filtering criteria for each of the four filter default options:
+
+| Filter | unfiltered | tolerant | moderate | strict |
+| :--- | --- | --- | --- | --- |
+| temperature-range | [-inf,+inf] | [263,333] | [273,313] | [273,313] |
+| ionic-strength-range | [-inf,+inf] | [0,5] | [0,3] | [0,3] |
+| pH-range | [-inf,+inf] | [2,12] | [4,10] | [6,8] |
+| unit-assumptions | Yes | Yes | Yes | No |
+| unit-corrections | Yes | Yes | No | No |
+| default-conditions | Yes | Yes | Yes | No |
+| peptide-length-range | [5,+inf] | [5,+inf] | [10,+inf] | [15,+inf] |
+| min-backbone-shift-types | 1 | 2 | 3 | 5 |
+| min-backbone-shift-positions | 3 | 3 | 8 | 12 |
+| min-backbone-shift-fraction | 0.0 | 0.0 | 0.6 | 0.8 |
+| max-noncanonical-fraction | 1.0 | 0.1 | 0.025 | 0.0 |
+| max-x-fraction | 1.0 | 0.2 | 0.05 | 0.0 |
+| keywords-blacklist | [] | ['denatur'] | ['denatur', 'unfold', 'misfold'] | ['denatur', 'unfold', 'misfold', 'interacti', 'bound'] |
+| chemical-denaturants | [] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol', 'TFA', 'trifluoroethanol', 'Potassium Pyrophosphate', 'acetic acid', 'CD3COOH', 'DTT', 'dithiothreitol', 'dss', 'deuterated sodium acetate'] |
+| exp-method-whitelist | ['', '.'] | ['','solution', 'structures'] | ['','solution', 'structures'] | ['solution', 'structures'] |
+| exp-method-blacklist | [] | ['solid', 'state'] | ['solid', 'state'] | ['solid', 'state'] |
+| max-offset | +inf | 3 | 3 | 2 |
+| reject-shift-type-only | Yes | Yes | No | No |
+
+Please note that each of these filters can be set individually with respective command line options and that this will take precedence over the filter defaults set by the `--filter-defaults` option.
 
 ## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
 
 ## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
 
 ## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
 
 ## License
-For open source projects, say how it is licensed.
 
 ## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Under active development
