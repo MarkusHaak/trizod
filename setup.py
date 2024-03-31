@@ -17,6 +17,7 @@ setuptools.setup(
     url=META_DATA['github_url'],
     packages=setuptools.find_packages(),
     include_package_data=True,
+    package_data={'': ['potenci/data_tables/*.csv']},
     install_requires=[
         'pandas',
         'numpy',
@@ -36,6 +37,5 @@ setuptools.setup(
     entry_points={
     'console_scripts': [
         'trizod=trizod.trizod:main',
-    ],
-},
+    ]},
 )
