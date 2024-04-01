@@ -241,39 +241,6 @@ def find_bmrb_files(input_dir, pattern="bmr(\d+)_3\.str"):
                     bmrb_files[m.group(1)] = os.path.join(d, m.group(0))
     return bmrb_files
 
-'''
-def load_bmrb_entries(bmrb_files, cache_dir=None, progress=False):
-    bmrb_entries, failed = {}, []
-    # read cached data
-    if cache_dir:
-        bmrb_entries_cache = os.path.join(cache_dir, "bmrb_entries.pkl")
-        if os.path.exists(bmrb_entries_cache):
-            with open(bmrb_entries_cache, "rb") as f:
-                bmrb_entries, failed = pickle.load(f)
-    # identify entries missing in the cache and parse them from db files
-    missing_bmrb_files = {id_ : fp for id_,fp in bmrb_files.items() if not (id_ in bmrb_entries or id_ in failed)}
-    if missing_bmrb_files:
-        missing_bmrb_entries, missing_failed = {}, []
-        it = tqdm(missing_bmrb_files) if progress else missing_bmrb_files
-        for id_ in it:
-            try:
-                entry = bmrb.BmrbEntry(id_, os.path.dirname(missing_bmrb_files[id_]))
-            except:
-                missing_failed.append(id_)
-                continue
-            missing_bmrb_entries[id_] = entry
-        bmrb_entries.update(missing_bmrb_entries)
-        failed.extend(missing_failed)
-        # update cache
-        if cache_dir:
-            with open(bmrb_entries_cache, "wb") as f:
-                pickle.dump((bmrb_entries, failed), f)
-    # only keep entries of the current file list
-    bmrb_entries = {id_:entry for id_,entry in bmrb_entries.items() if id_ in bmrb_files}
-    failed = [id_ for id_ in failed if id_ in bmrb_files]
-    return bmrb_entries, failed
-'''
-
 def parse_bmrb_file(row, cache_dir=None):
     try:
         entry = bmrb.BmrbEntry(row.name, row.dir)
@@ -516,7 +483,6 @@ def fill_row_data(row, chemical_denaturants, keywords,
     if seq:
         ret = bmrb.get_valid_bbshifts(shifts, seq)
         if ret:
-            #bbshifts, bbshifts_arr, bbshifts_mask = ret
             bbshifts_arr, bbshifts_mask = ret
             if len(bbshifts_mask) >= 2:
                 # backbone shift of terminal amino acids are not counted
@@ -587,104 +553,6 @@ def fill_row_data(row, chemical_denaturants, keywords,
         row[f'off_{at}'] = pd.NA
     return row
 
-'''
-def create_peptide_dataframe(bmrb_entries,
-                             chemical_denaturants, keywords,
-                             return_default=True, assume_si=True, fix_outliers=True,
-                             progress=False
-                             ):
-    data = []
-    columns = ['id', 'citation_title', 'citation_DOI',
-               'stID', 'entity_assemID', 'entityID',
-               'exp_method', 'exp_method_subtype',
-               'ionic_strength', 'pH', 'temperature',
-               'seq',
-               'total_bbshifts', 'bbshift_types', 'bbshift_positions'
-            ]
-    columns.extend(keywords)
-    columns.extend(chemical_denaturants)
-    it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
-    for id_,entry in it:
-        peptide_shifts = entry.get_peptide_shifts()
-        for (stID, entity_assemID, entityID) in peptide_shifts:
-            shifts, condID, assemID, sampleIDs = peptide_shifts[(stID, entity_assemID, entityID)]
-            data.append([])
-            data[-1].append(id_)
-            data[-1].append(entry.citation_title)
-            data[-1].append(entry.citation_DOI)
-            data[-1].extend([stID, entity_assemID, entityID])
-            data[-1].append(entry.exp_method.lower() if entry.exp_method else pd.NA)
-            data[-1].append(entry.exp_method_subtype.lower() if entry.exp_method_subtype else pd.NA)
-            data[-1].append(entry.conditions[condID].get_ionic_strength(return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers))
-            data[-1].append(entry.conditions[condID].get_pH(return_default=return_default))
-            data[-1].append(entry.conditions[condID].get_temperature(return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers))
-            seq = entry.entities[entityID].seq
-            data[-1].append(seq)
-            # retrieve # backbone shifts (H,HA,HB,C,CA,CB,N)
-            if seq:
-                ret = bmrb.get_valid_bbshifts(shifts, seq)
-                if not ret:
-                    data[-1].extend([None,None,None])
-                else:
-                    #bbshifts, bbshifts_arr, bbshifts_mask = ret
-                    bbshifts_arr, bbshifts_mask = ret
-                    data[-1].append(np.sum(bbshifts_mask)) # total backbone shifts
-                    data[-1].append(np.any(bbshifts_mask, axis=0).sum()) # different backbone shifts
-                    data[-1].append(np.any(bbshifts_mask, axis=1).sum()) # positions with backbone shifts
-            else:
-                data[-1].extend([None,None,None])
-            # check if keywords are present
-            fields = [entry.title, entry.details, entry.citation_title,
-                  entry.assemblies[assemID].name, entry.assemblies[assemID].details, 
-                  entry.entities[entityID].name, entry.entities[entityID].details]
-            if entry.citation_keywords is not None:
-                if type(entry.citation_keywords) == list:
-                    for el in entry.citation_keywords:
-                        fields.extend(el)
-                else:
-                    fields.extend(entry.citation_keywords)
-            if entry.struct_keywords is not None:
-                if type(entry.struct_keywords) == list:
-                    for el in entry.struct_keywords:
-                        fields.extend(el)
-                else:
-                    fields.extend(entry.struct_keywords)
-            for sID in sampleIDs:
-                fields.extend([entry.samples[sID].name, entry.samples[sID].details, entry.samples[sID].framecode])
-            for keyword in keywords:
-                data[-1].append(False)
-                for field in fields:
-                    if field: # can be None
-                        if keyword.lower() in field.lower():
-                            data[-1][-1] = True
-                            break
-            # check if chemical detergents are present
-            for den_comp in chemical_denaturants:
-                data[-1].append(False)
-                try:
-                    for sID in sampleIDs:
-                        for comp in entry.samples[sID].components:
-                            if comp[3] and not comp[2]: # if it has a name but no entity entry
-                                if comp[3].lower() in den_comp.lower():
-                                    data[-1][-1] = True
-                                    raise Found
-                except Found:
-                    pass
-
-            assert len(data[-1]) == len(columns)
-    df = pd.DataFrame(data, columns=columns)
-    df = df.astype({col : "string" for col in ['id', 'citation_title', 'citation_DOI', 'exp_method', 'exp_method_subtype', 'seq']})
-    # add columns that will be filled later
-    df['scores'] = None
-    df['k'] = None
-    df['total_bbshifts_post'] = np.nan
-    df['bbshift_types_post'] = np.nan
-    df['bbshift_positions_post'] = np.nan
-    for at in BBATNS:
-        df[f'off_{at}'] = pd.NA
-    return df
-'''
-
 def create_peptide_dataframe(bmrb_entries,
                              chemical_denaturants, keywords,
                              return_default=True, assume_si=True, fix_outliers=True,
@@ -696,14 +564,6 @@ def create_peptide_dataframe(bmrb_entries,
     columns = ['entryID', #'entry', 
                'stID', 'entity_assemID', 'entityID'
             ]
-    #it = tqdm(bmrb_entries.items()) if progress else bmrb_entries.items()
-    #for id_,entry in it:
-    #    peptide_shifts = entry.get_peptide_shifts()
-    #    for (stID, entity_assemID, entityID) in peptide_shifts:
-    #        data.append([])
-    #        data[-1].append(id_)
-    #        #data[-1].append(entry)
-    #        data[-1].extend([stID, entity_assemID, entityID])
     it = tqdm(bmrb_entries.iterrows()) if progress else bmrb_entries.iterrows()
     for id_,row in it:
         peptide_shifts = row.entry.get_peptide_shifts()
@@ -773,8 +633,6 @@ def compute_scores(entry, stID, entity_assemID, entityID,
                 if reject_shift_type_only:
                     # mask data related to this backbone shift type, excluding it from scores computation
                     cmp_mask[:,i] = False
-                #else:
-                #    raise OffsetTooLargeException
     if np.any(cmp_mask):
         start_time = time.time()
         ashwi3, k3 = scoring.convert_to_triplet_data(ashwi, cmp_mask)
@@ -789,7 +647,6 @@ def compute_scores(entry, stID, entity_assemID, entityID,
             else:
                 raise ValueError
         k = k3
-        #k[np.isnan(scores[0])] = 0 # set positions where score is nan to 0 to avoid confusion
         exe_times[2] = time.time() - start_time
     else:
         scores, k = [np.full((cmp_mask.shape[0],), np.nan) for i in range(len(score_types))], np.full((cmp_mask.shape[0],), np.nan)
@@ -807,9 +664,6 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
             row['seq'], row['ionic_strength'], row['pH'], row['temperature'],
             score_types=score_types, offset_correction=offset_correction, 
             max_offset=max_offset, reject_shift_type_only=reject_shift_type_only,
-            #min_backbone_shift_types=args.min_backbone_shift_types,
-            #min_backbone_shift_positions=args.min_backbone_shift_positions,
-            #min_backbone_shift_fraction=args.min_backbone_shift_fraction,
             cache_dir=cache_dir)
         for score_type, scores_ in zip(score_types, scores):
             row[score_type] = scores_
@@ -829,7 +683,6 @@ def compute_scores_row(row, score_types=['zscores'], offset_correction=True,
     return row
 
 def output_dataset(df, output_prefix, output_format, score_types, precision, include_shifts, no_shift_averaging):
-    #df = df.rename(columns={"id": "entryID"})
     df['ID'] = df['entryID']+'_'+df['stID']+'_'+df['entity_assemID']+'_'+df['entityID']
     for score_type in score_types:
         df.loc[df.pass_post, score_type] = df.loc[df.pass_post, score_type].apply(np.round, args=(precision,))
@@ -846,7 +699,6 @@ def output_dataset(df, output_prefix, output_format, score_types, precision, inc
         dout['seq'] = dout.seq.apply(lambda x: list(x))
         dout['seq_index'] = dout.seq.apply(lambda x: list(range(1,len(x)+1)))
         dout = dout.explode(['seq_index', 'seq', 'k'] + score_types + shifts)
-        #dout[score_types] = dout[score_types].astype(float).apply(np.round, args=(precision,))
         dout[['ID', 'entryID', 'stID', 'entity_assemID', 'entityID', 'entity_name', 'seq_index', 'seq', 'k'] + score_types + shifts]\
             .to_csv(output_prefix + '.csv', 
                     float_format='%.{}f'.format(precision))
@@ -857,8 +709,6 @@ def output_dataset(df, output_prefix, output_format, score_types, precision, inc
                                                    'off_C', 'off_CA', 'off_CB', 'off_H', 'off_HA', 'off_HB', 'off_N',
                                                    'bbshift_positions_post', 'bbshift_types_post', 'total_bbshifts',
                                                    'seq', 'k'] + score_types + shifts]
-        #for score_type in score_types:
-        #    dout[score_type] = dout[score_type].apply(np.round, args=(precision,))
         dout.to_json(output_prefix + '.json', orient='records', lines=True)
     else:
         raise ValueError(f"Unknown output format: {output_format}")

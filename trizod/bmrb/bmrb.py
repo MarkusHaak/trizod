@@ -476,7 +476,6 @@ class BmrbEntry(object):
                         logging.getLogger('trizod.bmrb').error(f'skipping shifts for assembly {entity_assemID} due to missing polymer type for entity: {entityID}')
                         continue
                     if entity.polymer_type == 'polypeptide(L)':
-                        #peptide_shifts[(stID, condID, assemID, entity_assemID, entityID, sampleIDs)] = shifts
                         peptide_shifts[(stID,entity_assemID,entityID)] = (shifts, condID, assemID, sampleIDs)
         return peptide_shifts
 
@@ -516,88 +515,6 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
     # 6: '_Atom_chem_shift.Val'
     # 7: '_Atom_chem_shift.Val_err'
     # 8: '_Atom_chem_shift.Ambiguity_code'
-    """
-    bbshifts = {}
-    for (_,_,pos1,aa3,atm_id,atm_type,val,err,ambc) in shifts:
-        pos0 = int(pos1) - 1
-        if pos0 >= len(seq):
-            logging.getLogger('trizod.bmrb').error(f'shift array sequence longer than polymer sequence')
-            return
-        if aa3 in AA3TO1:
-            # covert to floats
-            try:
-                val = float(val)
-            except:
-                logging.getLogger('trizod.bmrb').warning(f'skipping shift value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {val}')
-                continue
-            try:
-                err = float(err)
-            except:
-                logging.getLogger('trizod.bmrb').debug(f'setting default for shift error value of atom_id {atm_id} at 0-based position {pos0}, conversion failed: {err}')
-                err = np.nan #0. # TODO: correct default value?
-            if seq[pos0] != AA3TO1[aa3]:
-                logging.getLogger('trizod.bmrb').error(f'canonical amino acid mismatch at 0-based position {pos0}')
-                return
-            if max_err is not None:
-                if np.isnan(err):
-                    pass
-                elif err <= max_err:
-                    pass
-                else:
-                    continue
-            if filter_amb:
-                if ambc not in ['1', '2', '', '.']:
-                    continue
-            if atm_id in bb_atm_ids:
-                if pos0 not in bbshifts:
-                    bbshifts[pos0] = {}
-                if atm_id in bbshifts[pos0]:
-                    if bbshifts[pos0][atm_id] != (val, err):
-                        logging.getLogger('trizod.bmrb').error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                        return
-                    else:
-                        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                bbshifts[pos0][atm_id] = (val, err)
-            elif aa3 == 'GLY' and atm_id in ['HA2', 'HA3']:
-                if pos0 not in bbshifts:
-                    bbshifts[pos0] = {}
-                if 'HA' not in bbshifts[pos0]:
-                    bbshifts[pos0]['HA'] = {}
-                if atm_id in bbshifts[pos0]['HA']:
-                    if bbshifts[pos0]['HA'][atm_id] != (val, err):
-                        logging.getLogger('trizod.bmrb').error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                        return
-                    else:
-                        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                bbshifts[pos0]['HA'][atm_id] = (val, err)
-            elif (aa3 != 'ALA' and atm_id in ['HB2', 'HB3']) or\
-                 (aa3 == 'ALA' and atm_id in ['HB1', 'HB2', 'HB3']):
-                if pos0 not in bbshifts:
-                    bbshifts[pos0] = {}
-                if 'HB' not in bbshifts[pos0]:
-                    bbshifts[pos0]['HB'] = {}
-                if atm_id in bbshifts[pos0]['HB']:
-                    if bbshifts[pos0]['HB'][atm_id] != (val, err):
-                        logging.getLogger('trizod.bmrb').error(f'multiple different shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                        return
-                    else:
-                        logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for atom_id {atm_id} at 0-based position {pos0}')
-                bbshifts[pos0]['HB'][atm_id] = (val, err)
-    for pos0 in bbshifts:
-        for atm_id in bbshifts[pos0]:
-            if type(bbshifts[pos0][atm_id]) == dict:
-                vals = [v[0] for v in bbshifts[pos0][atm_id].values()]
-                errs = [v[0] for v in bbshifts[pos0][atm_id].values()]
-                bbshifts[pos0][atm_id] = (np.mean(vals), np.mean(errs))
-    bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
-    bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)
-    for i in range(len(seq)):
-        for j,atm_id in enumerate(bb_atm_ids):
-            if i in bbshifts:
-                if atm_id in bbshifts[i]:
-                    bbshifts_arr[i,j] = bbshifts[i][atm_id][0]
-                    bbshifts_mask[i,j] = True
-    """
     df = pd.DataFrame(shifts, columns=['entity_assemID','entityID','pos','aa3','atm_id','atm_type','val','err','ambc'])
     # convert sequence index
     try:
@@ -644,10 +561,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
         logging.getLogger('trizod.bmrb').warning(f'multiple identical shifts found for the same position and atom_id')
     df = df.loc[~dupl]
     # conflicting data
-    #conflicting_ = df.set_index(['pos', 'atm_id_single', 'atm_id']).index.duplicated(keep=False)
     conflicting = df[['pos', 'atm_id_single', 'atm_id']].duplicated(keep=False)
-    #if not np.array_equal(conflicting.to_numpy(), conflicting_):
-    #    breakpoint()
     if np.any(conflicting):
         logging.getLogger('trizod.bmrb').error(f'multiple shifts found for the same position and atom_id')
         return
@@ -657,7 +571,6 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
     else:
         df['atm_id_single'] = df['atm_id']
         bb_atm_ids = bb_atm_ids + ['HA2', 'HA3' ,'HB1', 'HB2', 'HB3']
-    #df['atm_col'] = df['atm_id_single'].replace({atm_id:i for i,atm_id in enumerate(bb_atm_ids)})
     bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
     bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)
     for i,atm_id in enumerate(bb_atm_ids):

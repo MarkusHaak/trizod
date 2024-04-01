@@ -15,20 +15,6 @@ def convChi2CDF(rss,k):
             / np.sqrt(1.0/18/k+1.0/162/(k**2)-37.0/11664/(k**3))
     return res
 
-#def convChi2CDF(rss,k):
-#    mask = k>0
-#    div_rss_k = np.zeros(rss.shape, dtype=rss.dtype)
-#    div_rss_k = np.divide(rss, k, where=mask)
-#    s1 = np.divide((1/9),k, where=mask)# np.zeros(k.shape, dtype=k.dtype)
-#    s2 = np.divide((7/648),(k**2), where=mask)# np.zeros(k.shape, dtype=k.dtype)
-#    s3 = np.divide((25/2187),(k**3), where=mask)# np.zeros(k.shape, dtype=k.dtype)
-#    sqrt = np.sqrt(np.divide((1/18),k, where=mask) + np.divide((1/162),(k**2), where=mask) - np.divide((37/11664),(k**3), where=mask), where=mask)
-#    ret = np.divide((((div_rss_k**(1/6)) - 0.50*(div_rss_k**(1/3)) + (1/3)*(div_rss_k**(1/2)))\
-#                     - ((5/6) - s1 - s2 + s3)),
-#                     sqrt, where=mask)
-#    ret[~mask] = np.nan
-#    return ret
-
 def comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask):
     #cmparr = np.zeros(shape=(len(seq), len(BBATNS)))
     # convert predshift dict to np array (TODO: do this in potenci...)
@@ -61,7 +47,6 @@ def compute_running_offsets(cmparr, mask, minAIC=999.):
     runoffs_ = pd.concat(at_roff, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
     runstd0s_ = pd.concat(at_std0, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
     # get index with the lowest mean rolling stddev for which all ats were detected (all that were detected anywhere for this sample)
-    #runstds_val = runstds_.dropna(how='all', axis=1).dropna(axis=0).mean(axis=1)
     runstds_val = runstds_[runstds_.columns[mask.any(axis=0)]].dropna(axis=0).mean(axis=1)
     try:
         min_idx_ = runstds_val.idxmin()
@@ -109,8 +94,6 @@ def get_outlier_mask(cdfs3_, cdfs_, ashwi_, mask, cdfthr=6.0):
     totnum_ = mask.sum(axis=1)
     finaloutli_ = (cdfs_ > cdfthr) | ((cdfs3_ > cdfthr) & (cdfs_ > 0.0) & (totnum_ > 0))
     ol_ = mask & (np.bitwise_or(np.expand_dims(finaloutli_, axis=1), oldct_)) # mask for the outliers
-    #accdct_ = mask & ~ol_ # mask for the validated data (where there is shift data, predictions and not outliers)
-    #numol_ = ol_.sum()
     return ol_
 
 def get_std_norm_diffs(cmparr, mask, offdct={}):
@@ -124,36 +107,20 @@ def get_std_norm_diffs(cmparr, mask, offdct={}):
 def compute_zscores(ashwi3, k3, mask, corr=False):
     indices = np.where(np.any(mask,axis=1))
     mini, maxi = indices[0][0], indices[0][-1]
-    #tot_ = (np.minimum(ashwi_, 4.0) ** 2).sum(axis=1)
-    #totnum_ = mask.sum(axis=1)
     tot3f_ = (np.minimum(ashwi3, 4.0) ** 2).sum(axis=1)
     totn3f_ = k3
-    #cdfs_ = convChi2CDF(tot_, totnum_)
-    # TODO: find more elegant solution than using maxi, mini (not safe: using mask.any(axis=1) !?! --> gaps in between are to be accepted)
-    # what would work is using pandas for this...
-    #tot_[:mini] = 0.
-    #tot_[maxi+1:] = 0.
-    #totnum_[:mini] = 0.
-    #totnum_[maxi+1:] = 0.
-    #tot3f_ =  np.pad(tot_, 1)[2:]    + tot_    + np.pad(tot_, 1)[:-2]
-    #totn3f_ = np.pad(totnum_, 1)[2:] + totnum_ + np.pad(totnum_, 1)[:-2]
     cdfs3_ = convChi2CDF(tot3f_, totn3f_)
     if corr:
         for k in range(1,22):
             m = totn3f_ == k
             cdfs3_[m] += cdfs3_[m] * Z_CORRECTION[k]
-    #cdfs3_[k3 == 0] = np.nan # already nan due to division-by-zero
     cdfs3_[:mini] = np.nan
     cdfs3_[maxi+1:] = np.nan
-    return cdfs3_#, cdfs_
+    return cdfs3_
 
 def compute_pscores(ashwi3, k3, mask, quotient=2.0, limit=4.0):
     indices = np.where(np.any(mask,axis=1))
     mini, maxi = indices[0][0], indices[0][-1]
-    #tot_ = ashwi_.copy()
-    #tot_[~mask] = 0.
-    #tot3f_ =  np.column_stack([np.pad(tot_, ((1,1),(0,0)))[2:],   tot_,   np.pad(tot_, ((1,1),(0,0)))[:-2]])
-    #totn3f_ = np.column_stack([np.pad(mask, ((1,1),(0,0)))[2:],mask,np.pad(mask, ((1,1),(0,0)))[:-2]])
 
     if limit:
         p = np.prod(scipy.stats.norm.pdf(np.minimum(ashwi3, limit) / quotient) / scipy.stats.norm.pdf(0.), axis=1)
@@ -179,7 +146,6 @@ def convert_to_triplet_data(ashwi_, mask):
 
 def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     # get polymer sequence and chemical backbone shifts
-    #bbshifts, bbshifts_arr, bbshifts_mask = bmrb.get_valid_bbshifts(shifts, seq)
     ret = bmrb.get_valid_bbshifts(shifts, seq)
     if ret is None:
         logging.getLogger('trizod.scoring').error(f'retrieving backbone shifts failed')
@@ -195,9 +161,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     logging.getLogger('trizod.scoring').info(f"total number of backbone shifts: {totbbsh}")
 
     off0 = {at:0.0 for at in BBATNS}
-    #armsd0,fra0,noff0,cdfs30 = results_w_offset(cmparr, cmp_mask, BBATNS, offdct=off0, minAIC=6.0)
     shw0, ashwi0 = get_std_norm_diffs(cmparr, cmp_mask, off0)
-    #cdfs30,cdfs0 = compute_zscores(ashwi0, cmp_mask)
     cdfs0 = compute_zscores(ashwi0, cmp_mask.sum(axis=1), cmp_mask)
     cdfs30 = compute_zscores(*convert_to_triplet_data(ashwi0, cmp_mask), cmp_mask)
     ol0 = get_outlier_mask(cdfs30, cdfs0, ashwi0, cmp_mask, cdfthr=6.0)
@@ -210,9 +174,7 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
     if offr is None:
         logging.getLogger('trizod.scoring').warning(f'no running offset could be estimated')
     elif np.any([v != 0. for v in offr.values()]):
-        #armsdc,frac,noffc,cdfs3c = results_w_offset(cmparr, cmp_mask, BBATNS, offdct=offr, minAIC=6.0)
         shwc, ashwic = get_std_norm_diffs(cmparr, cmp_mask, offr)
-        #cdfs3c,cdfsc = compute_zscores(ashwic, cmp_mask)
         cdfsc = compute_zscores(ashwic, cmp_mask.sum(axis=1), cmp_mask)
         cdfs3c = compute_zscores(*convert_to_triplet_data(ashwic, cmp_mask), cmp_mask)
         avc = np.nanmean(cdfs3c)
@@ -222,7 +184,5 @@ def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
             offf = noffc
             olf = olc
 
-    #cdfs3 = results_w_offset(cmparr, cmp_mask, BBATNS, dataset=True, offdct=offdct, minAIC=6.0)
     shwf, ashwif = get_std_norm_diffs(cmparr, cmp_mask, offf)
-    #_,cdfs3f,_,_ = compute_zscores(ashwif, cmp_mask)
     return shwf, ashwif, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0

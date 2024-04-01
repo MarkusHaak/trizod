@@ -49,10 +49,6 @@ def fun(pH, pK, nH):
 def log_fun(pH, pK, nH):
     return -np.log10(1 + 10**(nH*(pH - pK)))
 
-#def W(r,Ion=0.1):
-#    k = np.sqrt(Ion) / 3.08 #Ion=0.1 is default
-#    x = k * r / np.sqrt(6)
-#    return 332.286 * np.sqrt(6 / np.pi) * (1 - np.sqrt(np.pi) * x * np.exp(x ** 2) * erfc(x)) / (e * r)
 def W(r,Ion=0.1):
     k = np.sqrt(Ion) / 3.08 #Ion=0.1 is default
     x = k.astype(np.float64) * r.astype(np.float64) / np.sqrt(6)
@@ -60,83 +56,13 @@ def W(r,Ion=0.1):
     i2_3 = erfc(x)
     i2_2 = np.sqrt(np.pi) * x
 
-    #i2_1 = np.exp(x ** 2)
-    #i2_1 = np.nan_to_num(i2_1) # to convert inf values to the largest possible value
     i3 = (e * r)
     i4 = np.exp(((x ** 2) - np.log(i3))) # always equal to np.exp(x ** 2) / (e * r), but intermediates are smaller
     i4 = np.nan_to_num(i4) # to convert inf values to the largest possible value
-    #return i1 * ((1 / i3) - ((i2_1/i3) * i2_2 * i2_3))
     return i1 * ((1 / i3) - np.nan_to_num(i4 * i2_2 * i2_3))
 
 def w2logp(x,T=293.15):
     return x * 4181.2 / (R * T * np.log(10)) 
-
-'''
-def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
-    #pH range
-    pHs = np.arange(1.99, 10.01, 0.15)
-  
-    pos = np.array([i for i in range(len(seq)) if seq[i] in pK0.keys()])
-    N = pos.shape[0]
-    I = np.diag(np.ones(N))
-    sites = ''.join([seq[i] for i in pos])
-    neg = np.array([i for i in range(len(sites)) if sites[i] in 'DEYc'])
-    l = np.array([abs(pos - pos[i]) for i in range(N)])
-    d = a + np.sqrt(l) * b
-
-    tmp = W(d,Ion)
-    tmp[I == 1] = 0
-    
-    ww = w2logp(tmp,T) / 2
-    
-    chargesempty = np.zeros(pos.shape[0])
-    if len(neg): chargesempty[neg] = -1
-    
-    pK0s = [pK0[c] for c in sites]
-    nH0s = [0.9 for c in sites]
-    
-    titration = np.zeros((N,len(pHs)))
-    smallN = min(2 * cutoff+1, len(pos))
-    #smallI = np.diag(np.ones(smallN))
-  
-    alltuples = [[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))]
-    gmatrix = [np.zeros((smallN, smallN)) for p in range(len(pHs))]
-  
-    #perform iterative fitting.........................
-    for icycle in range(ncycles):
-        ##print (icycle)
-    
-        if icycle == 0:
-            fractionhold = np.array([[fun(pHs[p], pK0s[i], nH0s[i]) for i in range(N)] for p in range(len(pHs))])
-        else:
-            fractionhold = titration.transpose()
-    
-        for ires in range(1, N+1):
-            (ileft,iright) = smallmatrixlimits(ires, cutoff, N)
-            resi = smallmatrixpos(ires, cutoff, N)
-            for p in range(len(pHs)):
-                fraction = fractionhold[p].copy()
-                fraction[ileft - 1 : iright] = 0
-                charges = chargesempty + fraction  
-                ww0 = np.diag(np.dot(ww, charges) * 2) 
-                gmatrixfull =  ww + ww0 + pHs[p] * I - np.diag(pK0s) 
-                gmatrix[p] = gmatrixfull[ileft - 1 : iright, ileft - 1 : iright]
-      
-            breakpoint()
-            E_all = np.array([sum([10 ** -(gmatrix[p] * np.outer(c,c)).sum() for c in alltuples]) for p in range(len(pHs))])
-            E_sel = np.array([sum([10 ** -(gmatrix[p] * np.outer(c,c)).sum() for c in alltuples if c[resi-1] == 1]) for p in range(len(pHs))])
-            titration[ires-1] = E_sel/E_all
-        sol = np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
-        (pKs, nHs) = sol.transpose()
-        ##print (sol)
-  
-    dct={}
-    for p,i in enumerate(pos):
-      ##print (p,i,seq[i],pKs[p],nHs[p])
-      dct[i-1]=(pKs[p],nHs[p],seq[i])
-  
-    return dct
-'''
 
 def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
     #pH range
@@ -160,14 +86,10 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
 
     pK0s = np.array([pK0[c] for c in sites])
     nH0s = np.array([0.9 for c in sites])
-    #pK0s_ = [pK0[c] for c in sites]
-    #nH0s_ = [0.9 for c in sites]
 
     titration = np.zeros((N,len(pHs)))
 
     smallN = min(2 * cutoff + 1, len(pos))  
-    #alltuples = [[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))]
-    #outerm = np.array([np.outer(c,c) for c in alltuples])
     alltuples = alltuples_[smallN]
     outerm = outer_matrices[smallN]
     gmatrix = [np.zeros((smallN, smallN)) for _ in range(len(pHs))]
@@ -178,22 +100,12 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
 
         if icycle == 0:
             fractionhold = np.array([[fun(pHs[p], pK0s[i], nH0s[i]) for i in range(N)] for p in range(len(pHs))])
-            #fractionhold = fun(np.expand_dims(pHs,-1), pK0s, nH0s)
-            #if not np.array_equal(fractionhold_, fractionhold):
-            #    breakpoint()
         else:
             fractionhold = titration.transpose()
 
         for ires in range(1, N+1):
             (ileft,iright) = smallmatrixlimits(ires, cutoff, N)
             resi = smallmatrixpos(ires, cutoff, N)
-            ##for p in range(len(pHs)):
-            ##    fraction = fractionhold[p].copy()
-            ##    fraction[ileft - 1 : iright] = 0
-            ##    charges = chargesempty + fraction  
-            ##    ww0 = np.diag(np.dot(ww, charges) * 2) 
-            ##    gmatrixfull =  ww + ww0 + pHs[p] * I - np.diag(pK0s) 
-            ##    gmatrix[p] = gmatrixfull[ileft - 1 : iright, ileft - 1 : iright]
             fraction = fractionhold.copy()
             fraction[:,ileft - 1:iright] = 0
             charges = fraction + chargesempty
@@ -202,19 +114,15 @@ def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
             gmatrixfull = (ww + ww0 + np.expand_dims(pHs,(1,2)) * I - np.diag(pK0s))
             gmatrix = gmatrixfull[:, ileft - 1 : iright, ileft - 1 : iright]
             
-            ##E_all = np.array([sum(np.array([10 ** -(gmatrix[p] * outerm[i]).sum() for i,c in enumerate(alltuples)])) for p in range(len(pHs))])
-            ##E_sel = np.array([sum([10 ** -(gmatrix[p] * outerm[i]).sum() for i,c in enumerate(alltuples) if c[resi-1] == 1]) for p in range(len(pHs))])
             E = (10 ** -(np.expand_dims(gmatrix, axis=1) * outerm).sum(axis=(2,3)))#.sum(axis=-1)
             E_all = E.sum(axis=-1)
             E_sel = E[:,(alltuples[:,resi-1] == 1)].sum(axis=-1)
             titration[ires-1] = E_sel/E_all
         sol = np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
         (pKs, nHs) = sol.transpose()
-        ##print (sol)
 
     dct={}
     for p,i in enumerate(pos):
-        ##print (p,i,seq[i],pKs[p],nHs[p])
         dct[i-1]=(pKs[p],nHs[p],seq[i])
   
     return dct
@@ -829,13 +737,9 @@ def initcorrcomb():
     return dct
         
 TEMPCORRS=gettempkoeff()
-##dct[atn][aa]=eval(lin[1+j])
 CENTSHIFTS=initcorcents()
-##dct[aai][atnj]=eval(vals[1+j])
 NEICORRS =initcorneis()
-##dct[aai][atn]=[eval(vals[2+j]) for j in range(4)]
 COMBCORRS=initcorrcomb()
-##dct[atn][segment]=key,eval(lin[-1])
 
 data = pkgutil.get_data(__name__, "data_tables/phshifts2.csv")
 PHSHIFTS = pd.read_csv(StringIO(data.decode()), header=0, comment='#', index_col=['resn', 'atn'])
