@@ -1,6 +1,11 @@
 # TriZOD
 
+Novel, continuous, per-residue disorder scores from protein NMR experiments stored in the BMRB database.
+
 ## Description
+
+Accurate quantification of intrinsic disorder, crucial for understanding functional protein dynamics, remains challenging. We introduce TriZOD, an innovative scoring system for protein disorder analysis, utilizing nuclear magnetic resonance (NMR) spectroscopy chemical shifts. Traditional methods provide binary, residue-specific annotations, missing the complex spectrum of protein disorder. TriZOD extends the CheZOD scoring framework with quantitative statistical descriptors, offering a nuanced analysis of intrinsically disordered regions. It calculates per-residue scores from chemical shift data of polypeptides in the Biological Magnetic Resonance Data Bank (BMRB). The CheZOD Z-score is a quantitative metric for how much a set of experimentally determined chemical shifts deviate from random coil chemical shifts. The TriZOD G-scores extend upon them to be independent of the number of available chemical shifts. They are normalized to range between 0 and 1, which is beneficial for interpretation and use in training disorder predictors. Additionally, TriZOD introduces a refined, automated selection of BMRB datasets, including filters for physicochemical properties, keywords, and chemical denaturants. We calculated G-scores for over 15,000 peptides in the BMRB, approximately 10-fold the size of previously published CheZOD datasets.
+Validation against DisProt annotations demonstrates substantial agreement yet highlights discrepancies, suggesting the need to reevaluate some disorder annotations. TriZOD advances protein disorder prediction by leveraging the full potential of the BMRB database, refining our understanding of disorder, and challenging existing annotations.
 
 ## Installation
 
@@ -8,9 +13,9 @@
 
 ## Datasets
 
-The folder ./datasets/latest/ contains ready-to-use datasets that where created by running TriZOD on the full BMRB database using four different filtering presets, namely `unfiltered`, `tolerant`, `moderate` and `strict`. Since the stringency of the filtering criteria are monotonically increasing from unfiltered to strict, the respective dataset sizes are decreasing and each dataset is a superset of those with more stringent criteria. However, since filtering also affects which and how the data is processed, the computed scores can differ for the same entry in two differently filtered TriZOD datasets. Therefore, the data should always be loaded from the respective dataset file. These are given in two formats: The .csv files contain less information but are potentially simpler to read than the .json files. However, the latter contain additional information such as sample conditions.
+The latest dataset is published under the DOI [10.6084/m9.figshare.25792035](https://www.doi.org/10.6084/m9.figshare.25792035).
 
-Sequence redundancy reduction was performed using mmseqs2 on the filtered datasets. The test set was selected from the strict dataset only assuring assuring a maximum of 50% sequence identity with 80% coverage inbetween test set members. The IDs and peptide sequences of the test set members are found in the fasta file ./datasets/latest/TriZOD\_test\_set.fasta. All entries with less than 30% sequence identity to test set entries at 80% coverage were clustered with a 50% sequence identity threshold at 80% coverage in an iterative cluster-update approach, starting with the strict dataset members. The resulting redundancy reduced cluster representatives for the `unfiltered`, `tolerant`, `moderate` and `strict` datasets can be found in respective \<filter-default\>\_rest\_set.fasta files.
+This publication consists of four nested datasets of increasing filter stringency: Unfiltered, tolerant, moderate and strict. An overview of the applied filters is given below. The .json files contain all entries of the BMRB that are in accordance with the given filter levels. These are not redundancy reduced and also contain the test set entries and are therefore not intended for direct use as training sets in machine learning applications. Instead, for this purpose, please use only those entries with IDs found in the [filter_level]_rest_set.fasta files and extract the corresponding information such as TriZOD G-scores and/or physicochemical properties from the respective .json files. These fasta files contain the cluster representatives of the redundancy reduction procedure which was performed in an iterative fashion such that clusters with members found in all filter levels are shared among them and have the same cluster representatives. If necessary, all other cluster members can be retrieved from the given [filter_level]_rest_clu.tsv files. The file TriZOD_test_set.fasta contains the IDs and sequences of the TriZOD test set. It is intended that the corresponding data is taken from the strict dataset.
 
 ### Filter defaults
 
@@ -42,7 +47,7 @@ The following table lists the respective filtering criteria for each of the four
 | Filter | unfiltered | tolerant | moderate | strict |
 | :--- | --- | --- | --- | --- |
 | temperature-range | [-inf,+inf] | [263,333] | [273,313] | [273,313] |
-| ionic-strength-range | [-inf,+inf] | [0,5] | [0,3] | [0,3] |
+| ionic-strength-range | [0,+inf] | [0,7] | [0,5] | [0,3] |
 | pH-range | [-inf,+inf] | [2,12] | [4,10] | [6,8] |
 | unit-assumptions | Yes | Yes | Yes | No |
 | unit-corrections | Yes | Yes | No | No |
@@ -54,21 +59,13 @@ The following table lists the respective filtering criteria for each of the four
 | max-noncanonical-fraction | 1.0 | 0.1 | 0.025 | 0.0 |
 | max-x-fraction | 1.0 | 0.2 | 0.05 | 0.0 |
 | keywords-blacklist | [] | ['denatur'] | ['denatur', 'unfold', 'misfold'] | ['denatur', 'unfold', 'misfold', 'interacti', 'bound'] |
-| chemical-denaturants | [] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol', 'TFA', 'trifluoroethanol', 'Potassium Pyrophosphate', 'acetic acid', 'CD3COOH', 'DTT', 'dithiothreitol', 'dss', 'deuterated sodium acetate'] |
+| chemical-denaturants | [] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea','BME','2-ME','mercaptoethanol', 'TFA', 'trifluoroethanol', 'Potassium Pyrophosphate', 'acetic acid', 'CD3COOH', 'DTT', 'dithiothreitol', 'dss', 'deuterated sodium acetate'] |
 | exp-method-whitelist | ['', '.'] | ['','solution', 'structures'] | ['','solution', 'structures'] | ['solution', 'structures'] |
 | exp-method-blacklist | [] | ['solid', 'state'] | ['solid', 'state'] | ['solid', 'state'] |
 | max-offset | +inf | 3 | 3 | 2 |
 | reject-shift-type-only | Yes | Yes | No | No |
 
 Please note that each of these filters can be set individually with respective command line options and that this will take precedence over the filter defaults set by the `--filter-defaults` option.
-
-## Support
-
-## Contributing
-
-## Authors and acknowledgment
-
-## License
 
 ## Project status
 Under active development
