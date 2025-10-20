@@ -4,7 +4,7 @@ import logging
 import trizod.bmrb.bmrb as bmrb
 import scipy
 import warnings
-from trizod.constants import BBATNS, REFINED_WEIGHTS, Z_CORRECTION
+from trizod.constants import BBATNS, REFINED_WEIGHTS #, Z_CORRECTION
 
 def convChi2CDF(rss,k):
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -111,9 +111,10 @@ def compute_zscores(ashwi3, k3, mask, corr=False):
     totn3f_ = k3
     cdfs3_ = convChi2CDF(tot3f_, totn3f_)
     if corr:
-        for k in range(1,22):
-            m = totn3f_ == k
-            cdfs3_[m] += cdfs3_[m] * Z_CORRECTION[k]
+        raise ValueError("Z_CORRECTION is not supported")
+        # for k in range(1,22):
+        #     m = totn3f_ == k
+        #     cdfs3_[m] += cdfs3_[m] * Z_CORRECTION[k]
     cdfs3_[:mini] = np.nan
     cdfs3_[maxi+1:] = np.nan
     return cdfs3_
