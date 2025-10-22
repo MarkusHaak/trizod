@@ -741,8 +741,8 @@ CENTSHIFTS=initcorcents()
 NEICORRS =initcorneis()
 COMBCORRS=initcorrcomb()
 
-data = pkgutil.get_data(__name__, "data_tables/phshifts2.csv")
-PHSHIFTS = pd.read_csv(StringIO(data.decode()), header=0, comment='#', index_col=['resn', 'atn'])
+# data = pkgutil.get_data(__name__, "data_tables/phshifts2.csv")
+# PHSHIFTS = pd.read_csv(StringIO(data.decode()), header=0, comment='#', index_col=['resn', 'atn'])
 
 def predPentShift(pent,atn):
     aac=pent[2]
@@ -841,7 +841,7 @@ def read_csv_pkaoutput(seq,temperature,ion,name=None):
 
 def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
     bbatns=['C','CA','CB','HA','H','N','HB']
-    #dct=get_phshifts()
+    dct=get_phshifts()
     Ion=max(0.0001,ion)
     if pkacsvfilename == False:
         pkadct=None
@@ -862,10 +862,10 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
             for atn in bbatns:
                 if not atn in outdct:outdct[atn]={}
                 logging.getLogger('trizod.potenci').debug(f'data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}')
-                #dctresi=dct[resi]
+                dctresi=dct[resi]
                 try:
-                    #delta=dctresi[atn]
-                    delta = PHSHIFTS.loc[(resi,atn), 'shd']
+                    delta=dctresi[atn]
+                    # delta = PHSHIFTS.loc[(resi,atn), 'shd']
                     jump =frac *delta
                     jump7=frac7*delta
                     key=(resi,atn)
@@ -880,14 +880,14 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
                         outdct[atn][i][0]=resi
                         outdct[atn][i][1]+=jumpdelta
                     logging.getLogger('trizod.potenci').debug('%3s %5.2f %6.4f %s %3d %5s %8.5f %8.5f %4.2f'%(atn,pKa,nH,resi,i,atn,jump,jump7,pH))
-                    #if resi+'p' in dct and atn in dct[resi+'p']:
-                    if (resi+'p', atn) in PHSHIFTS.index:
+                    if resi+'p' in dct and atn in dct[resi+'p']:
+                    # if (resi+'p', atn) in PHSHIFTS.index:
                         for n in range(2):
                             ni=i+2*n-1
                             ##if ni is somewhere in seq...
                             nresi=resi+'ps'[n]
-                            #ndelta=dct[nresi][atn]
-                            ndelta = PHSHIFTS.loc[(nresi,atn), 'shd']
+                            ndelta=dct[nresi][atn]
+                            # ndelta = PHSHIFTS.loc[(nresi,atn), 'shd']
                             jump =frac *ndelta
                             jump7=frac7*ndelta
                             jumpdelta=jump-jump7
@@ -897,7 +897,7 @@ def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
 
 def getphcorrs_arr(seq,temperature,pH,ion):
     bbatns=['C','CA','CB','HA','H','N','HB']
-    #dct=get_phshifts()
+    dct=get_phshifts()
     
     Ion=max(0.0001,ion)
 
