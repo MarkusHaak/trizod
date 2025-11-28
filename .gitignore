@@ -1,16 +1,11 @@
-build
-dist
-test*
-tmp*
-*.log
-*.zip
-*.txt
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Python cache
+__pycache__/
 *.pyc
-*.pkl
-*.txt
-__pycache__
-data
-*.csv
-notebooks
-*.egg-info
-2024-05-09
+
+# Data files
+/data/*
