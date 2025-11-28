@@ -1,0 +1,6 @@
+- [ ] add to GitHub
+- [ ] upload all notebooks
+- [ ] create 2 PRs
+  - [ ] refactor
+  - [ ] integration of suggestions
+- [ ] BMRB dump

@@ -11,7 +11,7 @@ Frans A. A. Mulder's group. The implementation has been modernized with:
 Original author: fmulder@chem.au.dk
 Adapted by: markus.haak@tum.de & tobias.senoner@tum.de
 Original source: https://github.com/protein-nmr/POTENCI
-Original commit: 17dd2e6f3733c702323894697238c87e6723f934 (2023-05-03)
+Original commit: 17dd2e6f3733c702323894697238c87e6723f934 (2019-06-07)
 Original filename: pytenci1_3.py
 
 References:
