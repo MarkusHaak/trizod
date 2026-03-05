@@ -79,10 +79,6 @@ def fun(pH, pK, nH):
     return 1.0 - 1.0 / ((10 ** (nH * (pK - pH))) + 1.0)  # identical
 
 
-def log_fun(pH, pK, nH):
-    return -np.log10(1 + 10 ** (nH * (pH - pK)))
-
-
 def w(r, Ion=0.1):
     k = np.sqrt(Ion) / 3.08  # Ion=0.1 is default
     x = k.astype(np.float64) * r.astype(np.float64) / np.sqrt(6)
@@ -251,8 +247,8 @@ def read_csv_pkaoutput(seq, temperature, ion, name=None):
         reskey, pKa, diff, nH = data
         i = int(reskey[1:]) - 1
         resi = reskey[0]
-        pKaval = eval(pKa)
-        nHval = eval(nH)
+        pKaval = float(pKa)
+        nHval = float(nH)
         pkadct[i] = pKaval, nHval, resi
     return pkadct
 
@@ -330,7 +326,7 @@ def getphcorrs_arr(seq, temperature, pH, ion):
     pkadct = calc_pkas_from_seq("n" + seq + "c", temperature, Ion)
     # outdct={}
     residues = [[None] * 7 for i in range(len(seq))]
-    outarr = np.zeros(shape=(len(seq), len(bbatns)), dtype=np.float)
+    outarr = np.zeros(shape=(len(seq), len(bbatns)), dtype=np.float64)
     for i in pkadct:
         pKa, nH, resi = pkadct[i]
         logging.getLogger("trizod.potenci").debug(f"pkares: {pKa:6.3f} {nH:6.3f} {resi:1s}{i}")
@@ -386,7 +382,6 @@ def getpredshifts(seq, temperature, pH, ion, usephcor=True, pkacsvfile=None, ide
     shiftdct = {}
     for i in range(1, len(seq) - 1):
         if seq[i] in AA_STANDARD:  # else: do nothing
-            str(i + 1)
             trip = seq[i - 1] + seq[i] + seq[i + 1]
             phcorr = None
             shiftdct[(i + 1, seq[i])] = {}
@@ -423,11 +418,10 @@ def getpredshifts(seq, temperature, pH, ion, usephcor=True, pkacsvfile=None, ide
 def getpredshifts_arr(seq, temperature, pH, ion, usephcor=True, pkacsvfile=None, identifier=""):
     tempdct = TEMPCORRS
     bbatns = ["C", "CA", "CB", "HA", "H", "N", "HB"]
-    phcorrs = getphcorrs_arr(seq, temperature, pH, ion, pkacsvfile) if usephcor else {}
+    phcorrs = getphcorrs_arr(seq, temperature, pH, ion) if usephcor else {}
     shiftdct = {}
     for i in range(1, len(seq) - 1):
         if seq[i] in AA_STANDARD:  # else: do nothing
-            str(i + 1)
             trip = seq[i - 1] + seq[i] + seq[i + 1]
             phcorr = None
             shiftdct[(i + 1, seq[i])] = {}

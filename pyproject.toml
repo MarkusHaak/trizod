@@ -7,7 +7,7 @@ name = "trizod"
 version = "0.0.1"
 description = "Modern disorder scores for BMRB data"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "AGPL-3.0"}
 authors = [
     {name = "Markus Haak", email = "markus.haak@tum.de"},
@@ -54,6 +54,7 @@ indent-width = 4
 # Exclude legacy code and generated files
 exclude = [
     "trizod/potenci/legacy",
+    "test",
     "__pycache__",
     "*.pyc",
     ".git",
