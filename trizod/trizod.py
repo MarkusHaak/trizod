@@ -47,13 +47,13 @@ filter_defaults = pd.DataFrame(
             [273.0, 323.0],
             [273.0, 313.0],
         ],
-        "ionic-strength-range": [[0.0, np.inf], [0.0, 7.0], [0.0, 5.0], [0.0, 3.0]],
+        "ionic-strength-range": [[0.0, np.inf], [0.0, 7.0], [0.0, 5.0], [0.0, 3.0]],  # in Molar
         "pH-range": [[-np.inf, np.inf], [2.0, 12.0], [4.0, 10.0], [6.0, 8.0]],
         "unit-assumptions": [True, True, True, False],
         "unit-corrections": [True, True, False, False],
         "default-conditions": [True, True, True, False],
         "peptide-length-range": [[5], [5], [10], [15]],
-        "min-backbone-shift-types": [1, 2, 3, 5],
+        "min-backbone-shift-types": [1, 2, 3, 4],  # strict: 4 (HN,N,CO,CA) not 5
         "min-backbone-shift-positions": [3, 3, 8, 12],
         "min-backbone-shift-fraction": [0.0, 0.0, 0.6, 0.8],
         "max-noncanonical-fraction": [1.0, 0.1, 0.025, 0.0],
