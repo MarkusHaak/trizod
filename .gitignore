@@ -7,8 +7,17 @@ dist/
 __pycache__/
 *.pyc
 
-# Data files
-/data/*
+# Runtime and temporary files
+tmp*/
+*.log
 
-# Documentation (kept local)
-/docs/
+# BMRB data and pipeline output (large, local-only)
+data/
+
+# Local working directories
+docs/
+notebooks/
+
+# Test scripts (local integration tests, not part of package)
+test/
+
