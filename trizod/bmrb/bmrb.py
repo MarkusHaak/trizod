@@ -45,6 +45,7 @@ class Entity:
         else:
             self.seq = None
         self.fragment = get_tag_vals(sf, "_Entity.Fragment")
+        self.paramagnetic = get_tag_vals(sf, "_Entity.Paramagnetic", indices=0)
         self.weight = get_tag_vals(sf, "_Entity.Formula_weight")
         self.db_links = list(
             zip(
@@ -482,6 +483,18 @@ class BmrbEntry:
             logging.getLogger("trizod.bmrb").error("entry contains shift tables with non-unique ID")
             raise ValueError
         self.shift_tables = {s.id: s for s in self.shift_tables}
+
+        self.chem_comps_paramagnetic = []
+        for sf in entry.get_saveframes_by_category("chem_comp"):
+            paramagnetic = get_tag_vals(sf, "_Chem_comp.Paramagnetic", indices=0)
+            if paramagnetic:
+                self.chem_comps_paramagnetic.append(paramagnetic)
+
+    def is_paramagnetic(self):
+        for entity in self.entities.values():
+            if entity.paramagnetic and entity.paramagnetic.lower() == "yes":
+                return True
+        return any(paramagnetic.lower() == "yes" for paramagnetic in self.chem_comps_paramagnetic)
 
     def get_peptide_shifts(self):
         peptide_shifts = {}

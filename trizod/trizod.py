@@ -58,6 +58,7 @@ filter_defaults = pd.DataFrame(
         "min-backbone-shift-fraction": [0.0, 0.0, 0.6, 0.8],
         "max-noncanonical-fraction": [1.0, 0.1, 0.025, 0.0],
         "max-x-fraction": [1.0, 0.2, 0.05, 0.0],
+        "exclude-paramagnetic": [False, True, True, True],
         "keywords-blacklist": [
             [],
             ["denatur"],
@@ -238,6 +239,12 @@ def parse_args():
         type=float,
         default=filter_defaults.loc[args_init.filter_defaults, "max-x-fraction"],
         help="Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence.",
+    )
+    filter_grp.add_argument(
+        "--exclude-paramagnetic",
+        action=argparse.BooleanOptionalAction,
+        default=filter_defaults.loc[args_init.filter_defaults, "exclude-paramagnetic"],
+        help="Exclude entries containing paramagnetic samples.",
     )
     filter_grp.add_argument(
         "--keywords-blacklist",
@@ -436,6 +443,7 @@ def prefilter_dataframe(
     max_x_fraction,
     keywords,
     chemical_denaturants,
+    exclude_paramagnetic=False,
 ):
     missing_vals = ~df[
         ["exp_method", "temperature", "ionic_strength", "pH", "seq", "total_bbshifts"]
@@ -490,6 +498,8 @@ def prefilter_dataframe(
             df.seq.str.count("X") / df.seq.str.len() <= max_x_fraction
         ),
     }
+    if exclude_paramagnetic:
+        sels_pre[("paramagnetic", "")] = ~df["is_paramagnetic"].fillna(False)
     sels_kws = {kw: ~df[kw] for kw in keywords}
     sels_denat = {cd: ~df[cd] for cd in chemical_denaturants}
     sels_all_pre = {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat
@@ -672,6 +682,7 @@ def fill_row_data(
     row["citation_DOI"] = entry.citation_DOI
     row["exp_method"] = entry.exp_method if entry.exp_method else pd.NA
     row["exp_method_subtype"] = entry.exp_method_subtype if entry.exp_method_subtype else pd.NA
+    row["is_paramagnetic"] = entry.is_paramagnetic()
     row["entity_name"] = entry.entities[row["entityID"]].name
     row["ionic_strength"] = entry.conditions[condID].get_ionic_strength(
         return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers
@@ -1143,6 +1154,7 @@ def main():
         max_x_fraction=args.max_x_fraction,
         keywords=args.keywords_blacklist,
         chemical_denaturants=args.chemical_denaturants,
+        exclude_paramagnetic=args.exclude_paramagnetic,
     )
     print()
     logging.getLogger("trizod").info("Computing scores for each remaining entry.")
