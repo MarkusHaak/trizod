@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pynmrstar
 
-from trizod.constants import AA3TO1, BBATNS
+from trizod.constants import AA3TO1, BBATNS, METHYL_ATOMS
 
 
 def get_tag_vals(
@@ -483,6 +483,26 @@ class BmrbEntry:
             raise ValueError
         self.shift_tables = {s.id: s for s in self.shift_tables}
 
+        # Detect stereospecific methyl assignments from metadata
+        self.has_stereospecific_methyls = self._detect_stereospecific_methyls()
+
+    def _detect_stereospecific_methyls(self):
+        """Check if entry metadata mentions stereospecific assignments."""
+        fields = [self.title, self.details, self.citation_title]
+        if isinstance(self.citation_keywords, list):
+            fields.extend(
+                kw
+                for sublist in self.citation_keywords
+                for kw in (sublist if isinstance(sublist, list) else [sublist])
+            )
+        if isinstance(self.struct_keywords, list):
+            fields.extend(
+                kw
+                for sublist in self.struct_keywords
+                for kw in (sublist if isinstance(sublist, list) else [sublist])
+            )
+        return any(field and "stereospecific" in str(field).lower() for field in fields)
+
     def get_peptide_shifts(self):
         peptide_shifts = {}
         for stID, st in self.shift_tables.items():
@@ -742,3 +762,65 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
         bbshifts_mask[df.loc[sel, "pos"], i] = True
     # """
     return bbshifts_arr, bbshifts_mask
+
+
+def get_methyl_shifts(shifts, seq, stereospecific=False):
+    """Extract Leu CD1/CD2 and Val CG1/CG2 methyl shifts with wildcard labeling.
+
+    When stereospecific=False (default), ambiguous assignments (ambiguity code != 1)
+    are relabeled with wildcard notation (CD* for Leu, CG* for Val).
+
+    Returns a list of dicts with keys: pos, aa3, atm_id, val, or None if parsing fails.
+    """
+    # Collect all methyl atom IDs across residue types
+    all_methyl_atm_ids = set()
+    for info in METHYL_ATOMS.values():
+        all_methyl_atm_ids.update(info["stereo"])
+
+    df = pd.DataFrame(
+        shifts,
+        columns=[
+            "entity_assemID",
+            "entityID",
+            "pos",
+            "aa3",
+            "atm_id",
+            "atm_type",
+            "val",
+            "err",
+            "ambc",
+        ],
+    )
+    try:
+        df["pos"] = df["pos"].astype(int) - 1
+    except ValueError:
+        return None
+
+    # Filter to Leu/Val methyl atoms only
+    df = df.loc[(df["aa3"].isin(METHYL_ATOMS.keys())) & (df["atm_id"].isin(all_methyl_atm_ids))]
+    if df.empty:
+        return None
+
+    try:
+        df["val"] = df["val"].astype(float)
+    except ValueError:
+        return None
+
+    result = []
+    for _, row in df.iterrows():
+        aa3 = row["aa3"]
+        atm_id = row["atm_id"]
+        ambc = row["ambc"]
+
+        label = atm_id if stereospecific and ambc == "1" else METHYL_ATOMS[aa3]["wildcard"]
+
+        result.append(
+            {
+                "pos": row["pos"],
+                "aa3": aa3,
+                "atm_id": label,
+                "val": row["val"],
+            }
+        )
+
+    return result if result else None

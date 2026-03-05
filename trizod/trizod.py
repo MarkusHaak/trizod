@@ -147,6 +147,11 @@ def parse_args():
         action="store_true",
         help="Do not average over Proton groups for HA and HB shifts.",
     )
+    io_grp.add_argument(
+        "--include-methyl-shifts",
+        action="store_true",
+        help="Include Leu/Val methyl shifts (CD*/CG* wildcard convention) in output.",
+    )
 
     filter_defaults_grp = init_parser.add_argument_group("Filter Default Settings")
     filter_defaults_grp.add_argument(
@@ -662,6 +667,7 @@ def fill_row_data(
     fix_outliers=True,
     include_shifts=False,
     no_shift_averaging=False,
+    include_methyl_shifts=False,
 ):
     entry = bmrb_entries.loc[row["entryID"], "entry"]  # row['entry']
     peptide_shifts = entry.get_peptide_shifts()
@@ -716,6 +722,10 @@ def fill_row_data(
     row["bbshift_positions"] = bbshift_positions
     if include_shifts:
         row["bbshifts"] = bbshifts_arr
+    if include_methyl_shifts and seq:
+        row["methyl_shifts"] = bmrb.get_methyl_shifts(
+            shifts, seq, stereospecific=entry.has_stereospecific_methyls
+        )
     # check if keywords are present
     fields = [
         entry.title,
@@ -788,6 +798,7 @@ def create_peptide_dataframe(
     fix_outliers=True,
     include_shifts=False,
     no_shift_averaging=False,
+    include_methyl_shifts=False,
     progress=False,
 ):
     data = []
@@ -815,6 +826,7 @@ def create_peptide_dataframe(
         fix_outliers=fix_outliers,
         include_shifts=include_shifts,
         no_shift_averaging=no_shift_averaging,
+        include_methyl_shifts=include_methyl_shifts,
     )
     df = df.astype(
         dict.fromkeys(
@@ -1009,6 +1021,7 @@ def output_dataset(
     precision,
     include_shifts,
     no_shift_averaging,
+    include_methyl_shifts=False,
 ):
     df["ID"] = df["entryID"] + "_" + df["stID"] + "_" + df["entity_assemID"] + "_" + df["entityID"]
     for score_type in score_types:
@@ -1089,6 +1102,7 @@ def output_dataset(
             ]
             + score_types
             + shifts
+            + (["methyl_shifts"] if include_methyl_shifts and "methyl_shifts" in df.columns else [])
         ]
         dout.to_json(output_prefix + ".json", orient="records", lines=True)
     else:
@@ -1126,6 +1140,7 @@ def main():
         fix_outliers=args.unit_corrections,
         include_shifts=args.include_shifts,
         no_shift_averaging=args.no_shift_averaging,
+        include_methyl_shifts=args.include_methyl_shifts,
         progress=args.progress,
     )
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = prefilter_dataframe(
@@ -1187,6 +1202,7 @@ def main():
         args.precision,
         args.include_shifts,
         args.no_shift_averaging,
+        include_methyl_shifts=args.include_methyl_shifts,
     )
 
 

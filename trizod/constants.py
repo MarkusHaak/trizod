@@ -32,3 +32,9 @@ AA3TO1 = {
 }
 AA1TO3 = {v: k for k, v in AA3TO1.items()}
 CAN_TRANS = str.maketrans("ARNDCQEGHILKMFPSTYWVX", "#####################")
+
+# Methyl group atoms for stereospecific assignment detection
+METHYL_ATOMS = {
+    "LEU": {"stereo": ["CD1", "CD2"], "wildcard": "CD*"},
+    "VAL": {"stereo": ["CG1", "CG2"], "wildcard": "CG*"},
+}
