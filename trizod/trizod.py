@@ -101,6 +101,8 @@ filter_defaults = pd.DataFrame(
         ],
         "max-offset": [np.inf, 3.0, 3.0, 2.0],
         "reject-shift-type-only": [True, True, False, False],
+        "rereferencing": [False, True, True, True],
+        "rereferencing-method": ["global", "lacs", "lacs", "lacs"],
     },
     index=["unfiltered", "tolerant", "moderate", "strict"],
 )
@@ -290,6 +292,24 @@ def parse_args():
         action=argparse.BooleanOptionalAction,
         default=filter_defaults.loc[args_init.filter_defaults, "reject-shift-type-only"],
         help="Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry.",
+    )
+    scores_grp.add_argument(
+        "--rereferencing",
+        action=argparse.BooleanOptionalAction,
+        default=filter_defaults.loc[args_init.filter_defaults, "rereferencing"],
+        help="Apply chemical shift re-referencing before scoring (LACS-inspired).",
+    )
+    scores_grp.add_argument(
+        "--rereferencing-method",
+        choices=["lacs", "global"],
+        default=filter_defaults.loc[args_init.filter_defaults, "rereferencing-method"],
+        help="Re-referencing method: 'lacs' uses CA-CB correlation for 13C, 'global' uses per-atom means.",
+    )
+    scores_grp.add_argument(
+        "--max-reref-offset",
+        type=float,
+        default=5.0,
+        help="Maximum acceptable re-referencing correction in ppm.",
     )
     scores_grp.add_argument(
         "--precision",
@@ -848,6 +868,9 @@ def compute_scores(
     reject_shift_type_only=False,
     # min_backbone_shift_types=1, min_backbone_shift_positions=1, min_backbone_shift_fraction=0.,
     cache_dir=None,
+    rereferencing=False,
+    rereferencing_method="lacs",
+    max_reref_offset=5.0,
 ):
     if score_types is None:
         score_types = ["zscores"]
@@ -855,6 +878,7 @@ def compute_scores(
     wSCS_cache_fp = os.path.join(
         cache_dir, "wSCS", f"{entry.id}_{stID}_{entity_assemID}_{entityID}.npz"
     )
+    reref_offsets = dict.fromkeys(BBATNS, 0.0)
     if cache_dir and os.path.exists(wSCS_cache_fp):
         try:
             z = np.load(wSCS_cache_fp)
@@ -873,6 +897,8 @@ def compute_scores(
                 dict(zip(BBATNS, offf)),
                 dict(zip(BBATNS, off0)),
             )
+            if "reref" in z:
+                reref_offsets = dict(zip(BBATNS, z["reref"]))
         except Exception as e:
             logging.getLogger("trizod").debug(
                 f"cache file {wSCS_cache_fp} corrupt or formatted wrong, delete and repeat computation: {e}"
@@ -897,7 +923,14 @@ def compute_scores(
             )
             raise ZscoreComputationError from e
         start_time = time.time()
-        ret = scoring.get_offset_corrected_wscs(seq, shifts, predshiftdct)
+        ret = scoring.get_offset_corrected_wscs(
+            seq,
+            shifts,
+            predshiftdct,
+            rereferencing=rereferencing,
+            rereferencing_method=rereferencing_method,
+            max_reref_offset=max_reref_offset,
+        )
         if ret is None:
             logging.getLogger("trizod").error(
                 f"TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs."
@@ -905,7 +938,7 @@ def compute_scores(
             raise ZscoreComputationError
         else:
             exe_times[1] = time.time() - start_time
-        shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
+        shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0, reref_offsets = ret
         if cache_dir:
             np.savez(
                 wSCS_cache_fp,
@@ -918,6 +951,7 @@ def compute_scores(
                 ashwi0=ashwi0,
                 ol0=ol0,
                 off0=np.array([off0[at] for at in BBATNS]),
+                reref=np.array([reref_offsets[at] for at in BBATNS]),
             )
     offsets = offf
     if not offset_correction:
@@ -951,7 +985,7 @@ def compute_scores(
             [np.full((cmp_mask.shape[0],), np.nan) for i in range(len(score_types))],
             np.full((cmp_mask.shape[0],), np.nan),
         )
-    return scores, k, cmp_mask, offsets, exe_times
+    return scores, k, cmp_mask, offsets, exe_times, reref_offsets
 
 
 def compute_scores_row(
@@ -961,6 +995,9 @@ def compute_scores_row(
     max_offset=np.inf,
     reject_shift_type_only=False,
     cache_dir=None,
+    rereferencing=False,
+    rereferencing_method="lacs",
+    max_reref_offset=5.0,
 ):
     if score_types is None:
         score_types = ["zscores"]
@@ -968,7 +1005,7 @@ def compute_scores_row(
         return row
     try:
         start_time = time.time()
-        scores, k, cmp_mask, offsets, exe_times = compute_scores(
+        scores, k, cmp_mask, offsets, exe_times, reref_offsets = compute_scores(
             bmrb_entries.loc[row["entryID"], "entry"],
             row["stID"],
             row["entity_assemID"],
@@ -982,6 +1019,9 @@ def compute_scores_row(
             max_offset=max_offset,
             reject_shift_type_only=reject_shift_type_only,
             cache_dir=cache_dir,
+            rereferencing=rereferencing,
+            rereferencing_method=rereferencing_method,
+            max_reref_offset=max_reref_offset,
         )
         for score_type, scores_ in zip(score_types, scores):
             row[score_type] = scores_
@@ -989,6 +1029,8 @@ def compute_scores_row(
         # row['cmp_mask'] = cmp_mask
         for at in BBATNS:
             row[f"off_{at}"] = offsets[at]
+        for at in BBATNS:
+            row[f"reref_{at}"] = reref_offsets[at]
         row["total_bbshifts_post"] = np.sum(cmp_mask)
         row["bbshift_types_post"] = np.any(cmp_mask, axis=0).sum()
         row["bbshift_positions_post"] = np.any(cmp_mask, axis=1).sum()
@@ -1154,6 +1196,9 @@ def main():
         max_offset=args.max_offset,
         reject_shift_type_only=args.reject_shift_type_only,
         cache_dir=args.cache_dir,
+        rereferencing=args.rereferencing,
+        rereferencing_method=args.rereferencing_method,
+        max_reref_offset=args.max_reref_offset,
     )
     if args.progress:
         print()  # prevents overwriting last line of progress bars

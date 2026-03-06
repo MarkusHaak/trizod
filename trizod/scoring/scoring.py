@@ -7,6 +7,7 @@ import scipy
 
 import trizod.bmrb.bmrb as bmrb
 from trizod.constants import BBATNS, REFINED_WEIGHTS  # , Z_CORRECTION
+from trizod.referencing import apply_rereferencing, estimate_reference_offsets, validate_offsets
 
 
 def conv_chi2_cdf(rss, k):
@@ -189,7 +190,14 @@ def convert_to_triplet_data(ashwi_, mask):
     return ashwi3, k3
 
 
-def get_offset_corrected_wscs(seq, shifts, predshiftdct):
+def get_offset_corrected_wscs(
+    seq,
+    shifts,
+    predshiftdct,
+    rereferencing=False,
+    rereferencing_method="lacs",
+    max_reref_offset=5.0,
+):
     # get polymer sequence and chemical backbone shifts
     ret = bmrb.get_valid_bbshifts(shifts, seq)
     if ret is None:
@@ -204,6 +212,19 @@ def get_offset_corrected_wscs(seq, shifts, predshiftdct):
         logging.getLogger("trizod.scoring").error("no comparable backbone shifts")
         return
     logging.getLogger("trizod.scoring").info(f"total number of backbone shifts: {totbbsh}")
+
+    # Optional re-referencing: correct systematic spectrometer referencing errors
+    reref_offsets = dict.fromkeys(BBATNS, 0.0)
+    if rereferencing:
+        raw_offsets = estimate_reference_offsets(cmparr, cmp_mask, method=rereferencing_method)
+        reref_offsets = validate_offsets(
+            raw_offsets,
+            cmparr,
+            cmp_mask,
+            max_offset=max_reref_offset,
+        )
+        if any(v != 0.0 for v in reref_offsets.values()):
+            cmparr = apply_rereferencing(cmparr, cmp_mask, reref_offsets)
 
     off0 = dict.fromkeys(BBATNS, 0.0)
     shw0, ashwi0 = get_std_norm_diffs(cmparr, cmp_mask, off0)
@@ -232,4 +253,4 @@ def get_offset_corrected_wscs(seq, shifts, predshiftdct):
             olf = olc
 
     shwf, ashwif = get_std_norm_diffs(cmparr, cmp_mask, offf)
-    return shwf, ashwif, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0
+    return shwf, ashwif, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0, reref_offsets
