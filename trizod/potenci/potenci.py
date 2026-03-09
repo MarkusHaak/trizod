@@ -5,27 +5,26 @@
 # original taken from https://github.com/protein-nmr/POTENCI on 03.05.2023, commit 17dd2e6f3733c702323894697238c87e6723f934
 # original version (filename): pytenci1_3.py
 
-import sys
-import string
-from scipy.special import erfc
-from scipy.optimize import curve_fit
-from scipy import sparse
-import numpy as np
-import pandas as pd
-import os
 import csv
-from trizod.potenci.constants import R, e, a, b, cutoff, ncycles, pK0
 import logging
-import pkgutil
-from io import StringIO
+import os
+
+import numpy as np
+from scipy.optimize import curve_fit
+from scipy.special import erfc
+
+from trizod.potenci.constants import R, a, b, cutoff, e, ncycles, pK0
 
 outer_matrices = []
 alltuples_ = []
-for smallN in range(0,6):
-    alltuples = np.array([[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))])
-    outerm = np.array([np.outer(c,c) for c in alltuples])
+for smallN in range(0, 6):
+    alltuples = np.array(
+        [[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))]
+    )
+    outerm = np.array([np.outer(c, c) for c in alltuples])
     outer_matrices.append(outerm)
     alltuples_.append(alltuples)
+
 
 def smallmatrixlimits(ires, cutoff, len):
     ileft = max(1, ires - cutoff)
@@ -33,6 +32,7 @@ def smallmatrixlimits(ires, cutoff, len):
     if iright == len:
         ileft = max(1, iright - 2 * cutoff)
     return (ileft, iright)
+
 
 def smallmatrixpos(ires, cutoff, len):
     resi = cutoff + 1
@@ -42,98 +42,118 @@ def smallmatrixpos(ires, cutoff, len):
         resi = min(len, 2 * cutoff + 1) - (len - ires)
     return resi
 
+
 def fun(pH, pK, nH):
-    #return (10 ** ( nH*(pK - pH) ) ) / (1. + (10 **( nH*(pK - pH) ) ) )
-    return 1. - 1. / ((10 ** ( nH*(pK - pH) ) ) + 1.) # identical
+    # return (10 ** ( nH*(pK - pH) ) ) / (1. + (10 **( nH*(pK - pH) ) ) )
+    return 1.0 - 1.0 / ((10 ** (nH * (pK - pH))) + 1.0)  # identical
+
 
 def log_fun(pH, pK, nH):
-    return -np.log10(1 + 10**(nH*(pH - pK)))
+    return -np.log10(1 + 10 ** (nH * (pH - pK)))
 
-def W(r,Ion=0.1):
-    k = np.sqrt(Ion) / 3.08 #Ion=0.1 is default
+
+def W(r, Ion=0.1):
+    k = np.sqrt(Ion) / 3.08  # Ion=0.1 is default
     x = k.astype(np.float64) * r.astype(np.float64) / np.sqrt(6)
     i1 = 332.286 * np.sqrt(6 / np.pi)
     i2_3 = erfc(x)
     i2_2 = np.sqrt(np.pi) * x
 
-    i3 = (e * r)
-    i4 = np.exp(((x ** 2) - np.log(i3))) # always equal to np.exp(x ** 2) / (e * r), but intermediates are smaller
-    i4 = np.nan_to_num(i4) # to convert inf values to the largest possible value
+    i3 = e * r
+    i4 = np.exp(
+        (x**2) - np.log(i3)
+    )  # always equal to np.exp(x ** 2) / (e * r), but intermediates are smaller
+    i4 = np.nan_to_num(i4)  # to convert inf values to the largest possible value
     return i1 * ((1 / i3) - np.nan_to_num(i4 * i2_2 * i2_3))
 
-def w2logp(x,T=293.15):
+
+def w2logp(x, T=293.15):
     return x * 4181.2 / (R * T * np.log(10))
 
+
 def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
-    #pH range
+    # pH range
     pHs = np.arange(1.99, 10.01, 0.15)
 
-    pos = np.array([i for i in range(len(seq)) if seq[i] in pK0.keys()])
+    pos = np.array([i for i in range(len(seq)) if seq[i] in pK0])
     N = pos.shape[0]
     I = np.diag(np.ones(N))
-    sites = ''.join([seq[i] for i in pos])
-    neg = np.array([i for i in range(len(sites)) if sites[i] in 'DEYc'])
+    sites = "".join([seq[i] for i in pos])
+    neg = np.array([i for i in range(len(sites)) if sites[i] in "DEYc"])
     l = np.array([abs(pos - pos[i]) for i in range(N)])
     d = a + np.sqrt(l) * b
 
-    tmp = W(d,Ion)
+    tmp = W(d, Ion)
     tmp[I == 1] = 0
 
-    ww = w2logp(tmp,T) / 2
+    ww = w2logp(tmp, T) / 2
 
     chargesempty = np.zeros(pos.shape[0])
-    if len(neg): chargesempty[neg] = -1
+    if len(neg):
+        chargesempty[neg] = -1
 
     pK0s = np.array([pK0[c] for c in sites])
     nH0s = np.array([0.9 for c in sites])
 
-    titration = np.zeros((N,len(pHs)))
+    titration = np.zeros((N, len(pHs)))
 
     smallN = min(2 * cutoff + 1, len(pos))
     alltuples = alltuples_[smallN]
     outerm = outer_matrices[smallN]
     gmatrix = [np.zeros((smallN, smallN)) for _ in range(len(pHs))]
 
-    #perform iterative fitting.........................
+    # perform iterative fitting.........................
     for icycle in range(ncycles):
         ##print (icycle)
 
         if icycle == 0:
-            fractionhold = np.array([[fun(pHs[p], pK0s[i], nH0s[i]) for i in range(N)] for p in range(len(pHs))])
+            fractionhold = np.array(
+                [
+                    [fun(pHs[p], pK0s[i], nH0s[i]) for i in range(N)]
+                    for p in range(len(pHs))
+                ]
+            )
         else:
             fractionhold = titration.transpose()
 
-        for ires in range(1, N+1):
-            (ileft,iright) = smallmatrixlimits(ires, cutoff, N)
+        for ires in range(1, N + 1):
+            (ileft, iright) = smallmatrixlimits(ires, cutoff, N)
             resi = smallmatrixpos(ires, cutoff, N)
             fraction = fractionhold.copy()
-            fraction[:,ileft - 1:iright] = 0
+            fraction[:, ileft - 1 : iright] = 0
             charges = fraction + chargesempty
             ww0 = 2 * (ww * np.expand_dims(charges, axis=1)).sum(axis=-1)
-            ww0 = (np.expand_dims(ww0, 1) * I) # array of diagonal matrices
-            gmatrixfull = (ww + ww0 + np.expand_dims(pHs,(1,2)) * I - np.diag(pK0s))
+            ww0 = np.expand_dims(ww0, 1) * I  # array of diagonal matrices
+            gmatrixfull = ww + ww0 + np.expand_dims(pHs, (1, 2)) * I - np.diag(pK0s)
             gmatrix = gmatrixfull[:, ileft - 1 : iright, ileft - 1 : iright]
 
-            E = (10 ** -(np.expand_dims(gmatrix, axis=1) * outerm).sum(axis=(2,3)))#.sum(axis=-1)
+            E = 10 ** -(np.expand_dims(gmatrix, axis=1) * outerm).sum(
+                axis=(2, 3)
+            )  # .sum(axis=-1)
             E_all = E.sum(axis=-1)
-            E_sel = E[:,(alltuples[:,resi-1] == 1)].sum(axis=-1)
-            titration[ires-1] = E_sel/E_all
-        sol = np.array([curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0] for p in range(len(pK0s))])
+            E_sel = E[:, (alltuples[:, resi - 1] == 1)].sum(axis=-1)
+            titration[ires - 1] = E_sel / E_all
+        sol = np.array(
+            [
+                curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0]
+                for p in range(len(pK0s))
+            ]
+        )
         (pKs, nHs) = sol.transpose()
 
-    dct={}
-    for p,i in enumerate(pos):
-        dct[i-1]=(pKs[p],nHs[p],seq[i])
+    dct = {}
+    for p, i in enumerate(pos):
+        dct[i - 1] = (pKs[p], nHs[p], seq[i])
 
     return dct
 
 
 ##--------------- POTENCI core code and data tables from here -----------------
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-#AAstandard='ACDEFGHIKLMNPQRSTVY'
-AAstandard='ACDEFGHIKLMNPQRSTVWY'
+# AAstandard='ACDEFGHIKLMNPQRSTVY'
+AAstandard = "ACDEFGHIKLMNPQRSTVWY"
 
 
 def _load_csv(filename):
@@ -144,55 +164,55 @@ def _load_csv(filename):
 
 
 def initcorcents():
-    rows = _load_csv('centshifts.csv')
-    aas = ['C', 'CA', 'CB', 'N', 'H', 'HA', 'HB']
+    rows = _load_csv("centshifts.csv")
+    aas = ["C", "CA", "CB", "N", "H", "HA", "HB"]
     dct = {}
     for row in rows:
-        aa = row['aa']
+        aa = row["aa"]
         dct[aa] = {}
         for atn in aas:
             val = row[atn]
-            dct[aa][atn] = None if val == 'None' else float(val)
+            dct[aa][atn] = None if val == "None" else float(val)
     return dct
 
 
 def initcorneis():
     dct = {}
     # Load neighbor corrections
-    for row in _load_csv('neicorrs.csv'):
-        atn = row['atn']
-        aa = row['aa']
+    for row in _load_csv("neicorrs.csv"):
+        atn = row["atn"]
+        aa = row["aa"]
         if aa not in dct:
             dct[aa] = {}
-        dct[aa][atn] = [float(row[f'c{j}']) for j in range(4)]
+        dct[aa][atn] = [float(row[f"c{j}"]) for j in range(4)]
     # Load terminal corrections
-    for row in _load_csv('termcorrs.csv'):
-        atn = row['atn']
-        term = row['term']
-        val = float(row['value'])
+    for row in _load_csv("termcorrs.csv"):
+        atn = row["atn"]
+        term = row["term"]
+        val = float(row["value"])
         if term not in dct:
             dct[term] = {}
-        if term == 'n':
-            dct['n'][atn] = [None, None, None, val]
-        elif term == 'c':
-            dct['c'][atn] = [val, None, None, None]
+        if term == "n":
+            dct["n"][atn] = [None, None, None, val]
+        elif term == "c":
+            dct["c"][atn] = [val, None, None, None]
     return dct
 
 
 def gettempkoeff():
-    rows = _load_csv('tempcoeffs.csv')
-    headers = [k for k in rows[0].keys() if k != 'aa']
+    rows = _load_csv("tempcoeffs.csv")
+    headers = [k for k in rows[0] if k != "aa"]
     dct = {}
     for atn in headers:
         dct[atn] = {}
     for row in rows:
-        aa = row['aa']
+        aa = row["aa"]
         for atn in headers:
             dct[atn][aa] = float(row[atn])
     return dct
 
 
-tablephshifts='''
+tablephshifts = """
 D (pKa 3.86)
 D H  8.55 8.38 -0.17 0.02 -0.03
 D HA 4.78 4.61 -0.17 0.01 -0.01
@@ -283,217 +303,255 @@ R CZ 159.6 163.5 4.0
 R C 185.8 186.1 0.2
 R N 122.4 122.8 0.4
 R NE 85.6 91.5 5.9
-R NG 71.2 93.2 22'''
+R NG 71.2 93.2 22"""
 
 
 def initcorrcomb():
     dct = {}
-    for row in _load_csv('combdevs.csv'):
-        atn = row['atn']
+    for row in _load_csv("combdevs.csv"):
+        atn = row["atn"]
         if atn not in dct:
             dct[atn] = {}
-        segment = row['segment']
-        key = (int(row['neipos']), row['centgroup'], row['neigroup'])
-        dct[atn][segment] = key, float(row['value'])
+        segment = row["segment"]
+        key = (int(row["neipos"]), row["centgroup"], row["neigroup"])
+        dct[atn][segment] = key, float(row["value"])
     return dct
 
 
-TEMPCORRS=gettempkoeff()
-CENTSHIFTS=initcorcents()
-NEICORRS =initcorneis()
-COMBCORRS=initcorrcomb()
+TEMPCORRS = gettempkoeff()
+CENTSHIFTS = initcorcents()
+NEICORRS = initcorneis()
+COMBCORRS = initcorrcomb()
 
 
-def predPentShift(pent,atn):
-    aac=pent[2]
-    sh=CENTSHIFTS[aac][atn]
-    allneipos=[2,1,-1,-2]
+def predPentShift(pent, atn):
+    aac = pent[2]
+    sh = CENTSHIFTS[aac][atn]
+    allneipos = [2, 1, -1, -2]
     for i in range(4):
-        aai=pent[2+allneipos[i]]
+        aai = pent[2 + allneipos[i]]
         if aai in NEICORRS:
-            corr=NEICORRS[aai][atn][i]
-            sh+=corr
-    groups=['G','P','FYW','LIVMCA','KR','DE']##,'NQSTHncX']
-    labels='GPra+-p' #(Gly,Pro,Arom,Aliph,pos,neg,polar)
-    grstr=''
+            corr = NEICORRS[aai][atn][i]
+            sh += corr
+    groups = ["G", "P", "FYW", "LIVMCA", "KR", "DE"]  ##,'NQSTHncX']
+    labels = "GPra+-p"  # (Gly,Pro,Arom,Aliph,pos,neg,polar)
+    grstr = ""
     for i in range(5):
-        aai=pent[i]
-        found=False
-        for j,gr in enumerate(groups):
+        aai = pent[i]
+        found = False
+        for j, gr in enumerate(groups):
             if aai in gr:
-                grstr+=labels[j]
-                found=True
+                grstr += labels[j]
+                found = True
                 break
-        if not found:grstr+='p'#polar
-    centgr=grstr[2]
+        if not found:
+            grstr += "p"  # polar
+    centgr = grstr[2]
     for segm in COMBCORRS[atn]:
-        key,combval=COMBCORRS[atn][segm]
-        neipos,centgroup,neigroup=key#(k,l,m)
-        if centgroup==centgr and grstr[2+neipos]==neigroup:
-            if (centgr,neigroup)!=('p','p') or pent[2] in 'ST':
-                #pp comb only used when center is Ser or Thr!
-                sh+=combval
+        key, combval = COMBCORRS[atn][segm]
+        neipos, centgroup, neigroup = key  # (k,l,m)
+        if (
+            centgroup == centgr
+            and grstr[2 + neipos] == neigroup
+            and ((centgr, neigroup) != ("p", "p") or pent[2] in "ST")
+        ):
+            # pp comb only used when center is Ser or Thr!
+            sh += combval
     return sh
 
-def gettempcorr(aai,atn,tempdct,temp):
-    return tempdct[atn][aai]/1000*(temp-298)
+
+def gettempcorr(aai, atn, tempdct, temp):
+    return tempdct[atn][aai] / 1000 * (temp - 298)
+
 
 def _parse_phshift_val(s):
     """Parse a pH shift value, treating 'na' as None."""
-    if s == 'na':
+    if s == "na":
         return None
     return float(s)
 
+
 def get_phshifts():
-    datc=tablephshifts.split('\n')
-    buf=[lin.split() for lin in datc]
-    dct={}
+    datc = tablephshifts.split("\n")
+    buf = [lin.split() for lin in datc]
+    dct = {}
     for lin in buf:
-        if len(lin)>3:
-            resn=lin[0]
-            atn=lin[1]
-            sh0=_parse_phshift_val(lin[2])
-            sh1=_parse_phshift_val(lin[3])
-            shd=_parse_phshift_val(lin[4])
-            if not resn in dct:dct[resn]={}
-            dct[resn][atn]=shd
-            if len(lin)>6:#neighbor data
+        if len(lin) > 3:
+            resn = lin[0]
+            atn = lin[1]
+            _parse_phshift_val(lin[2])
+            _parse_phshift_val(lin[3])
+            shd = _parse_phshift_val(lin[4])
+            if resn not in dct:
+                dct[resn] = {}
+            dct[resn][atn] = shd
+            if len(lin) > 6:  # neighbor data
                 for n in range(2):
-                    shdn=float(lin[5+n])
-                    nresn=resn+'ps'[n]
-                    if not nresn in dct:dct[nresn]={}
-                    dct[nresn][atn]=shdn
+                    shdn = float(lin[5 + n])
+                    nresn = resn + "ps"[n]
+                    if nresn not in dct:
+                        dct[nresn] = {}
+                    dct[nresn][atn] = shdn
     return dct
 
+
 def initfilcsv(filename):
-    file=open(filename,'r')
-    buffer=file.readlines()
+    file = open(filename)
+    buffer = file.readlines()
     file.close()
     for i in range(len(buffer)):
-        buffer[i]=buffer[i][:-1].split(',')
+        buffer[i] = buffer[i][:-1].split(",")
     return buffer
 
-def write_csv_pkaoutput(pkadct,seq,temperature,ion):
-        seq=seq[:min(150,len(seq))]
-        name='outpepKalc_%s_T%6.2f_I%4.2f.csv'%(seq,temperature,ion)
-        out=open(name,'w')
-        out.write('Site,pKa value,pKa shift,Hill coefficient\n')
-        for i in pkadct:
-            pKa,nH,resi=pkadct[i]
-            reskey=resi+str(i+1)
-            diff=pKa-pK0[resi]
-            out.write('%s,%5.3f,%5.3f,%5.3f\n'%(reskey,pKa,diff,nH))
-        out.close()
 
-def read_csv_pkaoutput(seq,temperature,ion,name=None):
-    seq=seq[:min(150,len(seq))]
-    logging.getLogger('trizod.potenci').debug(f'reading csv {name}')
-    if name==None:name='outpepKalc_%s_T%6.2f_I%4.2f.csv'%(seq,temperature,ion)
-    try:out=open(name,'r')
-    except IOError:return None
-    buf=initfilcsv(name)
-    for lnum,data in enumerate(buf):
-        if len(data)>0 and data[0]=='Site':break
-    pkadct={}
-    for data in buf[lnum+1:]:
-        reskey,pKa,diff,nH=data
-        i=int(reskey[1:])-1
-        resi=reskey[0]
-        pKaval=float(pKa)
-        nHval=float(nH)
-        pkadct[i]=pKaval,nHval,resi
+def write_csv_pkaoutput(pkadct, seq, temperature, ion):
+    seq = seq[: min(150, len(seq))]
+    name = f"outpepKalc_{seq}_T{temperature:6.2f}_I{ion:4.2f}.csv"
+    out = open(name, "w")
+    out.write("Site,pKa value,pKa shift,Hill coefficient\n")
+    for i in pkadct:
+        pKa, nH, resi = pkadct[i]
+        reskey = resi + str(i + 1)
+        diff = pKa - pK0[resi]
+        out.write(f"{reskey},{pKa:5.3f},{diff:5.3f},{nH:5.3f}\n")
+    out.close()
+
+
+def read_csv_pkaoutput(seq, temperature, ion, name=None):
+    seq = seq[: min(150, len(seq))]
+    logging.getLogger("trizod.potenci").debug(f"reading csv {name}")
+    if name is None:
+        name = f"outpepKalc_{seq}_T{temperature:6.2f}_I{ion:4.2f}.csv"
+    try:
+        open(name)
+    except OSError:
+        return None
+    buf = initfilcsv(name)
+    for lnum, data in enumerate(buf):  # noqa: B007
+        if len(data) > 0 and data[0] == "Site":
+            break
+    pkadct = {}
+    for data in buf[lnum + 1 :]:
+        reskey, pKa, diff, nH = data
+        i = int(reskey[1:]) - 1
+        resi = reskey[0]
+        pKaval = float(pKa)
+        nHval = float(nH)
+        pkadct[i] = pKaval, nHval, resi
     return pkadct
 
-def getphcorrs(seq,temperature,pH,ion,pkacsvfilename=None):
-    bbatns=['C','CA','CB','HA','H','N','HB']
-    dct=get_phshifts()
-    Ion=max(0.0001,ion)
-    if pkacsvfilename == False:
-        pkadct=None
+
+def getphcorrs(seq, temperature, pH, ion, pkacsvfilename=None):
+    bbatns = ["C", "CA", "CB", "HA", "H", "N", "HB"]
+    dct = get_phshifts()
+    Ion = max(0.0001, ion)
+    if not pkacsvfilename:
+        pkadct = None
     else:
-        pkadct=read_csv_pkaoutput(seq,temperature,ion,pkacsvfilename)
-    if pkadct==None:
-        pkadct=calc_pkas_from_seq('n'+seq+'c',temperature,Ion)
-        if pkacsvfilename != False:
-            write_csv_pkaoutput(pkadct,seq,temperature,ion)
-    outdct={}
+        pkadct = read_csv_pkaoutput(seq, temperature, ion, pkacsvfilename)
+    if pkadct is None:
+        pkadct = calc_pkas_from_seq("n" + seq + "c", temperature, Ion)
+        if pkacsvfilename:
+            write_csv_pkaoutput(pkadct, seq, temperature, ion)
+    outdct = {}
     for i in pkadct:
-        logging.getLogger('trizod.potenci').debug('pkares: %6.3f %6.3f %1s'%pkadct[i] + str(i))
-        pKa,nH,resi=pkadct[i]
-        frac =fun(pH,pKa,nH)
-        frac7=fun(7.0,pK0[resi],nH)
-        if resi in 'nc':jump=0.0#so far
+        logging.getLogger("trizod.potenci").debug(
+            f"pkares: {pkadct[i][0]:6.3f} {pkadct[i][1]:6.3f} {pkadct[i][2]:1s}{i}"
+        )
+        pKa, nH, resi = pkadct[i]
+        frac = fun(pH, pKa, nH)
+        frac7 = fun(7.0, pK0[resi], nH)
+        if resi in "nc":
+            jump = 0.0  # so far
         else:
             for atn in bbatns:
-                if not atn in outdct:outdct[atn]={}
-                logging.getLogger('trizod.potenci').debug(f'data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}')
-                dctresi=dct[resi]
+                if atn not in outdct:
+                    outdct[atn] = {}
+                logging.getLogger("trizod.potenci").debug(
+                    f"data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}"
+                )
+                dctresi = dct[resi]
                 try:
-                    delta=dctresi[atn]
+                    delta = dctresi[atn]
                     # delta = PHSHIFTS.loc[(resi,atn), 'shd']
-                    jump =frac *delta
-                    jump7=frac7*delta
-                    key=(resi,atn)
+                    jump = frac * delta
+                    jump7 = frac7 * delta
                 except KeyError:
                     ##if not (resi in 'RKCY' and atn=='H') and not (resi == 'R' and atn=='N'):
-                    logging.getLogger('trizod.potenci').warning(f'no key: {resi}, {i}, {atn}')
-                    delta=999;jump=999;jump7=999
-                if delta<99:
-                    jumpdelta=jump-jump7
-                    if not i in outdct[atn]:outdct[atn][i]=[resi,jumpdelta]
+                    logging.getLogger("trizod.potenci").warning(
+                        f"no key: {resi}, {i}, {atn}"
+                    )
+                    delta = 999
+                    jump = 999
+                    jump7 = 999
+                if delta < 99:
+                    jumpdelta = jump - jump7
+                    if i not in outdct[atn]:
+                        outdct[atn][i] = [resi, jumpdelta]
                     else:
-                        outdct[atn][i][0]=resi
-                        outdct[atn][i][1]+=jumpdelta
-                    logging.getLogger('trizod.potenci').debug('%3s %5.2f %6.4f %s %3d %5s %8.5f %8.5f %4.2f'%(atn,pKa,nH,resi,i,atn,jump,jump7,pH))
-                    if resi+'p' in dct and atn in dct[resi+'p']:
-                    # if (resi+'p', atn) in PHSHIFTS.index:
+                        outdct[atn][i][0] = resi
+                        outdct[atn][i][1] += jumpdelta
+                    logging.getLogger("trizod.potenci").debug(
+                        f"{atn:3s} {pKa:5.2f} {nH:6.4f} {resi} {i:3d} {atn:5s} {jump:8.5f} {jump7:8.5f} {pH:4.2f}"
+                    )
+                    if resi + "p" in dct and atn in dct[resi + "p"]:
+                        # if (resi+'p', atn) in PHSHIFTS.index:
                         for n in range(2):
-                            ni=i+2*n-1
+                            ni = i + 2 * n - 1
                             ##if ni is somewhere in seq...
-                            nresi=resi+'ps'[n]
-                            ndelta=dct[nresi][atn]
+                            nresi = resi + "ps"[n]
+                            ndelta = dct[nresi][atn]
                             # ndelta = PHSHIFTS.loc[(nresi,atn), 'shd']
-                            jump =frac *ndelta
-                            jump7=frac7*ndelta
-                            jumpdelta=jump-jump7
-                            if not ni in outdct[atn]:outdct[atn][ni]=[None,jumpdelta]
-                            else:outdct[atn][ni][1]+=jumpdelta
+                            jump = frac * ndelta
+                            jump7 = frac7 * ndelta
+                            jumpdelta = jump - jump7
+                            if ni not in outdct[atn]:
+                                outdct[atn][ni] = [None, jumpdelta]
+                            else:
+                                outdct[atn][ni][1] += jumpdelta
     return outdct
 
-def getpredshifts(seq,temperature,pH,ion,usephcor=True,pkacsvfile=None,identifier=''):
-    tempdct=gettempkoeff()
-    bbatns = ['C','CA','CB','HA','H','N','HB']
-    if usephcor:
-        phcorrs=getphcorrs(seq,temperature,pH,ion,pkacsvfile)
-    else:
-        phcorrs={}
-    shiftdct={}
-    for i in range(1,len(seq)-1):
-        if seq[i] in AAstandard:#else: do nothing
-            res=str(i+1)
-            trip=seq[i-1]+seq[i]+seq[i+1]
-            phcorr=None
-            shiftdct[(i+1,seq[i])]={}
+
+def getpredshifts(
+    seq, temperature, pH, ion, usephcor=True, pkacsvfile=None, identifier=""
+):
+    tempdct = gettempkoeff()
+    bbatns = ["C", "CA", "CB", "HA", "H", "N", "HB"]
+    phcorrs = getphcorrs(seq, temperature, pH, ion, pkacsvfile) if usephcor else {}
+    shiftdct = {}
+    for i in range(1, len(seq) - 1):
+        if seq[i] in AAstandard:  # else: do nothing
+            str(i + 1)
+            trip = seq[i - 1] + seq[i] + seq[i + 1]
+            phcorr = None
+            shiftdct[(i + 1, seq[i])] = {}
             for at in bbatns:
-                if not (trip[1],at) in [('G','CB'),('G','HB'),('P','H')]:
+                if (trip[1], at) not in [("G", "CB"), ("G", "HB"), ("P", "H")]:
                     if i == 1:
-                        pent = 'n'      + trip + seq[i+2]
-                    elif i==len(seq)-2:
-                        pent = seq[i-2] + trip + 'c'
+                        pent = "n" + trip + seq[i + 2]
+                    elif i == len(seq) - 2:
+                        pent = seq[i - 2] + trip + "c"
                     else:
-                        pent = seq[i-2] + trip + seq[i+2]
-                    shp=predPentShift(pent,at)
-                    if shp!=None:
-                        if at!='HB':shp+=gettempcorr(trip[1],at,tempdct,temperature)
+                        pent = seq[i - 2] + trip + seq[i + 2]
+                    shp = predPentShift(pent, at)
+                    if shp is not None:
+                        if at != "HB":
+                            shp += gettempcorr(trip[1], at, tempdct, temperature)
                         if at in phcorrs and i in phcorrs[at]:
-                            phdata=phcorrs[at][i]
-                            resi=phdata[0]
+                            phdata = phcorrs[at][i]
+                            resi = phdata[0]
                             ##assert resi==seq[i]
-                            if seq[i] in 'CDEHRKY' and resi != seq[i]:
-                                logging.getLogger('trizod.potenci').warning(f'residue mismatch: {resi},{seq[i]},{i},{phdata},{at}')
-                            phcorr=phdata[1]
-                            if abs(phcorr)<9.9:
-                                shp-=phcorr
-                        shiftdct[(i+1,seq[i])][at]=shp
-                        logging.getLogger('trizod.potenci').debug('predictedshift: %5s %3d %1s %2s %8.4f'%(identifier,i,seq[i],at,shp) + ' ' + str(phcorr))
+                            if seq[i] in "CDEHRKY" and resi != seq[i]:
+                                logging.getLogger("trizod.potenci").warning(
+                                    f"residue mismatch: {resi},{seq[i]},{i},{phdata},{at}"
+                                )
+                            phcorr = phdata[1]
+                            if abs(phcorr) < 9.9:
+                                shp -= phcorr
+                        shiftdct[(i + 1, seq[i])][at] = shp
+                        logging.getLogger("trizod.potenci").debug(
+                            f"predictedshift: {identifier:5s} {i:3d} {seq[i]:1s} {at:2s} {shp:8.4f}"
+                            + " "
+                            + str(phcorr)
+                        )
     return shiftdct
