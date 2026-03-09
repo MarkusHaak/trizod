@@ -1,9 +1,12 @@
-#!/bin/bash python3
+"""POTENCI — random coil chemical shift prediction for proteins.
 
-# version of the POTENCI script, adapted by haak@rostlab.org
-# original by fmulder@chem.au.dk
-# original taken from https://github.com/protein-nmr/POTENCI on 03.05.2023, commit 17dd2e6f3733c702323894697238c87e6723f934
-# original version (filename): pytenci1_3.py
+Adapted from https://github.com/protein-nmr/POTENCI (commit 17dd2e6).
+Original author: fmulder@chem.au.dk
+Adapted by: haak@rostlab.org
+
+Public API:
+    get_pred_shifts(seq, temperature, pH, ion, ...) -> dict
+"""
 
 import csv
 import logging
@@ -13,147 +16,172 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.special import erfc
 
-from trizod.potenci.constants import R, a, b, cutoff, e, ncycles, pK0
+from trizod.potenci.constants import (
+    DIELECTRIC_WATER,
+    DISTANCE_SCALE,
+    GAS_CONSTANT,
+    MIN_CHARGE_DISTANCE,
+    PKA_FIT_CYCLES,
+    PKA_WINDOW_HALF,
+    REFERENCE_PKA,
+)
 
-outer_matrices = []
-alltuples_ = []
-for smallN in range(0, 6):
-    alltuples = np.array(
-        [[int(c) for c in np.binary_repr(i, smallN)] for i in range(2 ** (smallN))]
+logger = logging.getLogger("trizod.potenci")
+
+# Pre-compute binary tuples and outer-product matrices for pKa calculation.
+# Window size ranges from 0..5; used as sliding window in calc_pkas_from_seq.
+_OUTER_MATRICES = []
+_ALL_TUPLES = []
+for _window_size in range(0, 6):
+    _tuples = np.array(
+        [
+            [int(c) for c in np.binary_repr(i, _window_size)]
+            for i in range(2**_window_size)
+        ]
     )
-    outerm = np.array([np.outer(c, c) for c in alltuples])
-    outer_matrices.append(outerm)
-    alltuples_.append(alltuples)
+    _OUTER_MATRICES.append(np.array([np.outer(c, c) for c in _tuples]))
+    _ALL_TUPLES.append(_tuples)
 
 
-def smallmatrixlimits(ires, cutoff, len):
-    ileft = max(1, ires - cutoff)
-    iright = min(ileft + 2 * cutoff, len)
-    if iright == len:
-        ileft = max(1, iright - 2 * cutoff)
-    return (ileft, iright)
+def _titration_fraction(pH, pK, nH):
+    """Henderson-Hasselbalch titration fraction (used by curve_fit)."""
+    return 1.0 - 1.0 / ((10 ** (nH * (pK - pH))) + 1.0)
 
 
-def smallmatrixpos(ires, cutoff, len):
-    resi = cutoff + 1
-    if ires < cutoff + 1:
-        resi = ires
-    if ires > len - cutoff:
-        resi = min(len, 2 * cutoff + 1) - (len - ires)
-    return resi
+def _debye_huckel_W(r, Ion=0.1):
+    """Electrostatic interaction energy (Debye-Hückel model)."""
+    kappa = np.sqrt(Ion) / 3.08
+    x = kappa.astype(np.float64) * r.astype(np.float64) / np.sqrt(6)
+    prefactor = 332.286 * np.sqrt(6 / np.pi)
+    erfc_x = erfc(x)
+    sqrt_pi_x = np.sqrt(np.pi) * x
+
+    er = DIELECTRIC_WATER * r
+    # Log-space to avoid overflow: exp(x²)/(ε*r) = exp(x² - log(ε*r))
+    exp_term = np.exp((x**2) - np.log(er))
+    exp_term = np.nan_to_num(exp_term)
+    return prefactor * ((1 / er) - np.nan_to_num(exp_term * sqrt_pi_x * erfc_x))
 
 
-def fun(pH, pK, nH):
-    # return (10 ** ( nH*(pK - pH) ) ) / (1. + (10 **( nH*(pK - pH) ) ) )
-    return 1.0 - 1.0 / ((10 ** (nH * (pK - pH))) + 1.0)  # identical
+def _w_to_logp(x, T=293.15):
+    """Convert interaction energy to log-probability shift."""
+    return x * 4181.2 / (GAS_CONSTANT * T * np.log(10))
 
 
-def log_fun(pH, pK, nH):
-    return -np.log10(1 + 10 ** (nH * (pH - pK)))
+def _small_matrix_limits(res_idx, half_window, n_sites):
+    """Get left/right bounds for a sliding window around a residue."""
+    left = max(1, res_idx - half_window)
+    right = min(left + 2 * half_window, n_sites)
+    if right == n_sites:
+        left = max(1, right - 2 * half_window)
+    return (left, right)
 
 
-def W(r, Ion=0.1):
-    k = np.sqrt(Ion) / 3.08  # Ion=0.1 is default
-    x = k.astype(np.float64) * r.astype(np.float64) / np.sqrt(6)
-    i1 = 332.286 * np.sqrt(6 / np.pi)
-    i2_3 = erfc(x)
-    i2_2 = np.sqrt(np.pi) * x
-
-    i3 = e * r
-    i4 = np.exp(
-        (x**2) - np.log(i3)
-    )  # always equal to np.exp(x ** 2) / (e * r), but intermediates are smaller
-    i4 = np.nan_to_num(i4)  # to convert inf values to the largest possible value
-    return i1 * ((1 / i3) - np.nan_to_num(i4 * i2_2 * i2_3))
-
-
-def w2logp(x, T=293.15):
-    return x * 4181.2 / (R * T * np.log(10))
+def _small_matrix_pos(res_idx, half_window, n_sites):
+    """Get position of a residue within its sliding window."""
+    pos = half_window + 1
+    if res_idx < half_window + 1:
+        pos = res_idx
+    if res_idx > n_sites - half_window:
+        pos = min(n_sites, 2 * half_window + 1) - (n_sites - res_idx)
+    return pos
 
 
 def calc_pkas_from_seq(seq=None, T=293.15, Ion=0.1):
-    # pH range
-    pHs = np.arange(1.99, 10.01, 0.15)
+    """Iteratively predict pKa values for titratable residues in a sequence."""
+    ph_values = np.arange(1.99, 10.01, 0.15)
 
-    pos = np.array([i for i in range(len(seq)) if seq[i] in pK0])
-    N = pos.shape[0]
+    titratable_pos = np.array([i for i in range(len(seq)) if seq[i] in REFERENCE_PKA])
+    N = titratable_pos.shape[0]
     I = np.diag(np.ones(N))
-    sites = "".join([seq[i] for i in pos])
-    neg = np.array([i for i in range(len(sites)) if sites[i] in "DEYc"])
-    l = np.array([abs(pos - pos[i]) for i in range(N)])
-    d = a + np.sqrt(l) * b
+    sites = "".join([seq[i] for i in titratable_pos])
+    neg_indices = np.array([i for i in range(len(sites)) if sites[i] in "DEYc"])
+    l = np.array([abs(titratable_pos - titratable_pos[i]) for i in range(N)])
+    d = MIN_CHARGE_DISTANCE + np.sqrt(l) * DISTANCE_SCALE
 
-    tmp = W(d, Ion)
-    tmp[I == 1] = 0
+    w_energies = _debye_huckel_W(d, Ion)
+    w_energies[I == 1] = 0
 
-    ww = w2logp(tmp, T) / 2
+    log_interactions = _w_to_logp(w_energies, T) / 2
 
-    chargesempty = np.zeros(pos.shape[0])
-    if len(neg):
-        chargesempty[neg] = -1
+    base_charges = np.zeros(titratable_pos.shape[0])
+    if len(neg_indices):
+        base_charges[neg_indices] = -1
 
-    pK0s = np.array([pK0[c] for c in sites])
-    nH0s = np.array([0.9 for c in sites])
+    pka_initial = np.array([REFERENCE_PKA[c] for c in sites])
+    hill_initial = np.array([0.9 for c in sites])
 
-    titration = np.zeros((N, len(pHs)))
+    titration = np.zeros((N, len(ph_values)))
 
-    smallN = min(2 * cutoff + 1, len(pos))
-    alltuples = alltuples_[smallN]
-    outerm = outer_matrices[smallN]
-    gmatrix = [np.zeros((smallN, smallN)) for _ in range(len(pHs))]
+    window_size = min(2 * PKA_WINDOW_HALF + 1, len(titratable_pos))
+    tuples = _ALL_TUPLES[window_size]
+    outer_mats = _OUTER_MATRICES[window_size]
+    g_matrix = [np.zeros((window_size, window_size)) for _ in range(len(ph_values))]
 
-    # perform iterative fitting.........................
-    for icycle in range(ncycles):
-        ##print (icycle)
-
-        if icycle == 0:
-            fractionhold = np.array(
+    for cycle in range(PKA_FIT_CYCLES):
+        if cycle == 0:
+            prev_fractions = np.array(
                 [
-                    [fun(pHs[p], pK0s[i], nH0s[i]) for i in range(N)]
-                    for p in range(len(pHs))
+                    [
+                        _titration_fraction(
+                            ph_values[p], pka_initial[i], hill_initial[i]
+                        )
+                        for i in range(N)
+                    ]
+                    for p in range(len(ph_values))
                 ]
             )
         else:
-            fractionhold = titration.transpose()
+            prev_fractions = titration.transpose()
 
-        for ires in range(1, N + 1):
-            (ileft, iright) = smallmatrixlimits(ires, cutoff, N)
-            resi = smallmatrixpos(ires, cutoff, N)
-            fraction = fractionhold.copy()
-            fraction[:, ileft - 1 : iright] = 0
-            charges = fraction + chargesempty
-            ww0 = 2 * (ww * np.expand_dims(charges, axis=1)).sum(axis=-1)
-            ww0 = np.expand_dims(ww0, 1) * I  # array of diagonal matrices
-            gmatrixfull = ww + ww0 + np.expand_dims(pHs, (1, 2)) * I - np.diag(pK0s)
-            gmatrix = gmatrixfull[:, ileft - 1 : iright, ileft - 1 : iright]
+        for res_idx in range(1, N + 1):
+            (left, right) = _small_matrix_limits(res_idx, PKA_WINDOW_HALF, N)
+            window_pos = _small_matrix_pos(res_idx, PKA_WINDOW_HALF, N)
+            fraction = prev_fractions.copy()
+            fraction[:, left - 1 : right] = 0
+            charges = fraction + base_charges
+            interaction_diag = 2 * (
+                log_interactions * np.expand_dims(charges, axis=1)
+            ).sum(axis=-1)
+            interaction_diag = np.expand_dims(interaction_diag, 1) * I
+            g_matrix_full = (
+                log_interactions
+                + interaction_diag
+                + np.expand_dims(ph_values, (1, 2)) * I
+                - np.diag(pka_initial)
+            )
+            g_matrix = g_matrix_full[:, left - 1 : right, left - 1 : right]
 
-            E = 10 ** -(np.expand_dims(gmatrix, axis=1) * outerm).sum(
-                axis=(2, 3)
-            )  # .sum(axis=-1)
+            E = 10 ** -(np.expand_dims(g_matrix, axis=1) * outer_mats).sum(axis=(2, 3))
             E_all = E.sum(axis=-1)
-            E_sel = E[:, (alltuples[:, resi - 1] == 1)].sum(axis=-1)
-            titration[ires - 1] = E_sel / E_all
-        sol = np.array(
+            E_sel = E[:, (tuples[:, window_pos - 1] == 1)].sum(axis=-1)
+            titration[res_idx - 1] = E_sel / E_all
+        fit_results = np.array(
             [
-                curve_fit(fun, pHs, titration[p], [pK0s[p], nH0s[p]], maxfev=5000)[0]
-                for p in range(len(pK0s))
+                curve_fit(
+                    _titration_fraction,
+                    ph_values,
+                    titration[p],
+                    [pka_initial[p], hill_initial[p]],
+                    maxfev=5000,
+                )[0]
+                for p in range(len(pka_initial))
             ]
         )
-        (pKs, nHs) = sol.transpose()
+        (pKs, nHs) = fit_results.transpose()
 
-    dct = {}
-    for p, i in enumerate(pos):
-        dct[i - 1] = (pKs[p], nHs[p], seq[i])
+    result = {}
+    for p, i in enumerate(titratable_pos):
+        result[i - 1] = (pKs[p], nHs[p], seq[i])
 
-    return dct
+    return result
 
 
-##--------------- POTENCI core code and data tables from here -----------------
+# --------------- Data loading and module-level caches -----------------
 
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-# AAstandard='ACDEFGHIKLMNPQRSTVY'
-AAstandard = "ACDEFGHIKLMNPQRSTVWY"
+AA_STANDARD = "ACDEFGHIKLMNPQRSTVWY"
 
 
 def _load_csv(filename):
@@ -163,239 +191,131 @@ def _load_csv(filename):
         return list(csv.DictReader(f))
 
 
-def initcorcents():
+def _load_center_shifts():
     rows = _load_csv("centshifts.csv")
-    aas = ["C", "CA", "CB", "N", "H", "HA", "HB"]
-    dct = {}
+    atom_names = ["C", "CA", "CB", "N", "H", "HA", "HB"]
+    result = {}
     for row in rows:
         aa = row["aa"]
-        dct[aa] = {}
-        for atn in aas:
-            val = row[atn]
-            dct[aa][atn] = None if val == "None" else float(val)
-    return dct
+        result[aa] = {}
+        for atom in atom_names:
+            val = row[atom]
+            result[aa][atom] = None if val == "None" else float(val)
+    return result
 
 
-def initcorneis():
-    dct = {}
-    # Load neighbor corrections
+def _load_neighbor_corrs():
+    result = {}
     for row in _load_csv("neicorrs.csv"):
-        atn = row["atn"]
+        atom = row["atn"]
         aa = row["aa"]
-        if aa not in dct:
-            dct[aa] = {}
-        dct[aa][atn] = [float(row[f"c{j}"]) for j in range(4)]
-    # Load terminal corrections
+        if aa not in result:
+            result[aa] = {}
+        result[aa][atom] = [float(row[f"c{j}"]) for j in range(4)]
     for row in _load_csv("termcorrs.csv"):
-        atn = row["atn"]
+        atom = row["atn"]
         term = row["term"]
         val = float(row["value"])
-        if term not in dct:
-            dct[term] = {}
+        if term not in result:
+            result[term] = {}
         if term == "n":
-            dct["n"][atn] = [None, None, None, val]
+            result["n"][atom] = [None, None, None, val]
         elif term == "c":
-            dct["c"][atn] = [val, None, None, None]
-    return dct
+            result["c"][atom] = [val, None, None, None]
+    return result
 
 
-def gettempkoeff():
+def _load_temp_coeffs():
     rows = _load_csv("tempcoeffs.csv")
     headers = [k for k in rows[0] if k != "aa"]
-    dct = {}
-    for atn in headers:
-        dct[atn] = {}
+    result = {}
+    for atom in headers:
+        result[atom] = {}
     for row in rows:
         aa = row["aa"]
-        for atn in headers:
-            dct[atn][aa] = float(row[atn])
-    return dct
+        for atom in headers:
+            result[atom][aa] = float(row[atom])
+    return result
 
 
-tablephshifts = """
-D (pKa 3.86)
-D H  8.55 8.38 -0.17 0.02 -0.03
-D HA 4.78 4.61 -0.17 0.01 -0.01
-D HB 2.93 2.70 -0.23
-D CA 52.9 54.3 1.4 0.0 0.1
-D CB 38.0 41.1 3.0
-D CG 177.1 180.3 3.2
-D C  175.8 176.9 1.1 -0.2 0.4
-D N  118.7 120.2 1.5  0.3 0.1
-D Np na na 0.1
-E (pKa 4.34)
-E H  8.45 8.57  0.12 0.00 0.02
-E HA 4.39 4.29 -0.10 0.01 0.00
-E HB 2.08 2.02 -0.06
-E HG 2.49 2.27 -0.22
-E CA 56.0 56.9 1.0 0.0 0.0
-E CB 28.5 30.0 1.5
-E CG 32.7 36.1 3.5
-E CD 179.7 183.8 4.1
-E C  176.5 177.0 0.6  0.1 0.1
-E N  119.9 120.9 1.0  0.2 0.1
-E Np na na 0.1
-H (pKa 6.45)
-H H  8.55 8.35 -0.2  -0.01  0.0
-H HA 4.75 4.59 -0.2  -0.01 -0.06
-H HB 3.25 3.08 -0.17
-H HD2 7.30 6.97 -0.33
-H HE1 8.60 7.68 -0.92
-H CA 55.1 56.7 1.6 -0.1 0.1
-H CB 28.9 31.3 2.4
-H CG 131.0 135.3 4.2
-H CD2 120.3 120.0 -0.3
-H CE1 136.6 139.2 2.6
-H C 174.8 176.2 1.5  0.0 0.6
-H N 117.9 119.7 1.8  0.3 0.5
-H Np na na 0.5
-H ND1 175.8 231.3 56
-H NE2 173.1 181.1 8
-C (pKa 8.49)
-C H 8.49 8.49 0.0
-C HA 4.56 4.28 -0.28 -0.01 -0.01
-C HB 2.97 2.88 -0.09
-C CA 58.5 60.6 2.1 0.0 0.1
-C CB 28.0 29.7 1.7
-C C 175.0 176.9 1.9 -0.4 0.5
-C N 118.7 122.2 3.6  0.4 0.6
-C Np na na 0.6
-Y (pKa 9.76)
-Y H  8.16 8.16 0.0
-Y HA 4.55 4.49 -0.06
-Y HB 3.02 2.94 -0.08
-Y HD 7.14 6.97 -0.17
-Y HE 6.85 6.57 -0.28
-Y CA 58.0 58.2 0.3
-Y CB 38.6 38.7 0.1
-Y CG 130.5 123.8 -6.7
-Y CD 133.3 133.2 -0.1
-Y CE 118.4 121.7 3.3
-Y CZ 157.0 167.4 10.4
-Y C 176.3 176.7 0.4
-Y N 120.1 120.7 0.6
-K (pKa 10.34)
-K H  8.4  8.4  0.0
-K HA 4.34 4.30 -0.04
-K HB 1.82 1.78 -0.04
-K HG 1.44 1.36 -0.08
-K HD 1.68 1.44 -0.24
-K HE 3.00 2.60 -0.40
-K CA 56.4 56.9 0.4
-K CB 32.8 33.2 0.3
-K CG 24.7 25.0 0.4
-K CD 28.9 33.9 5.0
-K CE 42.1 43.1 1.0
-K C 177.0 177.5 0.5
-K N 121.0 121.7 0.7
-K Np na na 0.1
-R (pKa 13.9)
-R H  7.81 7.81 0.0
-R HA 3.26 3.19 -0.07
-R HB 1.60 1.55 0.05
-R HG 1.60 1.55 0.05
-R HD 3.19 3.00 -0.19
-R CA 58.4 58.6 0.2
-R CB 34.4 35.2 0.9
-R CG 27.2 28.1 1.0
-R CD 43.8 44.3 0.5
-R CZ 159.6 163.5 4.0
-R C 185.8 186.1 0.2
-R N 122.4 122.8 0.4
-R NE 85.6 91.5 5.9
-R NG 71.2 93.2 22"""
-
-
-def initcorrcomb():
-    dct = {}
+def _load_comb_devs():
+    result = {}
     for row in _load_csv("combdevs.csv"):
-        atn = row["atn"]
-        if atn not in dct:
-            dct[atn] = {}
+        atom = row["atn"]
+        if atom not in result:
+            result[atom] = {}
         segment = row["segment"]
         key = (int(row["neipos"]), row["centgroup"], row["neigroup"])
-        dct[atn][segment] = key, float(row["value"])
-    return dct
+        result[atom][segment] = key, float(row["value"])
+    return result
 
 
-TEMPCORRS = gettempkoeff()
-CENTSHIFTS = initcorcents()
-NEICORRS = initcorneis()
-COMBCORRS = initcorrcomb()
+def _load_ph_shifts():
+    rows = _load_csv("phshifts.csv")
+    result = {}
+    for row in rows:
+        res_name = row["resn"]
+        atom = row["atn"]
+        shift_delta = float(row["shd"])
+        if res_name not in result:
+            result[res_name] = {}
+        result[res_name][atom] = shift_delta
+        prev_nei = row["prev_nei"]
+        succ_nei = row["succ_nei"]
+        if prev_nei and succ_nei:
+            for n, val in enumerate([prev_nei, succ_nei]):
+                neighbor_key = res_name + "ps"[n]
+                if neighbor_key not in result:
+                    result[neighbor_key] = {}
+                result[neighbor_key][atom] = float(val)
+    return result
 
 
-def predPentShift(pent, atn):
-    aac = pent[2]
-    sh = CENTSHIFTS[aac][atn]
-    allneipos = [2, 1, -1, -2]
+TEMP_CORRS = _load_temp_coeffs()
+CENTER_SHIFTS = _load_center_shifts()
+NEIGHBOR_CORRS = _load_neighbor_corrs()
+COMB_CORRS = _load_comb_devs()
+PH_SHIFTS = _load_ph_shifts()
+
+# Pre-built amino acid → group lookup for pred_pent_shift()
+_AA_GROUP = {}
+for _gr, _label in zip(["G", "P", "FYW", "LIVMCA", "KR", "DE"], "GPra+-"):
+    for _aa in _gr:
+        _AA_GROUP[_aa] = _label
+
+# Neighbor position offsets relative to center (index 2) of pentamer
+_NEI_OFFSETS = [2, 1, -1, -2]
+
+
+def pred_pent_shift(pentamer, atom):
+    """Predict chemical shift for a 5-residue window and atom type."""
+    center_aa = pentamer[2]
+    shift = CENTER_SHIFTS[center_aa][atom]
     for i in range(4):
-        aai = pent[2 + allneipos[i]]
-        if aai in NEICORRS:
-            corr = NEICORRS[aai][atn][i]
-            sh += corr
-    groups = ["G", "P", "FYW", "LIVMCA", "KR", "DE"]  ##,'NQSTHncX']
-    labels = "GPra+-p"  # (Gly,Pro,Arom,Aliph,pos,neg,polar)
-    grstr = ""
-    for i in range(5):
-        aai = pent[i]
-        found = False
-        for j, gr in enumerate(groups):
-            if aai in gr:
-                grstr += labels[j]
-                found = True
-                break
-        if not found:
-            grstr += "p"  # polar
-    centgr = grstr[2]
-    for segm in COMBCORRS[atn]:
-        key, combval = COMBCORRS[atn][segm]
-        neipos, centgroup, neigroup = key  # (k,l,m)
+        neighbor_aa = pentamer[2 + _NEI_OFFSETS[i]]
+        if neighbor_aa in NEIGHBOR_CORRS:
+            shift += NEIGHBOR_CORRS[neighbor_aa][atom][i]
+    group_str = "".join(_AA_GROUP.get(pentamer[i], "p") for i in range(5))
+    center_group = group_str[2]
+    for segment in COMB_CORRS[atom]:
+        key, comb_value = COMB_CORRS[atom][segment]
+        nei_pos, expected_center, nei_group = key
         if (
-            centgroup == centgr
-            and grstr[2 + neipos] == neigroup
-            and ((centgr, neigroup) != ("p", "p") or pent[2] in "ST")
+            expected_center == center_group
+            and group_str[2 + nei_pos] == nei_group
+            and ((center_group, nei_group) != ("p", "p") or pentamer[2] in "ST")
         ):
-            # pp comb only used when center is Ser or Thr!
-            sh += combval
-    return sh
+            # pp combination only used when center is Ser or Thr
+            shift += comb_value
+    return shift
 
 
-def gettempcorr(aai, atn, tempdct, temp):
-    return tempdct[atn][aai] / 1000 * (temp - 298)
+def _get_temp_corr(aa, atom, temperature):
+    """Get temperature correction for a residue/atom at given temperature."""
+    return TEMP_CORRS[atom][aa] / 1000 * (temperature - 298)
 
 
-def _parse_phshift_val(s):
-    """Parse a pH shift value, treating 'na' as None."""
-    if s == "na":
-        return None
-    return float(s)
-
-
-def get_phshifts():
-    datc = tablephshifts.split("\n")
-    buf = [lin.split() for lin in datc]
-    dct = {}
-    for lin in buf:
-        if len(lin) > 3:
-            resn = lin[0]
-            atn = lin[1]
-            _parse_phshift_val(lin[2])
-            _parse_phshift_val(lin[3])
-            shd = _parse_phshift_val(lin[4])
-            if resn not in dct:
-                dct[resn] = {}
-            dct[resn][atn] = shd
-            if len(lin) > 6:  # neighbor data
-                for n in range(2):
-                    shdn = float(lin[5 + n])
-                    nresn = resn + "ps"[n]
-                    if nresn not in dct:
-                        dct[nresn] = {}
-                    dct[nresn][atn] = shdn
-    return dct
-
-
-def initfilcsv(filename):
+def _read_csv_lines(filename):
     file = open(filename)
     buffer = file.readlines()
     file.close()
@@ -404,154 +324,147 @@ def initfilcsv(filename):
     return buffer
 
 
-def write_csv_pkaoutput(pkadct, seq, temperature, ion):
+def _write_csv_pka_output(pka_dict, seq, temperature, ion):
     seq = seq[: min(150, len(seq))]
     name = f"outpepKalc_{seq}_T{temperature:6.2f}_I{ion:4.2f}.csv"
     out = open(name, "w")
     out.write("Site,pKa value,pKa shift,Hill coefficient\n")
-    for i in pkadct:
-        pKa, nH, resi = pkadct[i]
-        reskey = resi + str(i + 1)
-        diff = pKa - pK0[resi]
-        out.write(f"{reskey},{pKa:5.3f},{diff:5.3f},{nH:5.3f}\n")
+    for i in pka_dict:
+        pKa, nH, res = pka_dict[i]
+        res_key = res + str(i + 1)
+        diff = pKa - REFERENCE_PKA[res]
+        out.write(f"{res_key},{pKa:5.3f},{diff:5.3f},{nH:5.3f}\n")
     out.close()
 
 
-def read_csv_pkaoutput(seq, temperature, ion, name=None):
+def _read_csv_pka_output(seq, temperature, ion, name=None):
     seq = seq[: min(150, len(seq))]
-    logging.getLogger("trizod.potenci").debug(f"reading csv {name}")
+    logger.debug(f"reading csv {name}")
     if name is None:
         name = f"outpepKalc_{seq}_T{temperature:6.2f}_I{ion:4.2f}.csv"
     try:
         open(name)
     except OSError:
         return None
-    buf = initfilcsv(name)
-    for lnum, data in enumerate(buf):  # noqa: B007
+    buf = _read_csv_lines(name)
+    for line_num, data in enumerate(buf):  # noqa: B007
         if len(data) > 0 and data[0] == "Site":
             break
-    pkadct = {}
-    for data in buf[lnum + 1 :]:
-        reskey, pKa, diff, nH = data
-        i = int(reskey[1:]) - 1
-        resi = reskey[0]
-        pKaval = float(pKa)
-        nHval = float(nH)
-        pkadct[i] = pKaval, nHval, resi
-    return pkadct
+    pka_dict = {}
+    for data in buf[line_num + 1 :]:
+        res_key, pKa, diff, nH = data
+        i = int(res_key[1:]) - 1
+        res = res_key[0]
+        pka_dict[i] = float(pKa), float(nH), res
+    return pka_dict
 
 
-def getphcorrs(seq, temperature, pH, ion, pkacsvfilename=None):
-    bbatns = ["C", "CA", "CB", "HA", "H", "N", "HB"]
-    dct = get_phshifts()
+def get_ph_corrs(seq, temperature, pH, ion, pka_csv_path=None):
+    """Compute pH-dependent chemical shift corrections."""
+    bb_atoms = ["C", "CA", "CB", "HA", "H", "N", "HB"]
+    ph_shifts = PH_SHIFTS
     Ion = max(0.0001, ion)
-    if not pkacsvfilename:
-        pkadct = None
+    if not pka_csv_path:
+        pka_dict = None
     else:
-        pkadct = read_csv_pkaoutput(seq, temperature, ion, pkacsvfilename)
-    if pkadct is None:
-        pkadct = calc_pkas_from_seq("n" + seq + "c", temperature, Ion)
-        if pkacsvfilename:
-            write_csv_pkaoutput(pkadct, seq, temperature, ion)
-    outdct = {}
-    for i in pkadct:
-        logging.getLogger("trizod.potenci").debug(
-            f"pkares: {pkadct[i][0]:6.3f} {pkadct[i][1]:6.3f} {pkadct[i][2]:1s}{i}"
+        pka_dict = _read_csv_pka_output(seq, temperature, ion, pka_csv_path)
+    if pka_dict is None:
+        pka_dict = calc_pkas_from_seq("n" + seq + "c", temperature, Ion)
+        if pka_csv_path:
+            _write_csv_pka_output(pka_dict, seq, temperature, ion)
+    corrections = {}
+    for i in pka_dict:
+        logger.debug(
+            f"pkares: {pka_dict[i][0]:6.3f} {pka_dict[i][1]:6.3f} {pka_dict[i][2]:1s}{i}"
         )
-        pKa, nH, resi = pkadct[i]
-        frac = fun(pH, pKa, nH)
-        frac7 = fun(7.0, pK0[resi], nH)
-        if resi in "nc":
-            jump = 0.0  # so far
+        pKa, nH, res = pka_dict[i]
+        frac = _titration_fraction(pH, pKa, nH)
+        frac_ref = _titration_fraction(7.0, REFERENCE_PKA[res], nH)
+        if res in "nc":
+            pass  # terminal residues: no correction (yet)
         else:
-            for atn in bbatns:
-                if atn not in outdct:
-                    outdct[atn] = {}
-                logging.getLogger("trizod.potenci").debug(
-                    f"data: {atn}, {pKa}, {nH}, {resi}, {i}, {atn}, {pH}"
-                )
-                dctresi = dct[resi]
+            for atom in bb_atoms:
+                if atom not in corrections:
+                    corrections[atom] = {}
+                logger.debug(f"data: {atom}, {pKa}, {nH}, {res}, {i}, {atom}, {pH}")
+                res_shifts = ph_shifts[res]
                 try:
-                    delta = dctresi[atn]
-                    # delta = PHSHIFTS.loc[(resi,atn), 'shd']
+                    delta = res_shifts[atom]
                     jump = frac * delta
-                    jump7 = frac7 * delta
+                    jump_ref = frac_ref * delta
                 except KeyError:
-                    ##if not (resi in 'RKCY' and atn=='H') and not (resi == 'R' and atn=='N'):
-                    logging.getLogger("trizod.potenci").warning(
-                        f"no key: {resi}, {i}, {atn}"
-                    )
+                    logger.warning(f"no key: {res}, {i}, {atom}")
                     delta = 999
                     jump = 999
-                    jump7 = 999
+                    jump_ref = 999
                 if delta < 99:
-                    jumpdelta = jump - jump7
-                    if i not in outdct[atn]:
-                        outdct[atn][i] = [resi, jumpdelta]
+                    delta_jump = jump - jump_ref
+                    if i not in corrections[atom]:
+                        corrections[atom][i] = [res, delta_jump]
                     else:
-                        outdct[atn][i][0] = resi
-                        outdct[atn][i][1] += jumpdelta
-                    logging.getLogger("trizod.potenci").debug(
-                        f"{atn:3s} {pKa:5.2f} {nH:6.4f} {resi} {i:3d} {atn:5s} {jump:8.5f} {jump7:8.5f} {pH:4.2f}"
+                        corrections[atom][i][0] = res
+                        corrections[atom][i][1] += delta_jump
+                    logger.debug(
+                        f"{atom:3s} {pKa:5.2f} {nH:6.4f} {res} {i:3d} {atom:5s} {jump:8.5f} {jump_ref:8.5f} {pH:4.2f}"
                     )
-                    if resi + "p" in dct and atn in dct[resi + "p"]:
-                        # if (resi+'p', atn) in PHSHIFTS.index:
+                    if res + "p" in ph_shifts and atom in ph_shifts[res + "p"]:
                         for n in range(2):
-                            ni = i + 2 * n - 1
-                            ##if ni is somewhere in seq...
-                            nresi = resi + "ps"[n]
-                            ndelta = dct[nresi][atn]
-                            # ndelta = PHSHIFTS.loc[(nresi,atn), 'shd']
-                            jump = frac * ndelta
-                            jump7 = frac7 * ndelta
-                            jumpdelta = jump - jump7
-                            if ni not in outdct[atn]:
-                                outdct[atn][ni] = [None, jumpdelta]
+                            neighbor_idx = i + 2 * n - 1
+                            neighbor_key = res + "ps"[n]
+                            neighbor_delta = ph_shifts[neighbor_key][atom]
+                            jump = frac * neighbor_delta
+                            jump_ref = frac_ref * neighbor_delta
+                            delta_jump = jump - jump_ref
+                            if neighbor_idx not in corrections[atom]:
+                                corrections[atom][neighbor_idx] = [None, delta_jump]
                             else:
-                                outdct[atn][ni][1] += jumpdelta
-    return outdct
+                                corrections[atom][neighbor_idx][1] += delta_jump
+    return corrections
 
 
-def getpredshifts(
-    seq, temperature, pH, ion, usephcor=True, pkacsvfile=None, identifier=""
+def get_pred_shifts(
+    seq, temperature, pH, ion, use_ph_corr=True, pka_csv_path=None, identifier=""
 ):
-    tempdct = gettempkoeff()
-    bbatns = ["C", "CA", "CB", "HA", "H", "N", "HB"]
-    phcorrs = getphcorrs(seq, temperature, pH, ion, pkacsvfile) if usephcor else {}
-    shiftdct = {}
+    """Predict random coil chemical shifts for a protein sequence.
+
+    Returns dict[(residue_num, aa)] -> dict[atom_type -> shift_value].
+    """
+    bb_atoms = ["C", "CA", "CB", "HA", "H", "N", "HB"]
+    ph_corrs = (
+        get_ph_corrs(seq, temperature, pH, ion, pka_csv_path) if use_ph_corr else {}
+    )
+    shift_dict = {}
     for i in range(1, len(seq) - 1):
-        if seq[i] in AAstandard:  # else: do nothing
-            str(i + 1)
-            trip = seq[i - 1] + seq[i] + seq[i + 1]
-            phcorr = None
-            shiftdct[(i + 1, seq[i])] = {}
-            for at in bbatns:
-                if (trip[1], at) not in [("G", "CB"), ("G", "HB"), ("P", "H")]:
+        if seq[i] in AA_STANDARD:
+            triplet = seq[i - 1] + seq[i] + seq[i + 1]
+            ph_corr = None
+            shift_dict[(i + 1, seq[i])] = {}
+            for atom in bb_atoms:
+                if (triplet[1], atom) not in [("G", "CB"), ("G", "HB"), ("P", "H")]:
                     if i == 1:
-                        pent = "n" + trip + seq[i + 2]
+                        pentamer = "n" + triplet + seq[i + 2]
                     elif i == len(seq) - 2:
-                        pent = seq[i - 2] + trip + "c"
+                        pentamer = seq[i - 2] + triplet + "c"
                     else:
-                        pent = seq[i - 2] + trip + seq[i + 2]
-                    shp = predPentShift(pent, at)
-                    if shp is not None:
-                        if at != "HB":
-                            shp += gettempcorr(trip[1], at, tempdct, temperature)
-                        if at in phcorrs and i in phcorrs[at]:
-                            phdata = phcorrs[at][i]
-                            resi = phdata[0]
-                            ##assert resi==seq[i]
-                            if seq[i] in "CDEHRKY" and resi != seq[i]:
-                                logging.getLogger("trizod.potenci").warning(
-                                    f"residue mismatch: {resi},{seq[i]},{i},{phdata},{at}"
+                        pentamer = seq[i - 2] + triplet + seq[i + 2]
+                    shift = pred_pent_shift(pentamer, atom)
+                    if shift is not None:
+                        if atom != "HB":
+                            shift += _get_temp_corr(triplet[1], atom, temperature)
+                        if atom in ph_corrs and i in ph_corrs[atom]:
+                            ph_data = ph_corrs[atom][i]
+                            res = ph_data[0]
+                            if seq[i] in "CDEHRKY" and res != seq[i]:
+                                logger.warning(
+                                    f"residue mismatch: {res},{seq[i]},{i},{ph_data},{atom}"
                                 )
-                            phcorr = phdata[1]
-                            if abs(phcorr) < 9.9:
-                                shp -= phcorr
-                        shiftdct[(i + 1, seq[i])][at] = shp
-                        logging.getLogger("trizod.potenci").debug(
-                            f"predictedshift: {identifier:5s} {i:3d} {seq[i]:1s} {at:2s} {shp:8.4f}"
+                            ph_corr = ph_data[1]
+                            if abs(ph_corr) < 9.9:
+                                shift -= ph_corr
+                        shift_dict[(i + 1, seq[i])][atom] = shift
+                        logger.debug(
+                            f"predictedshift: {identifier:5s} {i:3d} {seq[i]:1s} {atom:2s} {shift:8.4f}"
                             + " "
-                            + str(phcorr)
+                            + str(ph_corr)
                         )
-    return shiftdct
+    return shift_dict

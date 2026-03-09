@@ -20,13 +20,13 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-    "pandas",
-    "numpy",
-    "matplotlib",
-    "tqdm",
-    "pandarallel",
-    "pynmrstar",
-    "scipy",
+    "matplotlib>=3.9.4",
+    "numpy>=2.0.2",
+    "pandarallel>=1.6.5",
+    "pandas>=2.3.3",
+    "pynmrstar>=3.5.0",
+    "scipy>=1.13.1",
+    "tqdm>=4.67.3",
 ]
 
 [project.urls]
@@ -40,20 +40,25 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py39"
-exclude = ["trizod/potenci/legacy/"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM"]
 ignore = [
     "N803",   # argument name should be lowercase (scientific convention: T, Ion, pH, etc.)
     "N806",   # variable name should be lowercase (scientific convention: N, I, E, etc.)
-    "N802",   # function name should be lowercase (legacy POTENCI naming: predPentShift, etc.)
+    "N802",   # function name should be lowercase (POTENCI naming: predPentShift, etc.)
     "N816",   # mixed-case variable in global scope (AAstandard, CENTSHIFTS, etc.)
     "N818",   # exception name should end in Error (legacy naming: Found, etc.)
     "E741",   # ambiguous variable name (l, I, E — standard in scientific code)
     "E501",   # line too long (formatter handles what it can; remaining are data/strings)
-    "SIM115", # open file with context handler (legacy POTENCI CSV I/O)
+    "SIM115", # open file with context handler (POTENCI CSV I/O)
 ]
 
 [tool.ruff.lint.isort]
 known-first-party = ["trizod"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "ruff>=0.15.5",
+]

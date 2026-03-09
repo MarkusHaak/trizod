@@ -61,7 +61,7 @@ def compute_running_offsets(cmparr, mask, minAIC=999.0):
         roll = df[i].dropna().rolling(9, center=True)
         at_stdc.append(roll.std(ddof=0))
         at_roff.append(roll.mean())
-        at_std0.append(roll.apply(lambda x: np.sqrt(x.pow(2).mean())))
+        at_std0.append(np.sqrt(at_stdc[-1] ** 2 + at_roff[-1] ** 2))
     runstds_ = pd.concat(at_stdc, axis=1).reindex(pd.Index(list(range(len(cmparr)))))
     runoffs_ = pd.concat(at_roff, axis=1).reindex(pd.Index(list(range(len(cmparr)))))
     runstd0s_ = pd.concat(at_std0, axis=1).reindex(pd.Index(list(range(len(cmparr)))))

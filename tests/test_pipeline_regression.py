@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 import pytest
 
@@ -34,13 +33,20 @@ class TestPipelineRegression:
         output_prefix = str(tmp_path / "unfiltered")
         result = subprocess.run(
             [
-                sys.executable, "-m", "trizod.trizod",
-                "--input-dir", SUBSET_DIR,
-                "--filter-defaults", "unfiltered",
-                "--output-prefix", output_prefix,
-                "--output-format", "json",
+                sys.executable,
+                "-m",
+                "trizod.trizod",
+                "--input-dir",
+                SUBSET_DIR,
+                "--filter-defaults",
+                "unfiltered",
+                "--output-prefix",
+                output_prefix,
+                "--output-format",
+                "json",
                 "--no-progress",
-                "--cache-dir", str(tmp_path / "cache"),
+                "--cache-dir",
+                str(tmp_path / "cache"),
             ],
             capture_output=True,
             text=True,

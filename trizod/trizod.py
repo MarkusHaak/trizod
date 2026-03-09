@@ -909,10 +909,10 @@ def compute_scores(
 
         try:
             # predict random coil chemical shifts using POTENCI
-            usephcor = pH != 7.0
+            use_ph_corr = pH != 7.0
             start_time = time.time()
-            predshiftdct = potenci.getpredshifts(
-                seq, temperature, pH, ion, usephcor, pkacsvfile=False
+            predshiftdct = potenci.get_pred_shifts(
+                seq, temperature, pH, ion, use_ph_corr, pka_csv_path=False
             )
             exe_times[0] = time.time() - start_time
         except Exception as err:

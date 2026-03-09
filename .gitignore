@@ -20,6 +20,9 @@ tmp*/
 # Test subset (symlinks to data/, not committed)
 tests/bmrb_subset/
 
+# Docs (generated)
+docs/
+
 # Notebooks
 notebooks/
 
