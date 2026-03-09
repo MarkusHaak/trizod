@@ -31,6 +31,12 @@ All three must pass.
 - `tests/test_pipeline_regression.py` — 300-entry subset regression (requires data/)
 - Pipeline/regression tests require BMRB data in `data/bmrb_entries/`
 
+## Documentation
+- `docs/pipeline.md` — detailed pipeline walkthrough (6 stages)
+- `docs/potenci.md` — POTENCI module: origin, API, performance, internals
+- `docs/filtering.md` — filter descriptions and default values per stringency level
+- `docs/_planning/` — internal planning notes (gitignored)
+
 ## Data
 - BMRB entries: `data/bmrb_entries/` (17k files, not committed)
 - Baselines: `data/baseline/` (not committed)

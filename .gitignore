@@ -1,30 +1,31 @@
-# Build artifacts
-build/
-dist/
-*.egg-info/
-
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.claude/
 
 # Data (large, downloaded separately)
 /data/
 
-# Cache and temp
-tmp*/
-*.pkl
-
-# Logs and output
-*.log
-
-# Test subset (symlinks to data/, not committed)
+# Test subset (symlinks to data/)
 tests/bmrb_subset/
 
-# Docs (generated)
-docs/
+# Pipeline output
+tmp*/
+*.pkl
+*.log
 
-# Notebooks
-notebooks/
+# Internal planning notes
+docs/_planning/
 
-# IDE
+# OS
 .DS_Store
