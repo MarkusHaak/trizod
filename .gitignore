@@ -1,16 +1,27 @@
-build
-dist
-test*
-tmp*
-*.log
-*.zip
-*.txt
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Python
+__pycache__/
 *.pyc
+
+# Data (large, downloaded separately)
+data/
+
+# Cache and temp
+tmp*/
 *.pkl
-*.txt
-__pycache__
-data
-*.csv
-notebooks
-*.egg-info
-2024-05-09
+
+# Logs and output
+*.log
+
+# Legacy test scripts (not pytest)
+/test/
+
+# Notebooks
+notebooks/
+
+# IDE
+.DS_Store
