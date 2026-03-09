@@ -8,7 +8,7 @@ __pycache__/
 *.pyc
 
 # Data (large, downloaded separately)
-data/
+/data/
 
 # Cache and temp
 tmp*/
@@ -17,8 +17,8 @@ tmp*/
 # Logs and output
 *.log
 
-# Legacy test scripts (not pytest)
-/test/
+# Test subset (symlinks to data/, not committed)
+tests/bmrb_subset/
 
 # Notebooks
 notebooks/
