@@ -10,7 +10,8 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.9"
 authors = [
-    { name = "Markus Haak", email = "m.haak@tum.de" },
+    { name = "Markus Haak", email = "markus.haak@tum.de" },
+    { name = "Tobias Senoner", email = "tobias.senoner@tum.de" },
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -30,7 +31,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/tsenoner/trizod"
+Repository = "https://github.com/MarkusHaak/trizod"
 
 [project.scripts]
 trizod = "trizod.trizod:main"

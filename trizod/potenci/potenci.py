@@ -2,7 +2,7 @@
 
 Adapted from https://github.com/protein-nmr/POTENCI (commit 17dd2e6).
 Original author: fmulder@chem.au.dk
-Adapted by: haak@rostlab.org
+Adapted by: markus.haak@tum.de & tobias.senoner@tum.de
 
 Public API:
     get_pred_shifts(seq, temperature, pH, ion, ...) -> dict
