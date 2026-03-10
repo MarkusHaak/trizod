@@ -368,7 +368,7 @@ class BmrbEntry:
                 logging.getLogger("trizod.bmrb").error(
                     f"Bio-Star file for BMRB entry {id_} not found, file {fn3} does not exist"
                 )
-                raise ValueError
+                raise ValueError(f"file not found: {fn3}")
 
         self.source = fn3
         entry = pynmrstar.Entry.from_file(fn3)
@@ -440,13 +440,13 @@ class BmrbEntry:
             logging.getLogger("trizod.bmrb").error(
                 f"BMRB entry {id_} contains no assembly information"
             )
-            raise ValueError
+            raise ValueError(f"no assembly information in {id_}")
         self.assemblies = [Assembly(sf) for sf in entry_assemblies]
         if len([a.id for a in self.assemblies]) != len({a.id for a in self.assemblies}):
             logging.getLogger("trizod.bmrb").error(
                 "entry contains assemblies with non-unique ID"
             )
-            raise ValueError
+            raise ValueError(f"non-unique assembly IDs in {id_}")
         self.assemblies = {a.id: a for a in self.assemblies}
 
         entry_entities = entry.get_saveframes_by_category("entity")
@@ -454,13 +454,13 @@ class BmrbEntry:
             logging.getLogger("trizod.bmrb").error(
                 f"BMRB entry {id_} contains no entity information"
             )
-            raise ValueError
+            raise ValueError(f"no entity information in {id_}")
         self.entities = [Entity(sf) for sf in entry_entities]
         if len([e.id for e in self.entities]) != len({e.id for e in self.entities}):
             logging.getLogger("trizod.bmrb").error(
                 "entry contains entities with non-unique ID"
             )
-            raise ValueError
+            raise ValueError(f"non-unique entity IDs in {id_}")
         self.entities = {e.id: e for e in self.entities}
 
         entry_samples = entry.get_saveframes_by_category("sample")
@@ -474,7 +474,7 @@ class BmrbEntry:
                 logging.getLogger("trizod.bmrb").error(
                     "entry contains samples with non-unique ID"
                 )
-                raise ValueError
+                raise ValueError(f"non-unique sample IDs in {id_}")
             self.samples = {s.id: s for s in self.samples}
 
         entry_conditions = entry.get_saveframes_by_category("sample_conditions")
@@ -490,7 +490,7 @@ class BmrbEntry:
                 logging.getLogger("trizod.bmrb").error(
                     "entry contains conditions with non-unique ID"
                 )
-                raise ValueError
+                raise ValueError(f"non-unique condition IDs in {id_}")
             self.conditions = {a.id: a for a in self.conditions}
 
         entry_experiment_lists = entry.get_saveframes_by_category("experiment_list")
@@ -498,7 +498,10 @@ class BmrbEntry:
             logging.getLogger("trizod.bmrb").error(
                 f"BMRB entry {id_} contains no or more than one experiment list, currently not supported"
             )
-            raise ValueError  # TODO: find a solution to include these as well
+            # TODO: find a solution to include these as well
+            raise ValueError(
+                f"expected 1 experiment list in {id_}, found {len(entry_experiment_lists)}"
+            )
         self.experiment_list = ExperimentList(entry_experiment_lists[0])
         self.experiment_dict = {e[0]: e for e in self.experiment_list.experiments}
 
@@ -509,7 +512,7 @@ class BmrbEntry:
             logging.getLogger("trizod.bmrb").error(
                 f"BMRB entry {id_} contains no chemical shift information"
             )
-            raise ValueError
+            raise ValueError(f"no chemical shift data in {id_}")
         self.shift_tables = [ShiftTable(sf) for sf in entry_shift_tables]
         if len([s.id for s in self.shift_tables]) != len(
             {s.id for s in self.shift_tables}
@@ -517,7 +520,7 @@ class BmrbEntry:
             logging.getLogger("trizod.bmrb").error(
                 "entry contains shift tables with non-unique ID"
             )
-            raise ValueError
+            raise ValueError(f"non-unique shift table IDs in {id_}")
         self.shift_tables = {s.id: s for s in self.shift_tables}
 
     def get_peptide_shifts(self):
