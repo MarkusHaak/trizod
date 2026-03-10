@@ -10,16 +10,16 @@ Requires:
 """
 
 import json
-import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from tests.conftest import DATA_DIR, requires_bmrb_data
 
-BASELINE_DIR = os.path.join(DATA_DIR, "baseline")
-BMRB_DIR = os.path.join(DATA_DIR, "bmrb_entries")
+BASELINE_DIR = DATA_DIR / "baseline"
+BMRB_DIR = DATA_DIR / "bmrb_entries"
 
 FILTER_LEVELS = ["unfiltered", "tolerant", "moderate", "strict"]
 
@@ -33,31 +33,30 @@ def load_jsonl(path):
     return entries
 
 
+@pytest.mark.slow
 @requires_bmrb_data
 @pytest.mark.skipif(
-    not os.path.isdir(BASELINE_DIR),
+    not BASELINE_DIR.is_dir(),
     reason="Baseline files not available (data/baseline/)",
 )
 class TestFullDatasetRegression:
     @pytest.mark.parametrize("filter_level", FILTER_LEVELS)
     def test_matches_baseline(self, tmp_path, filter_level):
-        baseline_file = os.path.join(BASELINE_DIR, f"{filter_level}.json")
-        if not os.path.exists(baseline_file):
+        baseline_file = BASELINE_DIR / f"{filter_level}.json"
+        if not baseline_file.exists():
             pytest.skip(f"Baseline {baseline_file} not found")
 
         output_prefix = str(tmp_path / filter_level)
 
         # Use existing cache if available (speeds up from hours to minutes)
-        cache_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tmp"
-        )
+        cache_dir = str(Path(__file__).resolve().parent.parent / "tmp")
 
         cmd = [
             sys.executable,
             "-m",
             "trizod.trizod",
             "--input-dir",
-            BMRB_DIR,
+            str(BMRB_DIR),
             "--filter-defaults",
             filter_level,
             "--output-prefix",

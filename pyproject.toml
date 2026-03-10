@@ -38,6 +38,10 @@ trizod = "trizod.trizod:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests that run the full dataset pipeline (deselect with '-m \"not slow\"')",
+]
+addopts = "-m 'not slow'"
 
 [tool.ruff]
 target-version = "py39"
