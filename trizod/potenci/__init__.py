@@ -7,9 +7,10 @@ from .constants import (
     PKA_WINDOW_HALF,
     REFERENCE_PKA,
 )
-from .potenci import get_pred_shifts
+from .potenci import BB_ATOMS, get_pred_shifts
 
 __all__ = [
+    "BB_ATOMS",
     "DIELECTRIC_WATER",
     "DISTANCE_SCALE",
     "GAS_CONSTANT",

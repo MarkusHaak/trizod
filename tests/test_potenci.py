@@ -33,7 +33,6 @@ class TestPredictions:
             REFERENCE_PH,
             REFERENCE_ION,
             use_ph_corr=False,
-            pka_csv_path=False,
         )
 
         for res_num, aa, atom_type, expected in REFERENCE_VALUES:
@@ -51,7 +50,6 @@ class TestPredictions:
             REFERENCE_PH,
             REFERENCE_ION,
             use_ph_corr=False,
-            pka_csv_path=False,
         )
         result_with_ph = potenci.get_pred_shifts(
             REFERENCE_SEQUENCE,
@@ -59,7 +57,6 @@ class TestPredictions:
             5.5,  # different pH
             REFERENCE_ION,
             use_ph_corr=True,
-            pka_csv_path=False,
         )
         # D (Asp) is pH-sensitive; its shifts should differ at pH 5.5 vs 7.0
         d_ca_no_ph = result_no_ph[(4, "D")]["CA"]
@@ -78,7 +75,6 @@ class TestEdgeCases:
             REFERENCE_PH,
             REFERENCE_ION,
             use_ph_corr=False,
-            pka_csv_path=False,
         )
         # First residue (1, 'A') and last residue (13, 'K') should be absent
         assert (1, "A") not in result
@@ -93,7 +89,6 @@ class TestEdgeCases:
             REFERENCE_PH,
             REFERENCE_ION,
             use_ph_corr=False,
-            pka_csv_path=False,
         )
         gly_shifts = result[(3, "G")]
         assert "CB" not in gly_shifts

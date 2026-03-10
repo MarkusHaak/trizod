@@ -61,7 +61,7 @@ class TestPipelineSingleEntry:
 
             use_ph_corr = pH != 7.0
             predshiftdct = potenci.get_pred_shifts(
-                seq, temperature, pH, ion, use_ph_corr, pka_csv_path=False
+                seq, temperature, pH, ion, use_ph_corr
             )
             ret = scoring.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
             assert ret is not None, "Score computation returned None"
