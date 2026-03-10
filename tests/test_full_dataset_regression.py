@@ -1,0 +1,114 @@
+"""Full-dataset regression: compare pipeline output against baselines in data/baseline/.
+
+Run with:
+    uv run pytest tests/test_full_dataset_regression.py -v
+
+Requires:
+    - BMRB data in data/bmrb_entries/
+    - Baseline files in data/baseline/ (unfiltered.json, tolerant.json, etc.)
+    - Precomputed POTENCI cache in tmp/potenci/ (optional but recommended for speed)
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+import pytest
+
+from tests.conftest import DATA_DIR, requires_bmrb_data
+
+BASELINE_DIR = os.path.join(DATA_DIR, "baseline")
+BMRB_DIR = os.path.join(DATA_DIR, "bmrb_entries")
+
+FILTER_LEVELS = ["unfiltered", "tolerant", "moderate", "strict"]
+
+
+def load_jsonl(path):
+    entries = {}
+    with open(path) as f:
+        for line in f:
+            entry = json.loads(line)
+            entries[entry["ID"]] = entry
+    return entries
+
+
+@requires_bmrb_data
+@pytest.mark.skipif(
+    not os.path.isdir(BASELINE_DIR),
+    reason="Baseline files not available (data/baseline/)",
+)
+class TestFullDatasetRegression:
+    @pytest.mark.parametrize("filter_level", FILTER_LEVELS)
+    def test_matches_baseline(self, tmp_path, filter_level):
+        baseline_file = os.path.join(BASELINE_DIR, f"{filter_level}.json")
+        if not os.path.exists(baseline_file):
+            pytest.skip(f"Baseline {baseline_file} not found")
+
+        output_prefix = str(tmp_path / filter_level)
+
+        # Use existing cache if available (speeds up from hours to minutes)
+        cache_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tmp"
+        )
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "trizod.trizod",
+            "--input-dir",
+            BMRB_DIR,
+            "--filter-defaults",
+            filter_level,
+            "--output-prefix",
+            output_prefix,
+            "--output-format",
+            "json",
+            "--no-progress",
+            "--cache-dir",
+            cache_dir,
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=7200,  # 2 hours max for full dataset
+        )
+        assert result.returncode == 0, f"Pipeline failed:\n{result.stderr}"
+
+        baseline = load_jsonl(baseline_file)
+        actual = load_jsonl(output_prefix + ".json")
+
+        assert len(actual) == len(baseline), (
+            f"Entry count mismatch for {filter_level}: "
+            f"{len(actual)} actual vs {len(baseline)} baseline"
+        )
+
+        zscore_mismatches = []
+        for id_ in baseline:
+            assert id_ in actual, f"Missing entry: {id_}"
+
+            ref = baseline[id_]
+            act = actual[id_]
+
+            assert act["seq"] == ref["seq"], f"{id_}: sequence mismatch"
+            assert act["temperature"] == pytest.approx(ref["temperature"]), (
+                f"{id_}: temperature mismatch"
+            )
+
+            ref_z = ref.get("zscores", [])
+            act_z = act.get("zscores", [])
+            assert len(act_z) == len(ref_z), f"{id_}: zscore length mismatch"
+
+            for i, (a, r) in enumerate(zip(act_z, ref_z)):
+                if a is None and r is None:
+                    continue
+                if a is None or r is None or abs(a - r) > 1e-6:
+                    zscore_mismatches.append(f"{id_} pos {i}: {a} != {r}")
+                    break
+
+        assert not zscore_mismatches, (
+            f"{len(zscore_mismatches)} entries with Z-score mismatches "
+            f"(showing first 10):\n" + "\n".join(zscore_mismatches[:10])
+        )

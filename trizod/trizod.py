@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
+import json
 import logging
 import os
 import pickle
@@ -351,6 +353,7 @@ def parse_args():
         args.cache_dir,
         os.path.join(args.cache_dir, "wSCS"),
         os.path.join(args.cache_dir, "bmrb_entries"),
+        os.path.join(args.cache_dir, "potenci"),
     ]
     if not np.all([os.path.exists(d) for d in dirs]):
         if not os.path.exists(args.cache_dir):
@@ -856,6 +859,45 @@ def create_peptide_dataframe(
     return df
 
 
+def _potenci_cache_key(seq, temperature, pH, ion):
+    """Content-based cache key for POTENCI predictions."""
+    raw = f"{seq}|{temperature}|{pH}|{ion}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def load_potenci_cache(cache_dir, seq, temperature, pH, ion):
+    """Load cached POTENCI predictions if available."""
+    if not cache_dir:
+        return None
+    potenci_dir = os.path.join(cache_dir, "potenci")
+    key = _potenci_cache_key(seq, temperature, pH, ion)
+    fp = os.path.join(potenci_dir, f"{key}.json")
+    if os.path.exists(fp):
+        try:
+            with open(fp) as f:
+                raw = json.load(f)
+            # JSON keys are strings — convert back to (int, str) tuples
+            return {(int(k.split(",")[0]), k.split(",")[1]): v for k, v in raw.items()}
+        except Exception:
+            logging.getLogger("trizod").debug(
+                f"POTENCI cache file {fp} corrupt, ignoring"
+            )
+    return None
+
+
+def save_potenci_cache(cache_dir, seq, temperature, pH, ion, predshiftdct):
+    """Save POTENCI predictions to cache."""
+    if not cache_dir:
+        return
+    potenci_dir = os.path.join(cache_dir, "potenci")
+    key = _potenci_cache_key(seq, temperature, pH, ion)
+    fp = os.path.join(potenci_dir, f"{key}.json")
+    # Convert (int, str) tuple keys to strings for JSON
+    raw = {f"{k[0]},{k[1]}": v for k, v in predshiftdct.items()}
+    with open(fp, "w") as f:
+        json.dump(raw, f)
+
+
 def compute_scores(
     entry,
     stID,
@@ -911,9 +953,12 @@ def compute_scores(
             # predict random coil chemical shifts using POTENCI
             use_ph_corr = pH != 7.0
             start_time = time.time()
-            predshiftdct = potenci.get_pred_shifts(
-                seq, temperature, pH, ion, use_ph_corr, pka_csv_path=False
-            )
+            predshiftdct = load_potenci_cache(cache_dir, seq, temperature, pH, ion)
+            if predshiftdct is None:
+                predshiftdct = potenci.get_pred_shifts(
+                    seq, temperature, pH, ion, use_ph_corr
+                )
+                save_potenci_cache(cache_dir, seq, temperature, pH, ion, predshiftdct)
             exe_times[0] = time.time() - start_time
         except Exception as err:
             logging.getLogger("trizod").error(
