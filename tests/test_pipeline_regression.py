@@ -1,17 +1,17 @@
 """Regression test: run pipeline on 100-entry subset and compare against reference."""
 
 import json
-import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from tests.conftest import requires_bmrb_data
 
-TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
-REFERENCE_FILE = os.path.join(TESTS_DIR, "reference", "unfiltered.json")
-SUBSET_DIR = os.path.join(TESTS_DIR, "bmrb_subset")
+TESTS_DIR = Path(__file__).resolve().parent
+REFERENCE_FILE = TESTS_DIR / "reference" / "unfiltered.json"
+SUBSET_DIR = TESTS_DIR / "bmrb_subset"
 
 
 def load_jsonl(path):
@@ -25,7 +25,7 @@ def load_jsonl(path):
 
 @requires_bmrb_data
 @pytest.mark.skipif(
-    not os.path.exists(REFERENCE_FILE),
+    not REFERENCE_FILE.exists(),
     reason="Reference file not generated yet",
 )
 class TestPipelineRegression:
@@ -37,7 +37,7 @@ class TestPipelineRegression:
                 "-m",
                 "trizod.trizod",
                 "--input-dir",
-                SUBSET_DIR,
+                str(SUBSET_DIR),
                 "--filter-defaults",
                 "unfiltered",
                 "--output-prefix",

@@ -14,15 +14,15 @@ so re-runs skip parsing entirely for known entries.
 
 import argparse
 import logging
-import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 from tqdm import tqdm
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
@@ -35,10 +35,10 @@ from trizod.trizod import (
 
 def load_index(potenci_dir):
     """Load the entry→cache_key index. Returns set of processed entry IDs."""
-    index_fp = os.path.join(potenci_dir, "_index.tsv")
+    index_fp = Path(potenci_dir) / "_index.tsv"
     processed = set()
-    if os.path.exists(index_fp):
-        with open(index_fp) as f:
+    if index_fp.exists():
+        with index_fp.open() as f:
             for line in f:
                 parts = line.strip().split("\t")
                 if parts:
@@ -48,8 +48,8 @@ def load_index(potenci_dir):
 
 def append_index(potenci_dir, entry_id, keys):
     """Append entry and its cache keys to the index file."""
-    index_fp = os.path.join(potenci_dir, "_index.tsv")
-    with open(index_fp, "a") as f:
+    index_fp = Path(potenci_dir) / "_index.tsv"
+    with index_fp.open("a") as f:
         f.write(f"{entry_id}\t{','.join(keys)}\n")
 
 
@@ -85,9 +85,9 @@ def main():
         logging.getLogger("trizod.potenci").setLevel(logging.CRITICAL)
         logging.getLogger("trizod").setLevel(logging.CRITICAL)
 
-    cache_dir = os.path.abspath(args.cache_dir)
-    potenci_dir = os.path.join(cache_dir, "potenci")
-    os.makedirs(potenci_dir, exist_ok=True)
+    cache_dir = Path(args.cache_dir).resolve()
+    potenci_dir = cache_dir / "potenci"
+    potenci_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Finding BMRB files in {args.input_dir}")
     bmrb_files = find_bmrb_files(args.input_dir, args.file_pattern)
@@ -96,9 +96,9 @@ def main():
     # Load index of already-processed entries
     if args.reindex:
         processed = set()
-        index_fp = os.path.join(potenci_dir, "_index.tsv")
-        if os.path.exists(index_fp):
-            os.remove(index_fp)
+        index_fp = potenci_dir / "_index.tsv"
+        if index_fp.exists():
+            index_fp.unlink()
     else:
         processed = load_index(potenci_dir)
     if processed:
@@ -117,7 +117,7 @@ def main():
             continue
 
         try:
-            entry = bmrb.BmrbEntry(entry_id, os.path.dirname(filepath))
+            entry = bmrb.BmrbEntry(entry_id, Path(filepath).parent)
         except Exception as e:
             failed += 1
             failed_entries.append((entry_id, "parse", str(e)))
@@ -181,8 +181,8 @@ def main():
         f"Done in {elapsed:.1f}s: {computed} computed, {skipped} skipped, {failed} failed"
     )
     if failed_entries:
-        log_fp = os.path.join(cache_dir, "potenci_failures.txt")
-        with open(log_fp, "w") as f:
+        log_fp = cache_dir / "potenci_failures.txt"
+        with log_fp.open("w") as f:
             for entry_id, stage, error in failed_entries:
                 f.write(f"{entry_id}\t{stage}\t{error}\n")
         logger.info(f"Failed entries written to {log_fp}")

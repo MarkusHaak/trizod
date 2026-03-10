@@ -1,5 +1,5 @@
 import logging
-import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -314,10 +314,10 @@ class ShiftTable:
             )
         )
         shifts = {}
-        for s in self.shifts:
-            if (s[0], s[1]) not in shifts:
-                shifts[(s[0], s[1])] = []
-            shifts[(s[0], s[1])].append(s)
+        for shift in self.shifts:
+            if (shift[0], shift[1]) not in shifts:
+                shifts[(shift[0], shift[1])] = []
+            shifts[(shift[0], shift[1])].append(shift)
         self.shifts = shifts
 
     def __str__(self):
@@ -355,23 +355,23 @@ class BmrbEntry:
         self.conditions = {}
         self.shift_tables = {}
 
-        self.entry_path = os.path.join(bmrb_dir, f"bmr{id_}")
-        fn3 = os.path.join(self.entry_path, f"bmr{id_}_3.str")
-        if not os.path.exists(fn3):
+        self.entry_path = Path(bmrb_dir) / f"bmr{id_}"
+        fn3 = self.entry_path / f"bmr{id_}_3.str"
+        if not fn3.exists():
             logging.getLogger("trizod.bmrb").debug(
                 f"Bio-Star file for BMRB entry {id_} not found in directory {self.entry_path}"
             )
             # try to find str file in bmrb_dir
-            self.entry_path = bmrb_dir
-            fn3 = os.path.join(bmrb_dir, f"bmr{id_}_3.str")
-            if not os.path.exists(fn3):
+            self.entry_path = Path(bmrb_dir)
+            fn3 = self.entry_path / f"bmr{id_}_3.str"
+            if not fn3.exists():
                 logging.getLogger("trizod.bmrb").error(
                     f"Bio-Star file for BMRB entry {id_} not found, file {fn3} does not exist"
                 )
                 raise ValueError(f"file not found: {fn3}")
 
-        self.source = fn3
-        entry = pynmrstar.Entry.from_file(fn3)
+        self.source = str(fn3)
+        entry = pynmrstar.Entry.from_file(str(fn3))
         # entry info
         entry_information = entry.get_saveframes_by_category("entry_information")
         if entry_information:
@@ -442,12 +442,14 @@ class BmrbEntry:
             )
             raise ValueError(f"no assembly information in {id_}")
         self.assemblies = [Assembly(sf) for sf in entry_assemblies]
-        if len([a.id for a in self.assemblies]) != len({a.id for a in self.assemblies}):
+        if len([assembly.id for assembly in self.assemblies]) != len(
+            {assembly.id for assembly in self.assemblies}
+        ):
             logging.getLogger("trizod.bmrb").error(
                 "entry contains assemblies with non-unique ID"
             )
             raise ValueError(f"non-unique assembly IDs in {id_}")
-        self.assemblies = {a.id: a for a in self.assemblies}
+        self.assemblies = {assembly.id: assembly for assembly in self.assemblies}
 
         entry_entities = entry.get_saveframes_by_category("entity")
         if len(entry_entities) == 0:
@@ -470,12 +472,14 @@ class BmrbEntry:
             )
         else:
             self.samples = [Sample(sf) for sf in entry_samples]
-            if len([s.id for s in self.samples]) != len({s.id for s in self.samples}):
+            if len([sample.id for sample in self.samples]) != len(
+                {sample.id for sample in self.samples}
+            ):
                 logging.getLogger("trizod.bmrb").error(
                     "entry contains samples with non-unique ID"
                 )
                 raise ValueError(f"non-unique sample IDs in {id_}")
-            self.samples = {s.id: s for s in self.samples}
+            self.samples = {sample.id: sample for sample in self.samples}
 
         entry_conditions = entry.get_saveframes_by_category("sample_conditions")
         if len(entry_conditions) == 0:
@@ -484,14 +488,14 @@ class BmrbEntry:
             )
         else:
             self.conditions = [SampleConditions(sf) for sf in entry_conditions]
-            if len([a.id for a in self.conditions]) != len(
-                {a.id for a in self.conditions}
+            if len([condition.id for condition in self.conditions]) != len(
+                {condition.id for condition in self.conditions}
             ):
                 logging.getLogger("trizod.bmrb").error(
                     "entry contains conditions with non-unique ID"
                 )
                 raise ValueError(f"non-unique condition IDs in {id_}")
-            self.conditions = {a.id: a for a in self.conditions}
+            self.conditions = {condition.id: condition for condition in self.conditions}
 
         entry_experiment_lists = entry.get_saveframes_by_category("experiment_list")
         if len(entry_experiment_lists) != 1:
@@ -514,14 +518,16 @@ class BmrbEntry:
             )
             raise ValueError(f"no chemical shift data in {id_}")
         self.shift_tables = [ShiftTable(sf) for sf in entry_shift_tables]
-        if len([s.id for s in self.shift_tables]) != len(
-            {s.id for s in self.shift_tables}
+        if len([shift_table.id for shift_table in self.shift_tables]) != len(
+            {shift_table.id for shift_table in self.shift_tables}
         ):
             logging.getLogger("trizod.bmrb").error(
                 "entry contains shift tables with non-unique ID"
             )
             raise ValueError(f"non-unique shift table IDs in {id_}")
-        self.shift_tables = {s.id: s for s in self.shift_tables}
+        self.shift_tables = {
+            shift_table.id: shift_table for shift_table in self.shift_tables
+        }
 
     def get_peptide_shifts(self):
         peptide_shifts = {}
@@ -653,13 +659,13 @@ class BmrbEntry:
         return peptide_shifts
 
     def __str__(self):
-        def pplist(l):
-            if len(l) == 0:
+        def pplist(items):
+            if len(items) == 0:
                 return "[]"
-            elif len(l) == 1:
-                return f"[{str(l[0])}]"
+            elif len(items) == 1:
+                return f"[{str(items[0])}]"
             else:
-                return "[\n    " + "\n    ".join([str(e) for e in l]) + "\n]"
+                return "[\n    " + "\n    ".join([str(e) for e in items]) + "\n]"
 
         s = f"bmr{self.id}:\n" + "\n  ".join(
             [

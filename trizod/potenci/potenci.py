@@ -10,8 +10,8 @@ Public API:
 
 import csv
 import logging
-import os
 import warnings
+from pathlib import Path
 
 import numpy as np
 from scipy.optimize import OptimizeWarning, curve_fit
@@ -40,13 +40,13 @@ _SKIP_ATOM_PAIRS = {("G", "CB"), ("G", "HB"), ("P", "H")}
 
 # ── Data loading ─────────────────────────────────────────────────────────
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 def _load_csv(filename):
     """Load a CSV file from the data directory."""
-    filepath = os.path.join(_DATA_DIR, filename)
-    with open(filepath) as f:
+    filepath = _DATA_DIR / filename
+    with filepath.open() as f:
         return list(csv.DictReader(f))
 
 

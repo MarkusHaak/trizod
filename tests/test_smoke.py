@@ -32,7 +32,7 @@ class TestPipelineSingleEntry:
     def test_parse_bmrb_entry(self):
         import trizod.bmrb.bmrb as bmrb
 
-        entry = bmrb.BmrbEntry("4493", BMRB_DIR + "/bmr4493")
+        entry = bmrb.BmrbEntry("4493", BMRB_DIR / "bmr4493")
         assert entry.id == "4493"
         assert len(entry.entities) > 0
         assert len(entry.shift_tables) > 0
@@ -42,7 +42,7 @@ class TestPipelineSingleEntry:
         import trizod.potenci.potenci as potenci
         import trizod.scoring.scoring as scoring
 
-        entry = bmrb.BmrbEntry("4493", BMRB_DIR + "/bmr4493")
+        entry = bmrb.BmrbEntry("4493", BMRB_DIR / "bmr4493")
         peptide_shifts = entry.get_peptide_shifts()
         assert len(peptide_shifts) > 0
 
@@ -63,8 +63,18 @@ class TestPipelineSingleEntry:
             predshiftdct = potenci.get_pred_shifts(
                 seq, temperature, pH, ion, use_ph_corr
             )
-            ret = scoring.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
+            ret = scoring.get_offset_corrected_shifts(seq, shifts, predshiftdct)
             assert ret is not None, "Score computation returned None"
-            shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
+            (
+                weighted_diffs_final,
+                abs_weighted_diffs_final,
+                cmp_mask,
+                outlier_mask_final,
+                offsets_final,
+                weighted_diffs_initial,
+                abs_weighted_diffs_initial,
+                outlier_mask_initial,
+                offsets_initial,
+            ) = ret
             assert cmp_mask.any(), "No comparable backbone shifts found"
             break  # only test first peptide

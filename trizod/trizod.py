@@ -3,11 +3,11 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 import pickle
 import re
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -328,41 +328,42 @@ def parse_args():
     args = parser.parse_args(sys.argv[1:])
     # args = argparse.Namespace(**vars(args_init), **vars(args))
 
-    if not os.path.exists(args.input_dir):
+    args.input_dir = Path(args.input_dir)
+    if not args.input_dir.exists():
         logging.getLogger("trizod").error(
             f"Input directory {args.input_dir} does not exist."
         )
         exit(1)
-    if not os.path.isdir(args.input_dir):
+    if not args.input_dir.is_dir():
         logging.getLogger("trizod").error(f"Path {args.input_dir} is not a directory.")
         exit(1)
-    args.input_dir = os.path.abspath(args.input_dir)
+    args.input_dir = args.input_dir.resolve()
 
-    args.output_prefix = os.path.abspath(args.output_prefix)
-    if not os.path.exists(os.path.dirname(args.output_prefix)):
+    args.output_prefix = Path(args.output_prefix).resolve()
+    if not args.output_prefix.parent.exists():
         logging.getLogger("trizod").error(
-            f"Output directory {os.path.dirname(args.output_prefix)} does not exist."
+            f"Output directory {args.output_prefix.parent} does not exist."
         )
         exit(1)
 
     if len(args.peptide_length_range) == 1:
         args.peptide_length_range.append(np.inf)
 
-    args.cache_dir = os.path.abspath(args.cache_dir)
-    dirs = [
+    args.cache_dir = Path(args.cache_dir).resolve()
+    subdirs = [
         args.cache_dir,
-        os.path.join(args.cache_dir, "wSCS"),
-        os.path.join(args.cache_dir, "bmrb_entries"),
-        os.path.join(args.cache_dir, "potenci"),
+        args.cache_dir / "wSCS",
+        args.cache_dir / "bmrb_entries",
+        args.cache_dir / "potenci",
     ]
-    if not np.all([os.path.exists(d) for d in dirs]):
-        if not os.path.exists(args.cache_dir):
+    if not all(d.exists() for d in subdirs):
+        if not args.cache_dir.exists():
             logging.getLogger("trizod").debug(
                 f"Directory {args.cache_dir} does not exist and is created."
             )
-        for d in dirs:
-            os.makedirs(d, exist_ok=True)
-    elif not os.path.isdir(args.cache_dir):
+        for d in subdirs:
+            d.mkdir(parents=True, exist_ok=True)
+    elif not args.cache_dir.is_dir():
         logging.getLogger("trizod").error(f"Path {args.cache_dir} is not a directory.")
         exit(1)
 
@@ -375,21 +376,18 @@ def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str"):
     Else, all subdirectories are searched for bmr<id>_3.str files.
     """
     bmrb_files = {}
-    for p in os.listdir(input_dir):
-        m = re.fullmatch(pattern, p)
-        if m is not None:
-            bmrb_files[m.group(1)] = os.path.join(input_dir, m.group(0))
+    input_dir = Path(input_dir)
+    for p in input_dir.iterdir():
+        match = re.fullmatch(pattern, p.name)
+        if match is not None:
+            bmrb_files[match.group(1)] = input_dir / match.group(0)
     if not bmrb_files:
         # try finding BMRB files in subdirectories instead
-        for d in [
-            os.path.join(input_dir, p)
-            for p in os.listdir(input_dir)
-            if os.path.isdir(os.path.join(input_dir, p))
-        ]:
-            for p in os.listdir(d):
-                m = re.fullmatch(pattern, p)
-                if m is not None:
-                    bmrb_files[m.group(1)] = os.path.join(d, m.group(0))
+        for d in [p for p in input_dir.iterdir() if p.is_dir()]:
+            for p in d.iterdir():
+                match = re.fullmatch(pattern, p.name)
+                if match is not None:
+                    bmrb_files[match.group(1)] = d / match.group(0)
     return bmrb_files
 
 
@@ -410,21 +408,22 @@ def load_bmrb_entries(bmrb_files, cache_dir=None):
     # read cached data
     if cache_dir:
         columns.append("cache_fp")
+        cache_base = Path(cache_dir) / "bmrb_entries"
         for id_, fp in bmrb_files.items():
-            cache_fp = os.path.join(cache_dir, "bmrb_entries", f"{id_}.pkl")
+            cache_fp = cache_base / f"{id_}.pkl"
             entry = None
-            if os.path.exists(cache_fp):
+            if cache_fp.exists():
                 try:
-                    with open(cache_fp, "rb") as f:
+                    with cache_fp.open("rb") as f:
                         entry = pickle.load(f)
                 except Exception:
                     logging.getLogger("trizod.bmrb").debug(
                         f"cache file {cache_fp} corrupt or formatted wrong"
                     )
-            entries[id_] = (entry, os.path.dirname(fp), cache_fp)
+            entries[id_] = (entry, fp.parent, cache_fp)
     else:
         for id_, fp in bmrb_files.items():
-            entries[id_] = (None, os.path.dirname(fp))
+            entries[id_] = (None, fp.parent)
     df = pd.DataFrame(entries.values(), index=entries.keys(), columns=columns)
     sel = pd.isna(df.entry)
     if not df.loc[sel].empty:
@@ -456,19 +455,19 @@ def prefilter_dataframe(
         ["exp_method", "temperature", "ionic_strength", "pH", "seq", "total_bbshifts"]
     ].isna().any(axis=1)
     method_sel = df.exp_method.str.lower().str.contains("nmr")
-    method_whitelist_ = [l.lower() for l in method_whitelist]
-    if method_whitelist_:
+    whitelist_lower = [entry.lower() for entry in method_whitelist]
+    if whitelist_lower:
         method_sel &= df.exp_method_subtype.str.lower().str.contains(
-            "|".join(method_whitelist_), regex=True
+            "|".join(whitelist_lower), regex=True
         )
     else:
         method_sel = False
-    method_blacklist_ = [l.lower() for l in method_blacklist]
-    if method_blacklist_:
+    blacklist_lower = [entry.lower() for entry in method_blacklist]
+    if blacklist_lower:
         method_sel &= ~df.exp_method_subtype.str.lower().str.contains(
-            "|".join(method_blacklist_), regex=True
+            "|".join(blacklist_lower), regex=True
         )
-    if "" in method_whitelist_ and "" not in method_blacklist_:
+    if "" in whitelist_lower and "" not in blacklist_lower:
         method_sel |= df.exp_method.str.lower().str.contains("nmr") & pd.isna(
             df.exp_method_subtype
         )
@@ -509,8 +508,8 @@ def prefilter_dataframe(
             df.seq.str.count("X") / df.seq.str.len() <= max_x_fraction
         ),
     }
-    sels_kws = {kw: ~df[kw] for kw in keywords}
-    sels_denat = {cd: ~df[cd] for cd in chemical_denaturants}
+    sels_kws = {keyword: ~df[keyword] for keyword in keywords}
+    sels_denat = {denaturant: ~df[denaturant] for denaturant in chemical_denaturants}
     sels_all_pre = {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat
 
     passing = missing_vals.copy()
@@ -548,11 +547,13 @@ def postfilter_dataframe(
     }
     if not reject_shift_type_only:
         any_offsets_too_large = pd.Series(np.full((df.shape[0],), False))
-        for at in scoring.BBATNS:
-            any_offsets_too_large |= pd.isna(df[f"off_{at}"])
+        for atom_type in scoring.BBATNS:
+            any_offsets_too_large |= pd.isna(df[f"off_{atom_type}"])
         sels_post.update({("rejected due to any offset", ""): ~any_offsets_too_large})
 
-    sels_off = {f"off_{at}": ~pd.isna(df[f"off_{at}"]) for at in BBATNS}
+    sels_off = {
+        f"off_{atom_type}": ~pd.isna(df[f"off_{atom_type}"]) for atom_type in BBATNS
+    }
     sels_all_post = {k[0]: v for k, v in sels_post.items()}  # | sels_off
 
     passing = df["pass_pre"].copy()
@@ -800,8 +801,8 @@ def fill_row_data(
     row["total_bbshifts_post"] = np.nan
     row["bbshift_types_post"] = np.nan
     row["bbshift_positions_post"] = np.nan
-    for at in BBATNS:
-        row[f"off_{at}"] = pd.NA
+    for atom_type in BBATNS:
+        row[f"off_{atom_type}"] = pd.NA
     return row
 
 
@@ -823,8 +824,8 @@ def create_peptide_dataframe(
         "entity_assemID",
         "entityID",
     ]
-    it = tqdm(bmrb_entries.iterrows()) if progress else bmrb_entries.iterrows()
-    for id_, row in it:
+    row_iter = tqdm(bmrb_entries.iterrows()) if progress else bmrb_entries.iterrows()
+    for id_, row in row_iter:
         peptide_shifts = row.entry.get_peptide_shifts()
         for stID, entity_assemID, entityID in peptide_shifts:
             data.append([])
@@ -869,18 +870,18 @@ def load_potenci_cache(cache_dir, seq, temperature, pH, ion):
     """Load cached POTENCI predictions if available."""
     if not cache_dir:
         return None
-    potenci_dir = os.path.join(cache_dir, "potenci")
-    key = _potenci_cache_key(seq, temperature, pH, ion)
-    fp = os.path.join(potenci_dir, f"{key}.json")
-    if os.path.exists(fp):
+    cache_path = (
+        cache_dir / "potenci" / f"{_potenci_cache_key(seq, temperature, pH, ion)}.json"
+    )
+    if cache_path.exists():
         try:
-            with open(fp) as f:
+            with cache_path.open() as f:
                 raw = json.load(f)
             # JSON keys are strings — convert back to (int, str) tuples
             return {(int(k.split(",")[0]), k.split(",")[1]): v for k, v in raw.items()}
         except Exception:
             logging.getLogger("trizod").debug(
-                f"POTENCI cache file {fp} corrupt, ignoring"
+                f"POTENCI cache file {cache_path} corrupt, ignoring"
             )
     return None
 
@@ -889,12 +890,12 @@ def save_potenci_cache(cache_dir, seq, temperature, pH, ion, predshiftdct):
     """Save POTENCI predictions to cache."""
     if not cache_dir:
         return
-    potenci_dir = os.path.join(cache_dir, "potenci")
-    key = _potenci_cache_key(seq, temperature, pH, ion)
-    fp = os.path.join(potenci_dir, f"{key}.json")
+    cache_path = (
+        cache_dir / "potenci" / f"{_potenci_cache_key(seq, temperature, pH, ion)}.json"
+    )
     # Convert (int, str) tuple keys to strings for JSON
     raw = {f"{k[0]},{k[1]}": v for k, v in predshiftdct.items()}
-    with open(fp, "w") as f:
+    with cache_path.open("w") as f:
         json.dump(raw, f)
 
 
@@ -917,33 +918,30 @@ def compute_scores(
     if score_types is None:
         score_types = ["zscores"]
     exe_times = [np.nan, np.nan, np.nan]
-    wSCS_cache_fp = os.path.join(
-        cache_dir, "wSCS", f"{entry.id}_{stID}_{entity_assemID}_{entityID}.npz"
+    shifts_cache_path = (
+        cache_dir / "wSCS" / f"{entry.id}_{stID}_{entity_assemID}_{entityID}.npz"
     )
-    if cache_dir and os.path.exists(wSCS_cache_fp):
+    if cache_dir and shifts_cache_path.exists():
         try:
-            z = np.load(wSCS_cache_fp)
-            shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = (
-                z["shw"],
-                z["ashwi"],
-                z["cmp_mask"],
-                z["olf"],
-                z["offf"],
-                z["shw0"],
-                z["ashwi0"],
-                z["ol0"],
-                z["off0"],
-            )
-            offf, off0 = (
-                dict(zip(BBATNS, offf)),
-                dict(zip(BBATNS, off0)),
-            )
+            # cache keys kept as-is for backward compatibility
+            cached = np.load(str(shifts_cache_path))
+            weighted_diffs_final = cached["shw"]
+            abs_weighted_diffs_final = cached["ashwi"]
+            cmp_mask = cached["cmp_mask"]
+            outlier_mask_final = cached["olf"]
+            offsets_final = cached["offf"]
+            weighted_diffs_initial = cached["shw0"]
+            abs_weighted_diffs_initial = cached["ashwi0"]
+            outlier_mask_initial = cached["ol0"]
+            offsets_initial = cached["off0"]
+            offsets_final = dict(zip(BBATNS, offsets_final))
+            offsets_initial = dict(zip(BBATNS, offsets_initial))
         except Exception:
             logging.getLogger("trizod").debug(
-                f"cache file {wSCS_cache_fp} corrupt or formatted wrong, delete and repeat computation"
+                f"cache file {shifts_cache_path} corrupt or formatted wrong, delete and repeat computation"
             )
-            os.remove(wSCS_cache_fp)
-    if not (cache_dir and os.path.exists(wSCS_cache_fp)):
+            shifts_cache_path.unlink()
+    if not (cache_dir and shifts_cache_path.exists()):
         peptide_shifts = entry.get_peptide_shifts()
         shifts, condID, assemID, sampleIDs = peptide_shifts[
             (stID, entity_assemID, entityID)
@@ -967,54 +965,75 @@ def compute_scores(
             )
             raise ZscoreComputationError from err
         start_time = time.time()
-        ret = scoring.get_offset_corrected_wSCS(seq, shifts, predshiftdct)
+        ret = scoring.get_offset_corrected_shifts(seq, shifts, predshiftdct)
         if ret is None:
             logging.getLogger("trizod").error(
-                f"TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected wSCSs."
+                f"TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected weighted shifts."
             )
             raise ZscoreComputationError
         else:
             exe_times[1] = time.time() - start_time
-        shw, ashwi, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0 = ret
+        (
+            weighted_diffs_final,
+            abs_weighted_diffs_final,
+            cmp_mask,
+            outlier_mask_final,
+            offsets_final,
+            weighted_diffs_initial,
+            abs_weighted_diffs_initial,
+            outlier_mask_initial,
+            offsets_initial,
+        ) = ret
         if cache_dir:
+            # cache keys kept as-is for backward compatibility
             np.savez(
-                wSCS_cache_fp,
-                shw=shw,
-                ashwi=ashwi,
+                str(shifts_cache_path),
+                shw=weighted_diffs_final,
+                ashwi=abs_weighted_diffs_final,
                 cmp_mask=cmp_mask,
-                olf=olf,
-                offf=np.array([offf[at] for at in BBATNS]),
-                shw0=shw0,
-                ashwi0=ashwi0,
-                ol0=ol0,
-                off0=np.array([off0[at] for at in BBATNS]),
+                olf=outlier_mask_final,
+                offf=np.array([offsets_final[atom_type] for atom_type in BBATNS]),
+                shw0=weighted_diffs_initial,
+                ashwi0=abs_weighted_diffs_initial,
+                ol0=outlier_mask_initial,
+                off0=np.array([offsets_initial[atom_type] for atom_type in BBATNS]),
             )
-    offsets = offf
+    offsets = offsets_final
     if not offset_correction:
-        ashwi = ashwi0
-        offsets = off0
+        abs_weighted_diffs_final = abs_weighted_diffs_initial
+        offsets = offsets_initial
     elif not (max_offset is None or np.isinf(max_offset)):
         # check if any offsets are too large
-        for i, at in enumerate(BBATNS):
-            if np.abs(offf[at]) > max_offset:
-                offsets[at] = np.nan
+        for i, atom_type in enumerate(BBATNS):
+            if np.abs(offsets_final[atom_type]) > max_offset:
+                offsets[atom_type] = np.nan
                 if reject_shift_type_only:
-                    # mask data related to this backbone shift type, excluding it from scores computation
+                    # mask this backbone shift type, excluding it from scores computation
                     cmp_mask[:, i] = False
     if np.any(cmp_mask):
         start_time = time.time()
-        ashwi3, k3 = scoring.convert_to_triplet_data(ashwi, cmp_mask)
+        triplet_diffs, triplet_dof = scoring.convert_to_triplet_data(
+            abs_weighted_diffs_final, cmp_mask
+        )
         scores = []
         for score_type in score_types:
             if score_type == "corrected":
-                scores.append(scoring.compute_zscores(ashwi3, k3, cmp_mask, corr=True))
+                scores.append(
+                    scoring.compute_zscores(
+                        triplet_diffs, triplet_dof, cmp_mask, corr=True
+                    )
+                )
             elif score_type == "zscores":
-                scores.append(scoring.compute_zscores(ashwi3, k3, cmp_mask))
+                scores.append(
+                    scoring.compute_zscores(triplet_diffs, triplet_dof, cmp_mask)
+                )
             elif score_type == "pscores":
-                scores.append(scoring.compute_pscores(ashwi3, k3, cmp_mask))
+                scores.append(
+                    scoring.compute_pscores(triplet_diffs, triplet_dof, cmp_mask)
+                )
             else:
                 raise ValueError
-        k = k3
+        k = triplet_dof
         exe_times[2] = time.time() - start_time
     else:
         scores, k = (
@@ -1053,12 +1072,12 @@ def compute_scores_row(
             reject_shift_type_only=reject_shift_type_only,
             cache_dir=cache_dir,
         )
-        for score_type, scores_ in zip(score_types, scores):
-            row[score_type] = scores_
+        for score_type, score_array in zip(score_types, scores):
+            row[score_type] = score_array
         row["k"] = k
         # row['cmp_mask'] = cmp_mask
-        for at in BBATNS:
-            row[f"off_{at}"] = offsets[at]
+        for atom_type in BBATNS:
+            row[f"off_{atom_type}"] = offsets[atom_type]
         row["total_bbshifts_post"] = np.sum(cmp_mask)
         row["bbshift_types_post"] = np.any(cmp_mask, axis=0).sum()
         row["bbshift_positions_post"] = np.any(cmp_mask, axis=1).sum()
@@ -1097,11 +1116,11 @@ def output_dataset(
     if include_shifts:
         if no_shift_averaging:
             shifts = BBATNS + ["HA2", "HA3", "HB1", "HB2", "HB3"]
-        for i, at in enumerate(shifts):
-            df.loc[df.pass_post, at] = df.loc[df.pass_post, "bbshifts"].apply(
+        for i, atom_type in enumerate(shifts):
+            df.loc[df.pass_post, atom_type] = df.loc[df.pass_post, "bbshifts"].apply(
                 lambda x, i=i: x[:, i]
             )
-            df.loc[df.pass_post, at] = df.loc[df.pass_post, at].apply(
+            df.loc[df.pass_post, atom_type] = df.loc[df.pass_post, atom_type].apply(
                 np.round, args=(precision,)
             )
     if output_format == "csv":
@@ -1137,7 +1156,10 @@ def output_dataset(
             ]
             + score_types
             + shifts
-        ].to_csv(output_prefix + ".csv", float_format=f"%.{precision}f")
+        ].to_csv(
+            output_prefix.parent / f"{output_prefix.name}.csv",
+            float_format=f"%.{precision}f",
+        )
     elif output_format == "json":
         dout = df.loc[df.pass_post].reset_index()[
             [
@@ -1170,7 +1192,11 @@ def output_dataset(
             + score_types
             + shifts
         ]
-        dout.to_json(output_prefix + ".json", orient="records", lines=True)
+        dout.to_json(
+            output_prefix.parent / f"{output_prefix.name}.json",
+            orient="records",
+            lines=True,
+        )
     else:
         raise ValueError(f"Unknown output format: {output_format}")
 
