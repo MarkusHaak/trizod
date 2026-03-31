@@ -55,7 +55,7 @@ filter_defaults = pd.DataFrame(
         "unit-corrections": [True, True, False, False],
         "default-conditions": [True, True, True, False],
         "peptide-length-range": [[5], [5], [10], [15]],
-        "min-backbone-shift-types": [1, 2, 3, 5],
+        "min-backbone-shift-types": [1, 2, 3, 4],
         "min-backbone-shift-positions": [3, 3, 8, 12],
         "min-backbone-shift-fraction": [0.0, 0.0, 0.6, 0.8],
         "max-noncanonical-fraction": [1.0, 0.1, 0.025, 0.0],
@@ -1115,6 +1115,7 @@ def output_dataset(
                 np.round, args=(precision,)
             )
     if output_format == "csv":
+        df["seq"] = df["seq"].astype(object)
         df.loc[df.pass_post, "seq"] = df[df.pass_post].seq.apply(lambda x: list(x))
         dout = df.loc[df.pass_post].reset_index()[
             [
