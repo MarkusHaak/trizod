@@ -174,7 +174,7 @@ class SampleConditions:
         else:
             return None
         if fix_outliers and const1 == 0.0:  # not explicitly °C or °F
-            if 15 <= val < 50:
+            if 1 <= val < 50:
                 logging.getLogger("trizod.bmrb").info(
                     f"Very low temperature: {val}, assuming unit should be °C"
                 )
