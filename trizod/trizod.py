@@ -511,7 +511,7 @@ def prefilter_dataframe(
     sels_denat = {denaturant: ~df[denaturant] for denaturant in chemical_denaturants}
     sels_paramag = {}
     if exclude_paramagnetic:
-        sels_paramag = {"paramagnetic": ~df["paramagnetic"]}
+        sels_paramag = {"paramagnetic": ~df["paramagnetic"].astype(bool)}
     sels_all_pre = (
         {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat | sels_paramag
     )
