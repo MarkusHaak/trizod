@@ -92,6 +92,7 @@ filter_defaults = pd.DataFrame(
             ["solid"],
             ["solid"],
         ],
+        "exclude-paramagnetic": [False, True, True, True],
         "max-offset": [np.inf, 3.0, 3.0, 2.0],
         "reject-shift-type-only": [True, True, False, False],
     },
@@ -263,6 +264,12 @@ def parse_args():
         nargs="*",
         default=filter_defaults.loc[args_init.filter_defaults, "exp-method-blacklist"],
         help="Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.",
+    )
+    filter_grp.add_argument(
+        "--exclude-paramagnetic",
+        action=argparse.BooleanOptionalAction,
+        default=filter_defaults.loc[args_init.filter_defaults, "exclude-paramagnetic"],
+        help="Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata.",
     )
 
     scores_grp = parser.add_argument_group("Scoring Options")
@@ -441,6 +448,7 @@ def prefilter_dataframe(
     max_x_fraction,
     keywords,
     chemical_denaturants,
+    exclude_paramagnetic=False,
 ):
     missing_vals = ~df[
         ["exp_method", "temperature", "ionic_strength", "pH", "seq", "total_bbshifts"]
@@ -501,7 +509,12 @@ def prefilter_dataframe(
     }
     sels_kws = {keyword: ~df[keyword] for keyword in keywords}
     sels_denat = {denaturant: ~df[denaturant] for denaturant in chemical_denaturants}
-    sels_all_pre = {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat
+    sels_paramag = {}
+    if exclude_paramagnetic:
+        sels_paramag = {"paramagnetic": ~df["paramagnetic"]}
+    sels_all_pre = (
+        {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat | sels_paramag
+    )
 
     passing = missing_vals.copy()
     for _filter, sel in sels_all_pre.items():
@@ -509,7 +522,7 @@ def prefilter_dataframe(
 
     df["pass_pre"] = False
     df.loc[passing, "pass_pre"] = True
-    return df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre
+    return df, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all_pre
 
 
 def postfilter_dataframe(
@@ -563,6 +576,7 @@ def print_filter_losses(
     sels_pre,
     sels_kws,
     sels_denat,
+    sels_paramag,
     sels_all_pre,
     sels_post,
     sels_off,
@@ -619,6 +633,15 @@ def print_filter_losses(
                 f"{'.*' + filter + '.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}"
             )
 
+    if sels_paramag:
+        print()
+        for filter, sel in sels_paramag.items():
+            uniq = pd.Series(np.full((len(sel),), False))
+            for other_filter, other_sel in sels_all_pre.items():
+                if other_filter != filter:
+                    uniq |= ~other_sel
+            uniq = ~sel & ~uniq
+            print(f"{filter:<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}")
     print("-" * total_width)
     passing_pre = df["pass_pre"].copy()
     print(
@@ -736,6 +759,12 @@ def fill_row_data(
     row["bbshift_positions"] = bbshift_positions
     if include_shifts:
         row["bbshifts"] = bbshifts_arr
+    # check if entry is paramagnetic (assembly or entity level)
+    assembly = entry.assemblies[assemID]
+    entity = entry.entities[row["entityID"]]
+    row["paramagnetic"] = (
+        assembly.paramagnetic and assembly.paramagnetic.lower() == "yes"
+    ) or (entity.paramagnetic and entity.paramagnetic.lower() == "yes")
     # check if keywords are present
     fields = [
         entry.title,
@@ -1228,7 +1257,7 @@ def main():
         no_shift_averaging=args.no_shift_averaging,
         progress=args.progress,
     )
-    df, missing_vals, sels_pre, sels_kws, sels_denat, sels_all_pre = (
+    df, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all_pre = (
         prefilter_dataframe(
             df,
             method_whitelist=args.exp_method_whitelist,
@@ -1244,6 +1273,7 @@ def main():
             max_x_fraction=args.max_x_fraction,
             keywords=args.keywords_blacklist,
             chemical_denaturants=args.chemical_denaturants,
+            exclude_paramagnetic=args.exclude_paramagnetic,
         )
     )
     print()
@@ -1275,6 +1305,7 @@ def main():
         sels_pre,
         sels_kws,
         sels_denat,
+        sels_paramag,
         sels_all_pre,
         sels_post,
         sels_off,

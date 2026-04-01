@@ -49,6 +49,7 @@ class Entity:
             self.seq = self.seq.replace("\n", "").strip().upper()
         else:
             self.seq = None
+        self.paramagnetic = get_tag_vals(sf, "_Entity.Paramagnetic", indices=0)
         self.fragment = get_tag_vals(sf, "_Entity.Fragment")
         self.weight = get_tag_vals(sf, "_Entity.Formula_weight")
         self.db_links = list(
@@ -85,6 +86,7 @@ class Assembly:
         )
         self.organic_ligands = get_tag_vals(sf, "_Assembly.Organic_ligands", indices=0)
         self.metal_ions = get_tag_vals(sf, "_Assembly.Metal_ions", indices=0)
+        self.paramagnetic = get_tag_vals(sf, "_Assembly.Paramagnetic", indices=0)
         self.molecules_in_chemical_exchange = get_tag_vals(
             sf, "_Assembly.Molecules_in_chemical_exchange", indices=0
         )

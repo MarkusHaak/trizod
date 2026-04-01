@@ -26,6 +26,7 @@ respective CLI arguments.
 | chemical-denaturants         | Exclude entries with any of these chemicals as substrings of sample components, case ignored.                                              |
 | exp-method-whitelist         | Include only entries with any of these keywords as substring of the experiment subtype, case ignored.                                      |
 | exp-method-blacklist         | Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.                                           |
+| exclude-paramagnetic         | Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata. Paramagnetic samples cause massive chemical shift perturbations that make Z-score computation meaningless. |
 | max-offset                   | Maximum valid offset correction for any random coil chemical shift type.                                                                   |
 | reject-shift-type-only       | Upon exceeding the maximal offset set by `--max-offset`, exclude only the backbone shifts exceeding the offset instead of the whole entry. |
 
@@ -49,6 +50,7 @@ respective CLI arguments.
 | chemical-denaturants         | []          | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea'] | ['guanidin', 'GdmCl', 'Gdn-Hcl','urea'] | ['guanidin', 'GdmCl', 'Gdn-Hcl', 'urea', 'TFA', 'trifluoroethanol', 'Potassium Pyrophosphate'] |
 | exp-method-whitelist         | ['', '.']   | ['','solution', 'structures']           | ['','solution', 'structures']           | ['solution', 'structures']                                                                                                                                                                                          |
 | exp-method-blacklist         | []          | ['solid']                               | ['solid']                               | ['solid']                                                                                                                                                                                                           |
+| exclude-paramagnetic         | No          | Yes                                     | Yes                                     | Yes                                                                                                                                                                                                                 |
 | max-offset                   | +inf        | 3                                       | 3                                       | 2                                                                                                                                                                                                                   |
 | reject-shift-type-only       | Yes         | Yes                                     | No                                      | No                                                                                                                                                                                                                  |
 
