@@ -59,6 +59,43 @@ def parse_bmrb_lacs_file(text: str) -> dict[str, float | None]:
     return offsets
 
 
+def get_available_lacs_ids(lacs_dir: Path) -> set[str]:
+    """Get the set of BMRB IDs that have LACS reports.
+
+    Uses the locally cached .str files as the source of truth. If an index
+    file exists, reads that instead (faster than globbing thousands of files).
+    To refresh: delete _available_ids.txt and re-run.
+    """
+    index_path = lacs_dir / "_available_ids.txt"
+    if index_path.exists():
+        return set(index_path.read_text().splitlines())
+
+    # Build index from locally cached files
+    ids = set()
+    for p in lacs_dir.glob("bmr*_LACS.str"):
+        m = re.match(r"bmr(\d+)_LACS\.str", p.name)
+        if m:
+            ids.add(m.group(1))
+
+    if ids:
+        index_path.write_text("\n".join(sorted(ids, key=int)))
+        print(f"Built index from {len(ids)} cached LACS reports")
+    else:
+        # No local files — try fetching the directory listing from BMRB
+        print("No cached LACS reports found. Fetching BMRB directory listing...")
+        url = "https://bmrb.io/ftp/pub/bmrb/validation_reports/LACS/"
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp:
+                html = resp.read().decode("utf-8")
+            ids = set(re.findall(r"bmr(\d+)_LACS\.str", html))
+            index_path.write_text("\n".join(sorted(ids, key=int)))
+            print(f"Found {len(ids)} LACS reports on BMRB")
+        except Exception as e:
+            print(f"Warning: could not fetch LACS listing: {e}")
+
+    return ids
+
+
 def download_lacs_report(entry_id: str, cache_dir: Path) -> str | None:
     """Download a LACS report from BMRB FTP, with local caching."""
     cache_path = cache_dir / f"bmr{entry_id}_LACS.str"
@@ -157,6 +194,12 @@ def main():
     available_ids = {p.stem for p in pkl_files}
     print(f"Found {len(available_ids)} cached BMRB entries")
 
+    # Get IDs that actually have LACS reports (avoids thousands of 404s)
+    lacs_ids = get_available_lacs_ids(lacs_dir)
+    overlap_ids = available_ids & lacs_ids
+    print(f"LACS reports available on BMRB: {len(lacs_ids)}")
+    print(f"Overlap with our entries:       {len(overlap_ids)}")
+
     # Import our LACS after setup to avoid slow import at argparse time
     from trizod.lacs import compute_lacs_offsets
 
@@ -167,22 +210,20 @@ def main():
     entry_ids_compared = []
 
     n_downloaded = 0
-    n_no_lacs = 0
     n_parse_fail = 0
     n_extract_fail = 0
     n_compared = 0
 
-    # Sort IDs for reproducibility
-    sorted_ids = sorted(available_ids, key=lambda x: int(x) if x.isdigit() else 0)
+    # Only iterate over IDs that have LACS reports — no wasted 404s
+    sorted_ids = sorted(overlap_ids, key=int)
 
     for entry_id in sorted_ids:
         if n_compared >= args.max_entries:
             break
 
-        # Download BMRB LACS report
+        # Download BMRB LACS report (cached after first download)
         text = download_lacs_report(entry_id, lacs_dir)
         if text is None:
-            n_no_lacs += 1
             continue
         n_downloaded += 1
 
@@ -247,19 +288,16 @@ def main():
             entry_ids_compared.append(entry_id)
             n_compared += 1
 
-        if n_compared % 50 == 0 and n_compared > 0:
-            print(
-                f"  ... compared {n_compared} entries "
-                f"(downloaded: {n_downloaded}, no LACS: {n_no_lacs})"
-            )
+        if n_compared % 100 == 0 and n_compared > 0:
+            print(f"  ... compared {n_compared}/{args.max_entries} entries")
 
     # --- Report ---
     print(f"\n{'=' * 70}")
     print("LACS Comparison Report")
     print(f"{'=' * 70}")
     print(f"Entries with cached pickles:  {len(available_ids)}")
-    print(f"LACS reports downloaded:      {n_downloaded}")
-    print(f"No BMRB LACS report:          {n_no_lacs}")
+    print(f"Overlapping LACS reports:     {len(overlap_ids)}")
+    print(f"LACS reports fetched:         {n_downloaded}")
     print(f"Parse/extract failures:       {n_parse_fail + n_extract_fail}")
     print(f"Entries compared:             {n_compared}")
     print()

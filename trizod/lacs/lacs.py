@@ -348,7 +348,7 @@ def _compute_13c_offset(
 
     # Two-line robust regression
     # MATLAB LACS uses atom-specific thresholds: ths = [1 1 1 6 6 6 6]
-    # CA/CB/HA = 1, CO/N/HN/HB = 6
+    # indexed via ths(x_original): CA=1, CB=1, HA=6, CO=6
     threshold = two_line_threshold
     sel1 = X_clean < threshold
     sel2 = X_clean > -threshold
@@ -618,10 +618,12 @@ def compute_lacs_offsets(
                 seq, seq_nums, ca, cb, co, _RC_CO, two_line_threshold=6.0
             )
 
-        # HA offset
+        # HA offset — uses wider threshold (6 ppm) per MATLAB LACS
         ha = obs_shifts.get("HA")
         if ha is not None:
-            offsets["HA"] = _compute_13c_offset(seq, seq_nums, ca, cb, ha, _RC_HA)
+            offsets["HA"] = _compute_13c_offset(
+                seq, seq_nums, ca, cb, ha, _RC_HA, two_line_threshold=6.0
+            )
 
         # H (amide) offset — uses preceding residue correlation
         h = obs_shifts.get("H")

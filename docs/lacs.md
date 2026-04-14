@@ -55,12 +55,19 @@ The secondary shift data has a characteristic "V-shape" because helical and stra
 - **Strand residues** have large negative CA-CB secondary shifts (X << 0)
 - **Coil residues** cluster near X = 0
 
-LACS fits **two overlapping regression lines**:
+LACS fits **two overlapping regression lines** using an atom-specific threshold:
 
 | Line | Points used | Captures |
 |------|------------|----------|
-| Line 1 (strand side) | X < +1 ppm | Coil + strand residues |
-| Line 2 (helix side) | X > -1 ppm | Coil + helix residues |
+| Line 1 (strand side) | X < +threshold | Coil + strand residues |
+| Line 2 (helix side) | X > -threshold | Coil + helix residues |
+
+The threshold differs by atom type (matching the MATLAB `ths` array):
+
+| Atom type | Threshold | Rationale |
+|-----------|-----------|-----------|
+| CA, CB | 1 ppm | Strong correlation with X; narrow overlap suffices |
+| HA, C' (CO) | 6 ppm | Weaker X correlation; wider overlap needed to include enough helix/strand points and avoid intercept bias |
 
 Each line is fitted with **robust regression** (iteratively reweighted least squares with Tukey bisquare weights) to resist remaining outliers. This is equivalent to MATLAB's `robustfit`.
 
