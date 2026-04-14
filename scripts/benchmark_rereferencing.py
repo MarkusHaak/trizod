@@ -104,6 +104,30 @@ NOISE_LEVELS = {
     "high": 0.15,  # 15% of REFINED_WEIGHTS
 }
 
+# --- Secondary structure perturbations (Tier 3) ---
+# Typical secondary chemical shifts from Wishart & Sykes 1994
+# These are added ON TOP of random-coil + offset + noise
+SS_PERTURBATIONS = {
+    "helix": {
+        "CA": 3.1,
+        "CB": -0.4,
+        "C": 2.1,
+        "HA": -0.4,
+        "H": -0.1,
+        "N": 1.6,
+        "HB": 0.0,
+    },
+    "sheet": {
+        "CA": -1.5,
+        "CB": 2.2,
+        "C": -1.3,
+        "HA": 0.5,
+        "H": 0.3,
+        "N": -1.3,
+        "HB": 0.0,
+    },
+}
+
 
 def generate_potenci_shifts(seq, temperature=298.0, pH=7.0, ion=0.1):
     """Generate POTENCI random-coil predictions and convert to arrays."""
@@ -123,19 +147,42 @@ def generate_potenci_shifts(seq, temperature=298.0, pH=7.0, ion=0.1):
     return shifts_arr, mask, predshiftdct
 
 
-def corrupt_shifts(shifts_arr, mask, offsets, noise_frac=0.0):
-    """Add known offsets and optional Gaussian noise to shifts."""
+def corrupt_shifts(shifts_arr, mask, offsets, noise_frac=0.0, ss_fraction=0.0):
+    """Add known offsets, optional noise, and optional secondary structure perturbations.
+
+    ss_fraction: fraction of residues to perturb with helix/sheet shifts.
+    First 30% of sequence gets helix perturbations, last 30% gets sheet,
+    middle 40% stays random coil.
+    """
     corrupted = shifts_arr.copy()
+    n = corrupted.shape[0]
+
+    # Apply systematic offset (the referencing error we want methods to detect)
     for j, at in enumerate(BACKBONE_ATOMS):
         if at in offsets:
             corrupted[mask[:, j], j] += offsets[at]
 
+    # Apply Gaussian noise
     if noise_frac > 0:
         rng = np.random.default_rng(42)
         for j, at in enumerate(BACKBONE_ATOMS):
             noise_std = REFINED_WEIGHTS[at] * noise_frac
-            noise = rng.normal(0, noise_std, size=corrupted.shape[0])
+            noise = rng.normal(0, noise_std, size=n)
             corrupted[mask[:, j], j] += noise[mask[:, j]]
+
+    # Apply secondary structure perturbations
+    if ss_fraction > 0:
+        helix_end = int(n * 0.3)
+        sheet_start = int(n * 0.7)
+        for j, at in enumerate(BACKBONE_ATOMS):
+            # Helix region: first 30%
+            for i in range(helix_end):
+                if mask[i, j]:
+                    corrupted[i, j] += SS_PERTURBATIONS["helix"][at] * ss_fraction
+            # Sheet region: last 30%
+            for i in range(sheet_start, n):
+                if mask[i, j]:
+                    corrupted[i, j] += SS_PERTURBATIONS["sheet"][at] * ss_fraction
 
     return corrupted
 
@@ -242,7 +289,22 @@ def evaluate_recovery(true_offsets, recovered_offsets):
 
 
 def run_benchmark():
-    """Run full benchmark across all sequences, offsets, and noise levels."""
+    """Run full benchmark across all sequences, offsets, and tiers.
+
+    Tiers (following Reid Alderson's proposal):
+    - Tier 1: pure random coil + offset only
+    - Tier 2: + Gaussian noise (low and high)
+    - Tier 3: + secondary structure perturbations (60% of residues perturbed)
+    """
+    # Define tiers: (tier_name, noise_frac, ss_fraction)
+    tiers = [
+        ("T1_clean", 0.0, 0.0),
+        ("T2_low_noise", 0.05, 0.0),
+        ("T2_high_noise", 0.15, 0.0),
+        ("T3_ss_clean", 0.0, 1.0),
+        ("T3_ss_noisy", 0.10, 1.0),
+    ]
+
     all_results = []
 
     for seq_name, seq in SEQUENCES.items():
@@ -252,8 +314,10 @@ def run_benchmark():
         shifts_arr, mask, predshiftdct = generate_potenci_shifts(seq)
 
         for offset_name, offsets in OFFSET_SCENARIOS.items():
-            for noise_name, noise_frac in NOISE_LEVELS.items():
-                corrupted = corrupt_shifts(shifts_arr, mask, offsets, noise_frac)
+            for tier_name, noise_frac, ss_frac in tiers:
+                corrupted = corrupt_shifts(
+                    shifts_arr, mask, offsets, noise_frac, ss_frac
+                )
 
                 # Run each method
                 lacs_offsets = run_lacs(seq, corrupted, mask)
@@ -274,7 +338,7 @@ def run_benchmark():
                                 "sequence": seq_name,
                                 "seq_len": len(seq),
                                 "offset_scenario": offset_name,
-                                "noise": noise_name,
+                                "tier": tier_name,
                                 "method": method_name,
                                 "atom": at,
                                 **r,
@@ -284,115 +348,102 @@ def run_benchmark():
     return all_results
 
 
+def _mae_table(results, filter_key, filter_values, methods, atoms):
+    """Build a MAE table filtered by a specific key."""
+    lines = []
+    header = "| Method | " + " | ".join(filter_values) + " |"
+    sep = "| ------ | " + " | ".join(["----:"] * len(filter_values)) + " |"
+    lines.extend([header, sep])
+    for method in methods:
+        mr = [r for r in results if r["method"] == method and r["error"] is not None]
+        row = f"| {method} |"
+        for val in filter_values:
+            filtered = [r for r in mr if r[filter_key] == val]
+            if filtered:
+                mae = np.mean([abs(r["error"]) for r in filtered])
+                row += f" {mae:.3f} |"
+            else:
+                row += " N/A |"
+        lines.append(row)
+    return lines
+
+
 def format_summary(results):
     """Create summary tables from benchmark results."""
-    lines = [
-        "# Re-Referencing Benchmark Results",
-        "",
-        "Synthetic benchmark following Reid Alderson's approach (2026-04-01):",
-        "generate ground-truth shifts with POTENCI, corrupt with known offsets,",
-        "run each method, compare recovery accuracy.",
-        "",
-        f"- {len(SEQUENCES)} test sequences (lengths {min(len(s) for s in SEQUENCES.values())}-{max(len(s) for s in SEQUENCES.values())})",
-        f"- {len(OFFSET_SCENARIOS)} offset scenarios (small/medium/large/negative/mixed)",
-        f"- {len(NOISE_LEVELS)} noise levels (none/low/high)",
-        "",
-    ]
-
-    # Summary by method and atom type: mean absolute error
+    tiers = sorted({r["tier"] for r in results})
     methods = sorted({r["method"] for r in results})
     atoms = BACKBONE_ATOMS
 
-    lines.append("## Mean Absolute Error (ppm) by method and atom type")
-    lines.append("")
-    lines.append("Averaged across all sequences, offset scenarios, and noise levels.")
-    lines.append("Lower is better.")
-    lines.append("")
+    lines = [
+        "# Re-Referencing Benchmark Results",
+        "",
+        "Synthetic benchmark following Reid Alderson's approach (2026-04-01).",
+        "",
+        f"- {len(SEQUENCES)} test sequences (lengths "
+        f"{min(len(s) for s in SEQUENCES.values())}-"
+        f"{max(len(s) for s in SEQUENCES.values())})",
+        f"- {len(OFFSET_SCENARIOS)} offset scenarios",
+        f"- {len(tiers)} tiers:",
+        "  - T1: pure random coil + offset",
+        "  - T2: + Gaussian noise (low/high)",
+        "  - T3: + secondary structure perturbations (helix + sheet, ±noise)",
+        "",
+    ]
+
+    # --- Overall MAE by method and atom type ---
+    lines.extend(["## Overall Mean Absolute Error (ppm) by atom type", ""])
     header = "| Method | " + " | ".join(atoms) + " | Mean |"
     sep = "| ------ | " + " | ".join(["----:"] * len(atoms)) + " | ---: |"
     lines.extend([header, sep])
 
     for method in methods:
-        method_results = [r for r in results if r["method"] == method]
+        mr = [r for r in results if r["method"] == method]
         row = f"| {method} |"
         errors = []
         for at in atoms:
-            at_results = [
-                r for r in method_results if r["atom"] == at and r["error"] is not None
-            ]
-            if at_results:
-                mae = np.mean([abs(r["error"]) for r in at_results])
+            at_r = [r for r in mr if r["atom"] == at and r["error"] is not None]
+            if at_r:
+                mae = np.mean([abs(r["error"]) for r in at_r])
                 errors.append(mae)
                 row += f" {mae:.3f} |"
             else:
                 row += " N/A |"
-        if errors:
-            row += f" {np.mean(errors):.3f} |"
-        else:
-            row += " N/A |"
+        row += f" {np.mean(errors):.3f} |" if errors else " N/A |"
         lines.append(row)
 
-    # Detection rate by method and offset magnitude
-    lines.extend(["", "## Detection Rate by method and offset magnitude", ""])
-    lines.append("Fraction of cases where the recovered offset is within 0.5 ppm")
-    lines.append("(or 30%) of the true offset. Higher is better.")
+    # --- MAE by tier (key comparison: T1/T2 vs T3) ---
+    lines.extend(["", "## Mean Absolute Error by tier", ""])
+    lines.append(
+        "T3 tiers include secondary structure perturbations — the hardest test."
+    )
+    lines.append("")
+    lines.extend(_mae_table(results, "tier", tiers, methods, atoms))
+
+    # --- Detection rate by offset magnitude ---
+    lines.extend(["", "## Detection Rate by offset magnitude", ""])
+    lines.append("Fraction within 0.5 ppm (or 30%) of true offset.")
     lines.append("")
     header = "| Method | " + " | ".join(OFFSET_SCENARIOS.keys()) + " | Overall |"
     sep = "| ------ | " + " | ".join(["----:"] * len(OFFSET_SCENARIOS)) + " | ------: |"
     lines.extend([header, sep])
 
     for method in methods:
-        method_results = [r for r in results if r["method"] == method]
+        mr = [r for r in results if r["method"] == method]
         row = f"| {method} |"
         rates = []
         for scenario in OFFSET_SCENARIOS:
-            sc_results = [
-                r
-                for r in method_results
-                if r["offset_scenario"] == scenario and r["detected"] is not None
-            ]
-            if sc_results:
-                rate = np.mean([r["detected"] for r in sc_results])
+            sr = [r for r in mr if r["offset_scenario"] == scenario]
+            if sr:
+                rate = np.mean([r["detected"] for r in sr])
                 rates.append(rate)
                 row += f" {rate:.1%} |"
             else:
                 row += " N/A |"
-        if rates:
-            row += f" {np.mean(rates):.1%} |"
-        else:
-            row += " N/A |"
+        row += f" {np.mean(rates):.1%} |" if rates else " N/A |"
         lines.append(row)
 
-    # Effect of noise
-    lines.extend(["", "## Effect of noise on recovery (mean absolute error, ppm)", ""])
-    header = "| Method | " + " | ".join(NOISE_LEVELS.keys()) + " |"
-    sep = "| ------ | " + " | ".join(["----:"] * len(NOISE_LEVELS)) + " |"
-    lines.extend([header, sep])
-
-    for method in methods:
-        method_results = [r for r in results if r["method"] == method]
-        row = f"| {method} |"
-        for noise in NOISE_LEVELS:
-            nr = [
-                r
-                for r in method_results
-                if r["noise"] == noise and r["error"] is not None
-            ]
-            if nr:
-                mae = np.mean([abs(r["error"]) for r in nr])
-                row += f" {mae:.3f} |"
-            else:
-                row += " N/A |"
-        lines.append(row)
-
-    # Per-sequence performance (mean absolute error across all conditions)
-    lines.extend(
-        [
-            "",
-            "## Per-sequence performance (mean absolute error across all conditions)",
-            "",
-        ]
-    )
+    # --- Per-sequence ---
+    lines.extend(["", "## Per-sequence performance (MAE across all conditions)", ""])
     header = "| Sequence | Len | " + " | ".join(methods) + " |"
     sep = "| -------- | --: | " + " | ".join(["----:"] * len(methods)) + " |"
     lines.extend([header, sep])
