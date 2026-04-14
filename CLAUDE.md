@@ -18,7 +18,8 @@ All three must pass.
 - `trizod/bmrb/bmrb.py` — BMRB NMR-STAR file parsing (Entity, Assembly, SampleConditions, ShiftTable, BmrbEntry)
 - `trizod/potenci/potenci.py` — POTENCI random coil shift predictions (public API: `get_pred_shifts()`)
 - `trizod/scoring/scoring.py` — Z-score and G-score computation, offset correction (AIC-based global + 9-residue rolling window)
-- `trizod/constants.py` — shared constants (BACKBONE_ATOMS, AA mappings, weights)
+- `trizod/lacs/lacs.py` — LACS re-referencing (detect/correct NMR referencing errors using Wishart random coil tables)
+- `trizod/constants.py` — shared constants (BACKBONE_ATOMS, REFINED_WEIGHTS, AA mappings)
 
 ## Pipeline Flow
 1. Parse args (two-phase: preset first, then detailed args)
@@ -42,31 +43,37 @@ All three must pass.
 - `print_filter_losses()` reports per-filter counts (filtered + uniquely filtered)
 - See `docs/filtering.md` for full reference
 
-## Offset Correction
-- `scoring.py` detects per-atom-type systematic referencing biases between observed and POTENCI-predicted shifts
-- Two strategies: global offset (AIC test) and 9-residue rolling window; picks whichever yields lower Z-scores
-- Functionally equivalent to re-referencing (LACS/PANAV), but uses POTENCI as the reference instead of BMRB population averages
-- Currently only applied internally for scoring — does not output corrected shift files
+## Re-Referencing and Offset Correction
+- Two complementary systems for correcting systematic NMR referencing errors:
+  1. **LACS** (`trizod/lacs/`) — standalone module, uses Wishart 1995 random coil tables as reference. Works on all residues (structured + disordered). Not yet integrated into scoring pipeline.
+  2. **POTENCI-based offset correction** (`scoring.py`) — uses POTENCI predictions as reference, AIC-based global offset + 9-residue rolling window. Integrated into scoring.
+- LACS is designed to run BEFORE POTENCI comparison (corrects raw observed shifts)
+- The POTENCI-based correction handles residual biases AFTER LACS
+- `REFINED_WEIGHTS` in `constants.py` are POTENCI RMSD on a 117-entry IDP reference set (Nielsen & Mulder, from CheZOD source code, not published)
 
 ## Conventions
 - Python >=3.9, ruff for linting/formatting
 - Scientific variable names allowed (T, pH, Ion, N, etc.) — see ruff ignore rules
 - Always show staged files and proposed commit message, then wait for user approval before committing
 
+## Scripts
+- `scripts/precompute_potenci_cache.py` — precompute POTENCI predictions for faster pipeline runs
+- `scripts/filter_impact_report.py` — per-filter impact analysis across all BMRB entries, outputs markdown
+- `scripts/compare_lacs_bmrb.py` — validate LACS reimplementation against BMRB pre-computed LACS reports (6,774 entries)
+- `scripts/fetch_panav_bmrb.py` — compute PANAV offsets locally via panav.jar (~10 min for 17k entries)
+- `scripts/benchmark_rereferencing.py` — synthetic benchmark comparing LACS vs TriZOD offset recovery
+
 ## Testing
 - `tests/test_potenci.py` — POTENCI prediction accuracy and edge cases
 - `tests/test_smoke.py` — CLI entrypoints, single-entry pipeline integration
 - `tests/test_pipeline_regression.py` — 300-entry subset regression (requires data/)
+- `tests/test_lacs.py` — LACS module: 11 tests including synthetic benchmark
 - Pipeline/regression tests require BMRB data in `data/bmrb_entries/`
-- 9 tests total, ~60-80s runtime
-
-## Scripts
-- `scripts/precompute_potenci_cache.py` — precompute POTENCI predictions for faster pipeline runs
-- `scripts/filter_impact_report.py` — per-filter impact analysis across all BMRB entries, outputs markdown
 
 ## Documentation
 - `docs/pipeline.md` — detailed pipeline walkthrough (6 stages)
 - `docs/potenci.md` — POTENCI module: origin, API, performance, internals
+- `docs/lacs.md` — LACS module: algorithm, differences from MATLAB, API
 - `docs/filtering.md` — filter descriptions and default values per stringency level
 - `docs/_planning/` — internal planning notes (gitignored)
 - `docs/_planning/status-2026-03-25.md` — implementation status and roadmap
@@ -75,5 +82,8 @@ All three must pass.
 - BMRB entries: `data/bmrb_entries/` (17,388 files, not committed)
 - Baselines: `data/baseline/` (not committed)
 - Filter impact analysis: `data/filter_impact/` (not committed)
+- BMRB LACS reports: `data/bmrb_lacs/` (6,772 files, not committed)
+- PANAV offsets: `data/panav_offsets.json` (computed locally, not committed)
 - Test reference: `tests/reference/unfiltered.json` (committed)
 - Test subset IDs: `tests/quick_subset_ids.txt` (committed)
+- External tools: `tools/panav.jar` (103KB, not committed, gitignored)
