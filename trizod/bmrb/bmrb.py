@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pynmrstar
 
-from trizod.constants import AA3TO1, BBATNS
+from trizod.constants import AA3TO1, BACKBONE_ATOMS
 
 
 def get_tag_vals(
@@ -691,7 +691,7 @@ class BmrbEntry:
 
 
 def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True):
-    bb_atm_ids = BBATNS[:]
+    bb_atm_ids = BACKBONE_ATOMS[:]
     # 0: '_Atom_chem_shift.Entity_assembly_ID'
     # 1: '_Atom_chem_shift.Entity_ID'
     # 2: '_Atom_chem_shift.Seq_ID'

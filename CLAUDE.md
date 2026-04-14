@@ -17,8 +17,8 @@ All three must pass.
 - `trizod/trizod.py` — pipeline orchestration, CLI, filtering (`filter_defaults` DataFrame, `prefilter_dataframe()`, `print_filter_losses()`, `compute_scores_row()`, `main()`)
 - `trizod/bmrb/bmrb.py` — BMRB NMR-STAR file parsing (Entity, Assembly, SampleConditions, ShiftTable, BmrbEntry)
 - `trizod/potenci/potenci.py` — POTENCI random coil shift predictions (public API: `get_pred_shifts()`)
-- `trizod/scoring/scoring.py` — Z-score computation, offset correction (AIC-based global + 9-residue rolling window)
-- `trizod/constants.py` — shared constants (BBATNS, AA mappings, weights)
+- `trizod/scoring/scoring.py` — Z-score and G-score computation, offset correction (AIC-based global + 9-residue rolling window)
+- `trizod/constants.py` — shared constants (BACKBONE_ATOMS, AA mappings, weights)
 
 ## Pipeline Flow
 1. Parse args (two-phase: preset first, then detailed args)
@@ -42,11 +42,11 @@ All three must pass.
 - `print_filter_losses()` reports per-filter counts (filtered + uniquely filtered)
 - See `docs/filtering.md` for full reference
 
-## Offset Correction (not re-referencing)
-- `scoring.py` detects per-atom-type systematic biases between observed and POTENCI-predicted shifts
+## Offset Correction
+- `scoring.py` detects per-atom-type systematic referencing biases between observed and POTENCI-predicted shifts
 - Two strategies: global offset (AIC test) and 9-residue rolling window; picks whichever yields lower Z-scores
-- This is NOT classical NMR re-referencing (DSS/TMS) — it adjusts Z-score calculation internally
-- The pipeline does NOT output re-referenced .str files or corrected chemical shifts
+- Functionally equivalent to re-referencing (LACS/PANAV), but uses POTENCI as the reference instead of BMRB population averages
+- Currently only applied internally for scoring — does not output corrected shift files
 
 ## Conventions
 - Python >=3.9, ruff for linting/formatting
@@ -59,6 +59,10 @@ All three must pass.
 - `tests/test_pipeline_regression.py` — 300-entry subset regression (requires data/)
 - Pipeline/regression tests require BMRB data in `data/bmrb_entries/`
 - 9 tests total, ~60-80s runtime
+
+## Scripts
+- `scripts/precompute_potenci_cache.py` — precompute POTENCI predictions for faster pipeline runs
+- `scripts/filter_impact_report.py` — per-filter impact analysis across all BMRB entries, outputs markdown
 
 ## Documentation
 - `docs/pipeline.md` — detailed pipeline walkthrough (6 stages)

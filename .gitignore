@@ -24,8 +24,13 @@ tmp*/
 *.pkl
 *.log
 
-# Internal planning notes
+# Local tools (not version-controlled)
+tools/
+
+# Internal docs
 docs/_planning/
+docs/260415/
+docs/pipeline-overview.md
 
 # OS
 .DS_Store

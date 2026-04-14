@@ -34,7 +34,8 @@ BMRB NMR-STAR files
 Each BMRB NMR-STAR file is parsed into a `BmrbEntry` object containing:
 
 - **Entity** — molecular identity: name, sequence, polymer type, fragment info
-- **Assembly** — oligomeric state, molecular weight, thiol state
+- **Assembly** — composition (number of components, organic ligands, metal
+  ions), paramagnetic flag, per-entity physical state (e.g. native, denatured)
 - **SampleConditions** — temperature (K), pH, ionic strength (M), pressure
 - **ShiftTable(s)** — assigned chemical shifts per atom per residue
 
@@ -43,34 +44,77 @@ missing fields, unit ambiguities (e.g. Celsius vs Kelvin), and multi-entity entr
 
 ## Stage 2: Build Peptide DataFrame
 
-**Module**: `trizod/trizod.py` → `fill_row_data()`
+**Module**: `trizod/trizod.py` → `create_peptide_dataframe()` + `fill_row_data()`
 
-Each parsed entry becomes a row in a pandas DataFrame with columns for:
+Each BMRB entry can contain multiple shift tables, entity assemblies, and
+entities (chains). The DataFrame gets one row per unique
+`(shift_table, entity_assembly, entity)` combination — most entries produce a
+single row, but multi-chain complexes or entries with multiple shift tables
+produce several.
 
-- Entry ID, sequence, sequence length
-- Sample conditions (temperature, pH, ionic strength)
-- Backbone chemical shifts (7 atom types: C, CA, CB, HA, H, N, HB)
-- Metadata (experiment type, keywords, sample components)
+Columns populated at this stage:
 
-Only backbone atom types defined in `BBATNS` are retained. Non-canonical amino
-acids are translated to their canonical equivalents via `CAN_TRANS`.
+- **IDs**: `entryID`, `stID`, `entity_assemID`, `entityID`
+- **Conditions**: `temperature` (K), `pH`, `ionic_strength` (M)
+- **Sequence**: `seq` (one-letter code), used later for POTENCI predictions
+- **Shift statistics**: `total_bbshifts`, `bbshift_types` (how many of the 7
+  atom types are present), `bbshift_positions` (residues with at least one shift)
+- **Metadata**: `entity_name`, `exp_method`, `exp_method_subtype`,
+  `citation_title`, `citation_DOI`
+- **Flags**: `paramagnetic`, keyword booleans, denaturant booleans
+- **Placeholders** (filled in Stage 4): `scores`, `k`, `off_C`..`off_HB`,
+  `total_bbshifts_post`, `bbshift_types_post`, `bbshift_positions_post`
+
+The backbone shifts array (`seq_len x 7` float matrix + boolean mask) is not
+stored in the DataFrame — it is computed on the fly during Stage 4 scoring.
+
+Only backbone atom types defined in `BACKBONE_ATOMS` are retained. Pro-chiral
+methylene/methyl protons — glycine `HA2/HA3`, non-Ala `HB2/HB3`, and Ala
+`HB1/HB2/HB3` — are always collapsed into `HA`/`HB` via averaging (POTENCI only predicts
+the mean value, so stereospecific vs non-stereospecific makes no difference). Non-canonical residues are dropped from the shift table entirely (they remain as `X` placeholders in the sequence and
+contribute no shifts).
 
 ## Stage 3: Pre-filter
 
 **Module**: `trizod/trizod.py` → `prefilter_dataframe()`
 
 Entries are filtered based on configurable criteria organized into four preset
-levels (unfiltered, tolerant, moderate, strict). See [filtering.md](filtering.md)
-for the complete filter reference.
+levels (`unfiltered`, `tolerant`, `moderate`, `strict`). Each filter can be
+overridden individually via CLI. See [filtering.md](filtering.md) for the
+complete filter reference with default values per tier.
 
-Filter categories:
-- **Physicochemical**: temperature, pH, ionic strength ranges
-- **Data quality**: minimum backbone shift types, positions, coverage fraction
-- **Sequence**: peptide length, non-canonical/X-residue fraction limits
-- **Content**: keyword blacklists, chemical denaturant detection, experiment method
-- **Unit handling**: assumptions, corrections, default condition imputation
+Before named filters run, rows missing any required value (`exp_method`,
+`temperature`, `ionic_strength`, `pH`, `seq`, or `total_bbshifts`) are
+silently rejected.
 
-A filter loss report tracks how many entries each filter removes.
+Filter groups:
+
+- **Experiment method**: two-layer whitelist/blacklist on `exp_method_subtype`.
+  The blacklist (`"solid"` from tolerant upward) excludes solid-state NMR. The
+  whitelist (`"solution"`, `"structures"`) controls what's allowed — entries
+  with missing subtype (25% of BMRB) pass in unfiltered/tolerant/moderate but
+  are rejected in strict.
+- **Physicochemical ranges**: temperature, pH, ionic strength must fall within
+  the tier's bounds (e.g. strict: T ∈ [273, 313] K, pH ∈ [6, 8]).
+- **Data quality**: minimum backbone shift types (of the 7 atom types), minimum
+  positions with shifts, minimum fraction of sequence covered by shifts.
+- **Sequence**: minimum peptide length, maximum fraction of non-canonical
+  residues (`CANONICAL_AA_MASK` counts canonical AAs in the sequence), maximum
+  fraction of `X` residues.
+- **Content blacklists**: keyword blacklist (searched across title, entity name,
+  assembly name/details, citation keywords, sample names), chemical denaturant
+  detection (searched in sample component names), paramagnetic flag.
+
+Note: the `unit-assumptions`, `unit-corrections`, and `default-conditions`
+settings in `filter_defaults` are **not filters** — they control how sample
+condition values are parsed in Stage 2 (whether to assume SI units for missing
+unit annotations, fix outlier temperatures, impute defaults for missing pH /
+temperature / ionic strength). They affect which values the physicochemical
+filters see, but are not filter criteria themselves.
+
+`print_filter_losses()` reports per-filter counts: how many entries each filter
+removed, and how many were *uniquely* removed (would have passed if only that
+filter were disabled).
 
 ## Stage 4: Compute Scores
 
@@ -92,7 +136,7 @@ disordered (random coil) version of the sequence, given the sample conditions
 POTENCI dominates pipeline runtime (~92%), primarily due to iterative pKa fitting
 with `scipy.optimize.curve_fit`.
 
-### 4b. Weighted Secondary Chemical Shifts
+### 4b. Secondary Chemical Shifts and Weighting
 
 For each residue and atom type, the secondary chemical shift (SCS) is:
 
@@ -100,30 +144,58 @@ For each residue and atom type, the secondary chemical shift (SCS) is:
 SCS = observed_shift - predicted_shift
 ```
 
-These are combined into a weighted sum using empirically derived weights from
-`trizod/constants.py`, producing a single per-residue weighted SCS value.
+The result is a `(seq_len, 7)` array of differences — one column per backbone
+atom type. Each SCS is then divided by its atom-type-specific weight from
+`REFINED_WEIGHTS` in `trizod/constants.py`. The weights act as expected standard
+deviations, normalising each atom type so they contribute proportionally
+(e.g. N shifts vary over ~20 ppm while H shifts vary over ~3 ppm — without
+normalisation, N would dominate). The output is still a 2D array, not a single
+value per residue.
 
 ### 4c. Offset Correction
 
-`scoring.get_offset_corrected_wscs()` corrects systematic offsets between
-observed and predicted shifts using two strategies:
+`scoring.get_offset_corrected_shifts()` detects and corrects systematic biases
+between observed and POTENCI-predicted shifts. This addresses referencing
+errors or consistent prediction biases for individual atom types.
 
-1. **Global offset** (`compute_offsets`): per-atom-type mean offset, accepted via
-   AIC test
-2. **Running offset** (`compute_running_offsets`): rolling window (size 9) at the
-   position of minimum standard deviation
+The procedure:
 
-The method yielding the lower average Z-score is selected.
+1. **Initial Z-scores** are computed from the raw weighted SCS (no offset).
+2. **Outlier detection** (`get_outlier_mask()`): residues with Z-scores > 6.0 are
+   flagged and excluded from offset estimation, preventing extreme values from
+   biasing the correction.
+3. **Two offset strategies** are computed independently:
+   - **Global offset** (`compute_offsets`): per-atom-type mean SCS across all
+     non-outlier residues, accepted only if the AIC improvement exceeds the
+     threshold (delta AIC > 6.0) and at least 4 data points exist for that
+     atom type.
+   - **Running offset** (`compute_running_offsets`): 9-residue rolling window,
+     selecting the window position with the lowest mean standard deviation
+     across atom types. Also subject to the AIC test.
+4. **Strategy selection**: the running offset is adopted only if it yields a
+   lower mean Z-score (= better agreement with random coil) than the global
+   offset. Otherwise the global offset is used.
+5. The final weighted SCS are recomputed with the selected offsets applied.
 
 ### 4d. Z-score and G-score
 
-The CheZOD **Z-score** measures how many standard deviations a residue's weighted
-SCS deviates from the random coil expectation. Higher Z-scores indicate more
-ordered (structured) residues; lower scores indicate disorder.
+The CheZOD **Z-score** uses a chi-squared CDF approximation (Wilson-Hilferty) to
+measure how much a residue's weighted SCS deviates from random coil. For each
+residue, the residual sum of squares (RSS) of the weighted, offset-corrected
+SCS is computed and mapped through the chi-squared distribution. The degrees
+of freedom equal the number of comparable atom types at that residue.
 
-The TriZOD **G-score** normalizes Z-scores to [0, 1] range, independent of the
-number of available shift types, making scores comparable across entries with
-different data completeness.
+Scores are computed over a **3-residue sliding window** (`convert_to_triplet_data()`):
+the weighted SCS from residues i-1, i, and i+1 are concatenated, and degrees
+of freedom are summed across the triplet. This smooths scores and incorporates
+neighbour context. Higher Z-scores indicate more ordered (structured) residues;
+lower scores indicate disorder. Terminal residues receive `NaN`.
+
+The TriZOD **G-score** is a separate scoring function, not a normalisation of
+the Z-score. It computes the geometric mean of per-atom-type Gaussian
+observation probabilities from the same weighted SCS. The result falls in
+[0, 1] and is independent of the number of available shift types, making
+scores comparable across entries with different data completeness.
 
 ## Stage 5: Post-filter
 

@@ -17,7 +17,7 @@ from tqdm import tqdm
 import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
 import trizod.scoring.scoring as scoring
-from trizod.constants import BBATNS, CAN_TRANS
+from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
 from trizod.utils import ArgHelpFormatter
 
 
@@ -276,10 +276,10 @@ def parse_args():
     scores_grp.add_argument(
         "--score-types",
         nargs="+",
-        choices=["zscores", "pscores", "corrected"],
-        default=["zscores", "pscores"],
+        choices=["zscores", "gscores", "corrected"],
+        default=["zscores", "gscores"],
         help="Which type of scores are created: Observation count-independent zscores (zscores), "
-        "original CheZOD zscores (chezod) or geometric mean of observation probabilities (pscores).",
+        "original CheZOD zscores (corrected) or geometric mean of observation probabilities (gscores).",
     )
     scores_grp.add_argument(
         "--offset-correction",
@@ -500,7 +500,11 @@ def prefilter_dataframe(
             (df.bbshift_positions / df.seq.str.len()) >= min_backbone_shift_fraction
         ),
         ("non-canonical frac", f"[0, {max_noncanonical_fraction}]"): (
-            (1.0 - df.seq.str.translate(CAN_TRANS).str.count("#") / df.seq.str.len())
+            (
+                1.0
+                - df.seq.str.translate(CANONICAL_AA_MASK).str.count("#")
+                / df.seq.str.len()
+            )
             <= max_noncanonical_fraction
         ),
         ("X fraction", f"[0, {max_x_fraction}]"): (
@@ -551,12 +555,13 @@ def postfilter_dataframe(
     }
     if not reject_shift_type_only:
         any_offsets_too_large = pd.Series(np.full((df.shape[0],), False))
-        for atom_type in scoring.BBATNS:
+        for atom_type in scoring.BACKBONE_ATOMS:
             any_offsets_too_large |= pd.isna(df[f"off_{atom_type}"])
         sels_post.update({("rejected due to any offset", ""): ~any_offsets_too_large})
 
     sels_off = {
-        f"off_{atom_type}": ~pd.isna(df[f"off_{atom_type}"]) for atom_type in BBATNS
+        f"off_{atom_type}": ~pd.isna(df[f"off_{atom_type}"])
+        for atom_type in BACKBONE_ATOMS
     }
     sels_all_post = {k[0]: v for k, v in sels_post.items()}  # | sels_off
 
@@ -821,7 +826,7 @@ def fill_row_data(
     row["total_bbshifts_post"] = np.nan
     row["bbshift_types_post"] = np.nan
     row["bbshift_positions_post"] = np.nan
-    for atom_type in BBATNS:
+    for atom_type in BACKBONE_ATOMS:
         row[f"off_{atom_type}"] = pd.NA
     return row
 
@@ -954,8 +959,8 @@ def compute_scores(
             abs_weighted_diffs_initial = cached["ashwi0"]
             outlier_mask_initial = cached["ol0"]
             offsets_initial = cached["off0"]
-            offsets_final = dict(zip(BBATNS, offsets_final))
-            offsets_initial = dict(zip(BBATNS, offsets_initial))
+            offsets_final = dict(zip(BACKBONE_ATOMS, offsets_final))
+            offsets_initial = dict(zip(BACKBONE_ATOMS, offsets_initial))
         except Exception:
             logging.getLogger("trizod").debug(
                 f"cache file {shifts_cache_path} corrupt or formatted wrong, delete and repeat computation"
@@ -1012,11 +1017,15 @@ def compute_scores(
                 ashwi=abs_weighted_diffs_final,
                 cmp_mask=cmp_mask,
                 olf=outlier_mask_final,
-                offf=np.array([offsets_final[atom_type] for atom_type in BBATNS]),
+                offf=np.array(
+                    [offsets_final[atom_type] for atom_type in BACKBONE_ATOMS]
+                ),
                 shw0=weighted_diffs_initial,
                 ashwi0=abs_weighted_diffs_initial,
                 ol0=outlier_mask_initial,
-                off0=np.array([offsets_initial[atom_type] for atom_type in BBATNS]),
+                off0=np.array(
+                    [offsets_initial[atom_type] for atom_type in BACKBONE_ATOMS]
+                ),
             )
     offsets = offsets_final
     if not offset_correction:
@@ -1024,7 +1033,7 @@ def compute_scores(
         offsets = offsets_initial
     elif not (max_offset is None or np.isinf(max_offset)):
         # check if any offsets are too large
-        for i, atom_type in enumerate(BBATNS):
+        for i, atom_type in enumerate(BACKBONE_ATOMS):
             if np.abs(offsets_final[atom_type]) > max_offset:
                 offsets[atom_type] = np.nan
                 if reject_shift_type_only:
@@ -1047,9 +1056,9 @@ def compute_scores(
                 scores.append(
                     scoring.compute_zscores(triplet_diffs, triplet_dof, cmp_mask)
                 )
-            elif score_type == "pscores":
+            elif score_type == "gscores":
                 scores.append(
-                    scoring.compute_pscores(triplet_diffs, triplet_dof, cmp_mask)
+                    scoring.compute_gscores(triplet_diffs, triplet_dof, cmp_mask)
                 )
             else:
                 raise ValueError
@@ -1096,7 +1105,7 @@ def compute_scores_row(
             row[score_type] = score_array
         row["k"] = k
         # row['cmp_mask'] = cmp_mask
-        for atom_type in BBATNS:
+        for atom_type in BACKBONE_ATOMS:
             row[f"off_{atom_type}"] = offsets[atom_type]
         row["total_bbshifts_post"] = np.sum(cmp_mask)
         row["bbshift_types_post"] = np.any(cmp_mask, axis=0).sum()
@@ -1135,7 +1144,7 @@ def output_dataset(
     shifts = []
     if include_shifts:
         if no_shift_averaging:
-            shifts = BBATNS + ["HA2", "HA3", "HB1", "HB2", "HB3"]
+            shifts = BACKBONE_ATOMS + ["HA2", "HA3", "HB1", "HB2", "HB3"]
         for i, atom_type in enumerate(shifts):
             df.loc[df.pass_post, atom_type] = df.loc[df.pass_post, "bbshifts"].apply(
                 lambda x, i=i: x[:, i]

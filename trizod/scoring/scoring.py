@@ -6,7 +6,7 @@ import pandas as pd
 import scipy
 
 import trizod.bmrb.bmrb as bmrb
-from trizod.constants import BBATNS, REFINED_WEIGHTS  # , Z_CORRECTION
+from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS  # , Z_CORRECTION
 
 
 def chi2_cdf_approx(rss, k):
@@ -30,7 +30,7 @@ def compare_to_predicted(predshiftdct, bbshifts_arr, bbshifts_mask):
     predshift_mask = np.full(shape=bbshifts_mask.shape, fill_value=False)
     for res, aa in predshiftdct:
         i = res - 1
-        for j, atom_type in enumerate(BBATNS):
+        for j, atom_type in enumerate(BACKBONE_ATOMS):
             if (
                 atom_type in predshiftdct[(res, aa)]
                 and predshiftdct[(res, aa)][atom_type] is not None
@@ -43,11 +43,11 @@ def compare_to_predicted(predshiftdct, bbshifts_arr, bbshifts_mask):
         where=bbshifts_mask & predshift_mask,
         out=bbshifts_arr,
     )
-    return diff_arr, BBATNS, bbshifts_mask & predshift_mask
+    return diff_arr, BACKBONE_ATOMS, bbshifts_mask & predshift_mask
 
 
 def compute_running_offsets(diff_arr, mask, min_AIC=999.0):
-    weights = np.array([REFINED_WEIGHTS[atom_type] for atom_type in BBATNS])
+    weights = np.array([REFINED_WEIGHTS[atom_type] for atom_type in BACKBONE_ATOMS])
     weighted_diffs = diff_arr / weights
     df = pd.DataFrame(weighted_diffs).mask(~mask)
     # compute rolling standard deviation over detected shifts
@@ -85,7 +85,7 @@ def compute_running_offsets(diff_arr, mask, min_AIC=999.0):
 
     offset_dict = {}
     for col in rolling_stds.dropna(how="all", axis=1).columns:
-        atom_type = BBATNS[col]
+        atom_type = BACKBONE_ATOMS[col]
         rolling_offset = rolling_offsets.loc[best_idx][col]
         std_raw = rolling_stds_raw.loc[best_idx][col]
         std_corrected = rolling_stds.loc[best_idx][col]
@@ -124,7 +124,7 @@ def compute_offsets(weighted_diffs, accepted_mask, min_AIC=999.0):
     reject_mask = (delta_AIC < min_AIC) | (atom_counts < 4)
     std_corrected[reject_mask] = std_uncorrected[reject_mask]
     new_offsets[reject_mask] = 0.0
-    new_offsets = dict(zip(BBATNS, new_offsets))
+    new_offsets = dict(zip(BACKBONE_ATOMS, new_offsets))
     return new_offsets
 
 
@@ -145,8 +145,10 @@ def get_outlier_mask(
 def compute_weighted_diffs(diff_arr, mask, offset_dict=None):
     if offset_dict is None:
         offset_dict = {}
-    weights = np.array([REFINED_WEIGHTS[atom_type] for atom_type in BBATNS])
-    offsets = np.array([offset_dict.get(atom_type, 0.0) for atom_type in BBATNS])
+    weights = np.array([REFINED_WEIGHTS[atom_type] for atom_type in BACKBONE_ATOMS])
+    offsets = np.array(
+        [offset_dict.get(atom_type, 0.0) for atom_type in BACKBONE_ATOMS]
+    )
     weighted_diffs = diff_arr / weights
     # copy needed: weighted_diffs is reused later, subtract with out= would overwrite it
     abs_weighted_diffs = weighted_diffs.copy()
@@ -168,7 +170,7 @@ def compute_zscores(diffs, dof, mask, corr=False):
     return zscores
 
 
-def compute_pscores(diffs, dof, mask, quotient=2.0, limit=4.0):
+def compute_gscores(diffs, dof, mask, quotient=2.0, limit=4.0):
     indices = np.where(np.any(mask, axis=1))
     first_idx, last_idx = indices[0][0], indices[0][-1]
 
@@ -234,7 +236,7 @@ def get_offset_corrected_shifts(seq, shifts, predshiftdct):
         f"total number of backbone shifts: {total_backbone_shifts}"
     )
 
-    offsets_initial = dict.fromkeys(BBATNS, 0.0)
+    offsets_initial = dict.fromkeys(BACKBONE_ATOMS, 0.0)
     weighted_diffs_initial, abs_weighted_diffs_initial = compute_weighted_diffs(
         diff_arr, cmp_mask, offsets_initial
     )
