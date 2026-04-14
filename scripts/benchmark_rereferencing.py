@@ -328,8 +328,8 @@ def run_benchmark():
 
                 for method_name, method_offsets in [
                     ("LACS", lacs_offsets),
-                    ("TriZOD-global", trizod_global),
-                    ("TriZOD-rolling", trizod_rolling),
+                    ("CheZOD-global", trizod_global),
+                    ("CheZOD-rolling", trizod_rolling),
                 ]:
                     eval_result = evaluate_recovery(offsets, method_offsets)
                     for at, r in eval_result.items():
