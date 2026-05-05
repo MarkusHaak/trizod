@@ -34,12 +34,14 @@ The pre-Step-8 BMRB pickle cache is preserved at `tmp/bmrb_entries_pre_step8/` f
 
 After Tasks 1-7's pipeline changes (Steps 4-9 + LACS-in-pipeline + Step 8 wildcards):
 
-| Tier | Entries scored | Entries final (post-filter) | `.str` files emitted |
-|---|---:|---:|---:|
-| `unfiltered` | 17,843 | (rerun in progress) | 5,576 (partial, growing) |
-| `tolerant` | 17,843 | 15,433 (86.49%) | 15,433 |
-| `moderate` | 17,843 | 10,107 (56.64%) | 10,107 |
-| `strict` | 17,843 | 3,033 (17.00%) | 3,033 |
+| Tier | Entries final (post-filter) | `.str` files emitted |
+|---|---:|---:|
+| `unfiltered` | 16,851 | 16,851 |
+| `tolerant` | 15,433 | 15,433 |
+| `moderate` | 10,107 | 10,107 |
+| `strict` | 3,033 | 3,033 |
+
+(Some BMRB entries contain multiple peptide shift tables / entities, so the `unfiltered` count is slightly above 17,388.)
 
 (`Entries scored` is larger than the 17,388 BMRB entry count because some entries contain multiple peptide shift tables / entities.)
 
