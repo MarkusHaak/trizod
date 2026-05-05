@@ -204,6 +204,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # Ensure POTENCI cache subdirectory exists before any save_potenci_cache
+    # call (the main pipeline creates it at startup; standalone scripts must
+    # create it themselves to avoid FileNotFoundError on first cache miss).
+    (args.potenci_cache / "potenci").mkdir(parents=True, exist_ok=True)
+
     panels = []
 
     # Panel A: alpha-synuclein 17665 + 6968 ground-truth
