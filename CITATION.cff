@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "TriZOD: Re-referenced BMRB chemical shift dataset and disorder scoring pipeline"
+message: "If you use this software or dataset, please cite it as below."
+type: software
+authors:
+  - family-names: Senoner
+    given-names: Tobias
+    email: tobias.senoner94@gmail.com
+repository-code: "https://github.com/tsenoner/trizod"
+license: MIT
+version: "0.1.0-pipeline"
+date-released: "2026-05-05"
+keywords:
+  - NMR
+  - BMRB
+  - chemical shift
+  - intrinsically disordered proteins
+  - LACS
+  - POTENCI
+  - CheZOD

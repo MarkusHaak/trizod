@@ -1,0 +1,38 @@
+{
+  "title": "TriZOD — Re-referenced BMRB chemical shift dataset and disorder scoring pipeline",
+  "description": "TriZOD scores BMRB NMR chemical shift entries for protein disorder using POTENCI random-coil predictions, LACS re-referencing, and CheZOD-style Z/G-scores. This Zenodo deposit contains the re-referenced backbone-shifts-only NMR-STAR files plus per-residue disorder scores produced by the finalized 2026-05 pipeline.",
+  "creators": [
+    {
+      "name": "Senoner, Tobias",
+      "affiliation": "TUM"
+    }
+  ],
+  "keywords": [
+    "NMR",
+    "BMRB",
+    "intrinsically disordered proteins",
+    "chemical shift",
+    "re-referencing",
+    "LACS",
+    "POTENCI",
+    "CheZOD",
+    "Z-score",
+    "G-score"
+  ],
+  "license": "MIT",
+  "upload_type": "dataset",
+  "related_identifiers": [
+    {
+      "identifier": "https://bmrb.io/",
+      "relation": "isDerivedFrom",
+      "scheme": "url",
+      "resource_type": "dataset"
+    },
+    {
+      "identifier": "https://github.com/tsenoner/trizod",
+      "relation": "isSupplementTo",
+      "scheme": "url",
+      "resource_type": "software"
+    }
+  ]
+}
