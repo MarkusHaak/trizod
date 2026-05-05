@@ -840,6 +840,7 @@ def fill_row_data(
     row["bbshift_positions_post"] = np.nan
     for atom_type in BACKBONE_ATOMS:
         row[f"off_{atom_type}"] = pd.NA
+        row[f"lacs_off_{atom_type}"] = pd.NA
     return row
 
 
@@ -974,6 +975,10 @@ def compute_scores(
             abs_weighted_diffs_initial = cached["ashwi0"]
             outlier_mask_initial = cached["ol0"]
             offsets_initial = cached["off0"]
+            if "lacs" in cached.files:
+                lacs_offsets = dict(zip(BACKBONE_ATOMS, cached["lacs"]))
+            else:
+                lacs_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
             offsets_final = dict(zip(BACKBONE_ATOMS, offsets_final))
             offsets_initial = dict(zip(BACKBONE_ATOMS, offsets_initial))
         except Exception:
@@ -1025,6 +1030,7 @@ def compute_scores(
             abs_weighted_diffs_initial,
             outlier_mask_initial,
             offsets_initial,
+            lacs_offsets,
         ) = ret
         if cache_dir:
             # cache keys kept as-is for backward compatibility
@@ -1042,6 +1048,9 @@ def compute_scores(
                 ol0=outlier_mask_initial,
                 off0=np.array(
                     [offsets_initial[atom_type] for atom_type in BACKBONE_ATOMS]
+                ),
+                lacs=np.array(
+                    [lacs_offsets[atom_type] for atom_type in BACKBONE_ATOMS]
                 ),
             )
     offsets = offsets_final
@@ -1086,7 +1095,7 @@ def compute_scores(
             [np.full((cmp_mask.shape[0],), np.nan) for i in range(len(score_types))],
             np.full((cmp_mask.shape[0],), np.nan),
         )
-    return scores, k, cmp_mask, offsets, exe_times
+    return scores, k, cmp_mask, offsets, exe_times, lacs_offsets
 
 
 def compute_scores_row(
@@ -1104,7 +1113,7 @@ def compute_scores_row(
         return row
     try:
         start_time = time.time()
-        scores, k, cmp_mask, offsets, exe_times = compute_scores(
+        scores, k, cmp_mask, offsets, exe_times, lacs_offsets = compute_scores(
             bmrb_entries.loc[row["entryID"], "entry"],
             row["stID"],
             row["entity_assemID"],
@@ -1126,6 +1135,7 @@ def compute_scores_row(
         # row['cmp_mask'] = cmp_mask
         for atom_type in BACKBONE_ATOMS:
             row[f"off_{atom_type}"] = offsets[atom_type]
+            row[f"lacs_off_{atom_type}"] = lacs_offsets[atom_type]
         row["total_bbshifts_post"] = np.sum(cmp_mask)
         row["bbshift_types_post"] = np.any(cmp_mask, axis=0).sum()
         row["bbshift_positions_post"] = np.any(cmp_mask, axis=1).sum()
@@ -1232,6 +1242,13 @@ def output_dataset(
                 "off_HA",
                 "off_HB",
                 "off_N",
+                "lacs_off_C",
+                "lacs_off_CA",
+                "lacs_off_CB",
+                "lacs_off_H",
+                "lacs_off_HA",
+                "lacs_off_HB",
+                "lacs_off_N",
                 "bbshift_positions_post",
                 "bbshift_types_post",
                 "total_bbshifts",

@@ -7,6 +7,7 @@ import scipy
 
 import trizod.bmrb.bmrb as bmrb
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS  # , Z_CORRECTION
+from trizod.lacs import compute_lacs_offsets
 
 
 def chi2_cdf_approx(rss, k):
@@ -216,15 +217,71 @@ def convert_to_triplet_data(abs_weighted_diffs, mask):
     return triplet_diffs, triplet_dof
 
 
+# Atoms LACS computes offsets for. HB is intentionally absent — LACS uses
+# Wishart random-coil tables that don't cover HB; POTENCI/AIC handles HB
+# residual bias.
+_LACS_ATOMS = ["C", "CA", "CB", "HA", "H", "N"]
+
+
+def apply_lacs_correction(bbshifts_arr, bbshifts_mask, seq):
+    """Run LACS on observed shifts; return (corrected_arr, offsets_dict).
+
+    Args:
+        bbshifts_arr: (N, 7) observed shift array, columns = BACKBONE_ATOMS.
+        bbshifts_mask: (N, 7) boolean mask of populated entries.
+        seq: 1-letter amino-acid sequence of length N.
+
+    Returns:
+        (corrected_arr, offsets_dict):
+          corrected_arr is a copy of bbshifts_arr with per-atom LACS offsets
+          subtracted (corrected_arr[:, j] = bbshifts_arr[:, j] - offsets[atom]).
+          Atoms not covered by LACS (HB) are unchanged.
+          offsets_dict has all 7 BACKBONE_ATOMS as keys; values are the LACS
+          offset in ppm, or 0.0 if LACS returned None (no offset detected) or
+          the atom is outside _LACS_ATOMS.
+    """
+    n = len(seq)
+    seq_nums = np.arange(1, n + 1)
+
+    atom_col = {atom: i for i, atom in enumerate(BACKBONE_ATOMS)}
+
+    obs_shifts = {}
+    for atom in _LACS_ATOMS:
+        col = atom_col[atom]
+        arr = np.full(n, np.nan)
+        valid = bbshifts_mask[:, col]
+        arr[valid] = bbshifts_arr[valid, col]
+        obs_shifts[atom] = arr
+
+    raw_offsets = compute_lacs_offsets(seq, seq_nums, obs_shifts)
+
+    corrected_arr = bbshifts_arr.copy()
+    offsets_dict = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+    for atom, offset in raw_offsets.items():
+        if offset is None or atom not in atom_col:
+            continue
+        col = atom_col[atom]
+        valid = bbshifts_mask[:, col]
+        corrected_arr[valid, col] -= offset
+        offsets_dict[atom] = float(offset)
+
+    return corrected_arr, offsets_dict
+
+
 def get_offset_corrected_shifts(seq, shifts, predshiftdct, rereference_mode="both"):
-    # get polymer sequence and chemical backbone shifts
     ret = bmrb.get_valid_bbshifts(shifts, seq)
     if ret is None:
         logging.getLogger("trizod.scoring").error("retrieving backbone shifts failed")
         return
     bbshifts_arr, bbshifts_mask = ret
 
-    # compare predicted to actual shifts
+    if rereference_mode in ("lacs", "both"):
+        bbshifts_arr, lacs_offsets = apply_lacs_correction(
+            bbshifts_arr, bbshifts_mask, seq
+        )
+    else:
+        lacs_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+
     diff_arr, _, cmp_mask = compare_to_predicted(
         predshiftdct, bbshifts_arr, bbshifts_mask
     )
@@ -240,63 +297,73 @@ def get_offset_corrected_shifts(seq, shifts, predshiftdct, rereference_mode="bot
     weighted_diffs_initial, abs_weighted_diffs_initial = compute_weighted_diffs(
         diff_arr, cmp_mask, offsets_initial
     )
-    zscores_initial = compute_zscores(
-        abs_weighted_diffs_initial, cmp_mask.sum(axis=1), cmp_mask
-    )
-    zscores_triplet_initial = compute_zscores(
-        *convert_to_triplet_data(abs_weighted_diffs_initial, cmp_mask), cmp_mask
-    )
-    outlier_mask_initial = get_outlier_mask(
-        zscores_triplet_initial,
-        zscores_initial,
-        abs_weighted_diffs_initial,
-        cmp_mask,
-        cdf_threshold=6.0,
-    )
-    new_offsets_initial = compute_offsets(
-        weighted_diffs_initial, cmp_mask & ~outlier_mask_initial, min_AIC=6.0
-    )
-    mean_zscore_initial = np.nanmean(zscores_triplet_initial)
-    offsets_final = new_offsets_initial
-    outlier_mask_final = outlier_mask_initial
 
-    offsets_running = compute_running_offsets(diff_arr, cmp_mask, min_AIC=6.0)
-    if offsets_running is None:
-        logging.getLogger("trizod.scoring").warning(
-            "no running offset could be estimated"
+    if rereference_mode in ("none", "lacs"):
+        outlier_mask_initial = np.zeros_like(cmp_mask)
+        offsets_final = offsets_initial
+        outlier_mask_final = outlier_mask_initial
+        weighted_diffs_final, abs_weighted_diffs_final = (
+            weighted_diffs_initial,
+            abs_weighted_diffs_initial,
         )
-    elif np.any([v != 0.0 for v in offsets_running.values()]):
-        weighted_diffs_corrected, abs_weighted_diffs_corrected = compute_weighted_diffs(
-            diff_arr, cmp_mask, offsets_running
+    else:
+        zscores_initial = compute_zscores(
+            abs_weighted_diffs_initial, cmp_mask.sum(axis=1), cmp_mask
         )
-        zscores_corrected = compute_zscores(
-            abs_weighted_diffs_corrected, cmp_mask.sum(axis=1), cmp_mask
+        zscores_triplet_initial = compute_zscores(
+            *convert_to_triplet_data(abs_weighted_diffs_initial, cmp_mask), cmp_mask
         )
-        zscores_triplet_corrected = compute_zscores(
-            *convert_to_triplet_data(abs_weighted_diffs_corrected, cmp_mask), cmp_mask
+        outlier_mask_initial = get_outlier_mask(
+            zscores_triplet_initial,
+            zscores_initial,
+            abs_weighted_diffs_initial,
+            cmp_mask,
+            cdf_threshold=6.0,
         )
-        mean_zscore_corrected = np.nanmean(zscores_triplet_corrected)
-        if (
-            mean_zscore_initial >= mean_zscore_corrected
-        ):  # use offset correction only if it improves accordance with the POTENCI model
-            outlier_mask_corrected = get_outlier_mask(
-                zscores_triplet_corrected,
-                zscores_corrected,
-                abs_weighted_diffs_corrected,
+        new_offsets_initial = compute_offsets(
+            weighted_diffs_initial, cmp_mask & ~outlier_mask_initial, min_AIC=6.0
+        )
+        mean_zscore_initial = np.nanmean(zscores_triplet_initial)
+        offsets_final = new_offsets_initial
+        outlier_mask_final = outlier_mask_initial
+
+        offsets_running = compute_running_offsets(diff_arr, cmp_mask, min_AIC=6.0)
+        if offsets_running is None:
+            logging.getLogger("trizod.scoring").warning(
+                "no running offset could be estimated"
+            )
+        elif np.any([v != 0.0 for v in offsets_running.values()]):
+            weighted_diffs_corrected, abs_weighted_diffs_corrected = (
+                compute_weighted_diffs(diff_arr, cmp_mask, offsets_running)
+            )
+            zscores_corrected = compute_zscores(
+                abs_weighted_diffs_corrected, cmp_mask.sum(axis=1), cmp_mask
+            )
+            zscores_triplet_corrected = compute_zscores(
+                *convert_to_triplet_data(abs_weighted_diffs_corrected, cmp_mask),
                 cmp_mask,
-                cdf_threshold=6.0,
             )
-            new_offsets_corrected = compute_offsets(
-                weighted_diffs_corrected,
-                cmp_mask & ~outlier_mask_corrected,
-                min_AIC=6.0,
-            )
-            offsets_final = new_offsets_corrected
-            outlier_mask_final = outlier_mask_corrected
+            mean_zscore_corrected = np.nanmean(zscores_triplet_corrected)
+            if mean_zscore_initial >= mean_zscore_corrected:
+                outlier_mask_corrected = get_outlier_mask(
+                    zscores_triplet_corrected,
+                    zscores_corrected,
+                    abs_weighted_diffs_corrected,
+                    cmp_mask,
+                    cdf_threshold=6.0,
+                )
+                new_offsets_corrected = compute_offsets(
+                    weighted_diffs_corrected,
+                    cmp_mask & ~outlier_mask_corrected,
+                    min_AIC=6.0,
+                )
+                offsets_final = new_offsets_corrected
+                outlier_mask_final = outlier_mask_corrected
 
-    weighted_diffs_final, abs_weighted_diffs_final = compute_weighted_diffs(
-        diff_arr, cmp_mask, offsets_final
-    )
+        weighted_diffs_final, abs_weighted_diffs_final = compute_weighted_diffs(
+            diff_arr, cmp_mask, offsets_final
+        )
+
     return (
         weighted_diffs_final,
         abs_weighted_diffs_final,
@@ -307,4 +374,5 @@ def get_offset_corrected_shifts(seq, shifts, predshiftdct, rereference_mode="bot
         abs_weighted_diffs_initial,
         outlier_mask_initial,
         offsets_initial,
+        lacs_offsets,
     )

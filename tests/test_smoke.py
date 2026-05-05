@@ -86,6 +86,7 @@ class TestPipelineSingleEntry:
                 abs_weighted_diffs_initial,
                 outlier_mask_initial,
                 offsets_initial,
+                lacs_offsets,
             ) = ret
             assert cmp_mask.any(), "No comparable backbone shifts found"
             break  # only test first peptide

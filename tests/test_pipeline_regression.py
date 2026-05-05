@@ -40,6 +40,8 @@ class TestPipelineRegression:
                 str(SUBSET_DIR),
                 "--filter-defaults",
                 "unfiltered",
+                "--rereference-mode",
+                "potenci-only",
                 "--output-prefix",
                 output_prefix,
                 "--output-format",
