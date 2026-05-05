@@ -1374,7 +1374,9 @@ def main():
                 (row["stID"], row["entity_assemID"], row["entityID"])
             ]
             seq = row["seq"]
-            ret = bmrb.get_valid_bbshifts(shifts, seq)
+            ret = bmrb.get_valid_bbshifts(
+                shifts, seq, averaging=not args.no_shift_averaging
+            )
             if ret is None:
                 continue
             bbshifts_arr, bbshifts_mask = ret
@@ -1403,7 +1405,10 @@ def main():
                 )
                 for atom in BACKBONE_ATOMS
             }
-            out_path = args.emit_str / f"bmr{row['entryID']}_rereferenced.str"
+            out_path = args.emit_str / (
+                f"bmr{row['entryID']}_{row['stID']}_{row['entity_assemID']}"
+                f"_{row['entityID']}_rereferenced.str"
+            )
             write_rereferenced_str(
                 out_path,
                 entry_id=row["entryID"],

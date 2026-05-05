@@ -10,8 +10,8 @@ from trizod.io.str_writer import write_rereferenced_str
 def test_write_rereferenced_str_round_trip(tmp_path):
     """Emit, then parse back; corrected shifts match within 1e-4 ppm."""
     seq = "AGAGAGAGAG"
-    bbshifts_arr = np.zeros((10, 7))
-    bbshifts_mask = np.zeros((10, 7), dtype=bool)
+    bbshifts_arr = np.zeros((10, len(BACKBONE_ATOMS)))
+    bbshifts_mask = np.zeros((10, len(BACKBONE_ATOMS)), dtype=bool)
     ca_idx = BACKBONE_ATOMS.index("CA")
     cb_idx = BACKBONE_ATOMS.index("CB")
     bbshifts_arr[:, ca_idx] = np.linspace(50.0, 56.0, 10)
@@ -51,8 +51,8 @@ def test_write_rereferenced_str_round_trip(tmp_path):
 def test_write_rereferenced_str_records_offsets_in_aux(tmp_path):
     """Auxiliary metadata block records LACS + POTENCI residual offsets."""
     out_path = tmp_path / "bmr00001_rereferenced.str"
-    bbshifts_arr = np.zeros((1, 7))
-    bbshifts_mask = np.zeros((1, 7), dtype=bool)
+    bbshifts_arr = np.zeros((1, len(BACKBONE_ATOMS)))
+    bbshifts_mask = np.zeros((1, len(BACKBONE_ATOMS)), dtype=bool)
     lacs_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
     lacs_offsets["CA"] = 1.5
     potenci_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
