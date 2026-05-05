@@ -258,7 +258,7 @@ def apply_lacs_correction(bbshifts_arr, bbshifts_mask, seq):
     corrected_arr = bbshifts_arr.copy()
     offsets_dict = dict.fromkeys(BACKBONE_ATOMS, 0.0)
     for atom, offset in raw_offsets.items():
-        if offset is None or atom not in atom_col:
+        if offset is None or atom not in _LACS_ATOMS:
             continue
         col = atom_col[atom]
         valid = bbshifts_mask[:, col]
