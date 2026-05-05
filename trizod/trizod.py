@@ -141,6 +141,16 @@ def parse_args():
         action="store_true",
         help="Do not average over Proton groups for HA and HB shifts.",
     )
+    io_grp.add_argument(
+        "--emit-str",
+        type=Path,
+        default=None,
+        help=(
+            "Directory to write re-referenced NMR-STAR (.str) files into. "
+            "One file per scored entry: <dir>/bmr<id>_rereferenced.str. "
+            "Off by default."
+        ),
+    )
 
     filter_defaults_grp = init_parser.add_argument_group("Filter Default Settings")
     filter_defaults_grp.add_argument(
@@ -376,6 +386,10 @@ def parse_args():
     elif not args.cache_dir.is_dir():
         logging.getLogger("trizod").error(f"Path {args.cache_dir} is not a directory.")
         exit(1)
+
+    if args.emit_str is not None:
+        args.emit_str = Path(args.emit_str).resolve()
+        args.emit_str.mkdir(parents=True, exist_ok=True)
 
     return args
 
@@ -1344,6 +1358,64 @@ def main():
         reject_shift_type_only=args.reject_shift_type_only,
         score_types=args.score_types,
     )
+    if args.emit_str is not None:
+        from trizod.io.str_writer import write_rereferenced_str
+
+        logging.getLogger("trizod").info(
+            f"Emitting re-referenced .str files to {args.emit_str}"
+        )
+        passed = df[df["pass_post"]]
+        for _, row in tqdm(
+            passed.iterrows(), total=len(passed), disable=not args.progress
+        ):
+            entry = bmrb_entries.loc[row["entryID"], "entry"]
+            peptide_shifts = entry.get_peptide_shifts()
+            shifts, _, _, _ = peptide_shifts[
+                (row["stID"], row["entity_assemID"], row["entityID"])
+            ]
+            seq = row["seq"]
+            ret = bmrb.get_valid_bbshifts(shifts, seq)
+            if ret is None:
+                continue
+            bbshifts_arr, bbshifts_mask = ret
+            # The corrected shifts emitted are post-LACS. Subtract per-atom
+            # LACS offsets so the file reflects the re-referenced state. The
+            # POTENCI residual offsets live on the weighted-diff side and are
+            # captured in the aux saveframe rather than subtracted from raw shifts.
+            for j, atom in enumerate(BACKBONE_ATOMS):
+                lacs_off = row.get(f"lacs_off_{atom}", 0.0)
+                if pd.isna(lacs_off):
+                    lacs_off = 0.0
+                bbshifts_arr[bbshifts_mask[:, j], j] -= float(lacs_off)
+            lacs_offsets = {
+                atom: (
+                    0.0
+                    if pd.isna(row.get(f"lacs_off_{atom}", 0.0))
+                    else float(row[f"lacs_off_{atom}"])
+                )
+                for atom in BACKBONE_ATOMS
+            }
+            potenci_offsets = {
+                atom: (
+                    0.0
+                    if pd.isna(row.get(f"off_{atom}", 0.0))
+                    else float(row[f"off_{atom}"])
+                )
+                for atom in BACKBONE_ATOMS
+            }
+            out_path = args.emit_str / f"bmr{row['entryID']}_rereferenced.str"
+            write_rereferenced_str(
+                out_path,
+                entry_id=row["entryID"],
+                seq=seq,
+                bbshifts_arr=bbshifts_arr,
+                bbshifts_mask=bbshifts_mask,
+                lacs_offsets=lacs_offsets,
+                potenci_residual_offsets=potenci_offsets,
+                rereference_mode=args.rereference_mode,
+                pipeline_version="trizod-2026-05-05",
+            )
+
     logging.getLogger("trizod").info("Output filtering results.")
     print_filter_losses(
         df,

@@ -3,6 +3,8 @@
 import subprocess
 import sys
 
+import pytest
+
 from tests.conftest import BMRB_DIR, requires_bmrb_data
 
 
@@ -90,3 +92,45 @@ class TestPipelineSingleEntry:
             ) = ret
             assert cmp_mask.any(), "No comparable backbone shifts found"
             break  # only test first peptide
+
+    def test_emit_str_smoke(self, tmp_path):
+        """End-to-end with --emit-str on BMRB 6968 produces a .str file."""
+        import shutil
+
+        src = BMRB_DIR / "bmr6968"
+        if not src.exists():
+            pytest.skip(f"BMRB entry {src} not on disk")
+
+        work = tmp_path / "input"
+        shutil.copytree(src, work / "bmr6968")
+        out_dir = tmp_path / "out"
+        cache_dir = tmp_path / "cache"
+        out_dir.mkdir()
+        cache_dir.mkdir()
+        str_dir = tmp_path / "str_out"
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "trizod.trizod",
+            "--input-dir",
+            str(work),
+            "--output-prefix",
+            str(out_dir / "test"),
+            "--filter-defaults",
+            "tolerant",
+            "--cache-dir",
+            str(cache_dir),
+            "--emit-str",
+            str(str_dir),
+            "--processes",
+            "1",
+            "--no-progress",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        assert result.returncode == 0, (
+            f"trizod failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        emitted = list(str_dir.glob("bmr*_rereferenced.str"))
+        assert len(emitted) >= 1
+        assert "bmr6968" in emitted[0].name
