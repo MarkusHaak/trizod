@@ -216,7 +216,7 @@ def convert_to_triplet_data(abs_weighted_diffs, mask):
     return triplet_diffs, triplet_dof
 
 
-def get_offset_corrected_shifts(seq, shifts, predshiftdct):
+def get_offset_corrected_shifts(seq, shifts, predshiftdct, rereference_mode="both"):
     # get polymer sequence and chemical backbone shifts
     ret = bmrb.get_valid_bbshifts(shifts, seq)
     if ret is None:

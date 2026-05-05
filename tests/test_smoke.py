@@ -78,3 +78,15 @@ class TestPipelineSingleEntry:
             ) = ret
             assert cmp_mask.any(), "No comparable backbone shifts found"
             break  # only test first peptide
+
+
+def test_rereference_mode_flag_in_help():
+    """The --rereference-mode flag is exposed in trizod --help."""
+    result = subprocess.run(
+        [sys.executable, "-m", "trizod.trizod", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "--rereference-mode" in result.stdout
+    assert "{none,lacs,potenci-only,both}" in result.stdout

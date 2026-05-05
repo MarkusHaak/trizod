@@ -288,6 +288,18 @@ def parse_args():
         help="Compute correction offsets for random coil chemical shifts",
     )
     scores_grp.add_argument(
+        "--rereference-mode",
+        choices=["none", "lacs", "potenci-only", "both"],
+        default="both",
+        help=(
+            "Chemical shift re-referencing strategy. "
+            "'none': no correction (raw shifts). "
+            "'lacs': LACS pre-correction only. "
+            "'potenci-only': legacy POTENCI/AIC offset detection only. "
+            "'both' (default): LACS pre-correction followed by POTENCI/AIC residual."
+        ),
+    )
+    scores_grp.add_argument(
         "--max-offset",
         type=float,
         default=filter_defaults.loc[args_init.filter_defaults, "max-offset"],
@@ -939,6 +951,7 @@ def compute_scores(
     reject_shift_type_only=False,
     # min_backbone_shift_types=1, min_backbone_shift_positions=1, min_backbone_shift_fraction=0.,
     cache_dir=None,
+    rereference_mode="both",
 ):
     if score_types is None:
         score_types = ["zscores"]
@@ -990,7 +1003,9 @@ def compute_scores(
             )
             raise ZscoreComputationError from err
         start_time = time.time()
-        ret = scoring.get_offset_corrected_shifts(seq, shifts, predshiftdct)
+        ret = scoring.get_offset_corrected_shifts(
+            seq, shifts, predshiftdct, rereference_mode=rereference_mode
+        )
         if ret is None:
             logging.getLogger("trizod").error(
                 f"TriZOD failed for {(entry.id, stID, entity_assemID, entityID)} due to an error in computation of corrected weighted shifts."
@@ -1079,6 +1094,7 @@ def compute_scores_row(
     max_offset=np.inf,
     reject_shift_type_only=False,
     cache_dir=None,
+    rereference_mode="both",
 ):
     if score_types is None:
         score_types = ["zscores"]
@@ -1100,6 +1116,7 @@ def compute_scores_row(
             max_offset=max_offset,
             reject_shift_type_only=reject_shift_type_only,
             cache_dir=cache_dir,
+            rereference_mode=rereference_mode,
         )
         for score_type, score_array in zip(score_types, scores):
             row[score_type] = score_array
@@ -1295,6 +1312,7 @@ def main():
         max_offset=args.max_offset,
         reject_shift_type_only=args.reject_shift_type_only,
         cache_dir=args.cache_dir,
+        rereference_mode=args.rereference_mode,
     )
     if args.progress:
         print()  # prevents overwriting last line of progress bars
