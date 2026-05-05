@@ -7,11 +7,10 @@ import pynmrstar
 
 from trizod.constants import AA3TO1, BACKBONE_ATOMS
 
-# Step 8: residue/atom pairs whose stereospecific assignment is commonly
-# unknown. When the ambiguity code indicates geminal-partner ambiguity
-# (BMRB code "2") or no code is given, rewrite the atom_id to a wildcard so
-# downstream automatic-assignment tools don't propagate a false stereospecific
-# assignment.
+# Residue/atom pairs whose stereospecific assignment is commonly unknown.
+# When the ambiguity code indicates geminal-partner ambiguity (BMRB code "2")
+# or no code is given, rewrite the atom_id to a wildcard so downstream
+# automatic-assignment tools don't propagate a false stereospecific assignment.
 _METHYL_WILDCARD_MAP = {
     ("LEU", "CD1"): "CDx",
     ("LEU", "CD2"): "CDx",
@@ -338,9 +337,13 @@ class ShiftTable:
                 get_tag_vals(sf, "_Atom_chem_shift.Ambiguity_code", default=[]),
             )
         )
+        # Note: when both methyls of a Leu (CD1+CD2) or Val (CG1+CG2) carry
+        # non-stereospecific ambiguity codes, both are rewritten to the same
+        # wildcard atom_id and stored as two rows. get_valid_bbshifts drops
+        # side-chain atoms so this is harmless for scoring; .str writers
+        # should average or deduplicate CDx/CGx pairs as needed.
         shifts = {}
         for shift in self.shifts:
-            # Step 8: rewrite ambiguous Leu CD1/CD2 -> CDx and Val CG1/CG2 -> CGx
             atom_id = _maybe_wildcard_methyl(shift[3], shift[4], shift[8])
             if atom_id != shift[4]:
                 shift = shift[:4] + (atom_id,) + shift[5:]
