@@ -957,7 +957,9 @@ def compute_scores(
         score_types = ["zscores"]
     exe_times = [np.nan, np.nan, np.nan]
     shifts_cache_path = (
-        cache_dir / "wSCS" / f"{entry.id}_{stID}_{entity_assemID}_{entityID}.npz"
+        cache_dir
+        / "wSCS"
+        / f"{entry.id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}.npz"
     )
     if cache_dir and shifts_cache_path.exists():
         try:
