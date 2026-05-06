@@ -320,6 +320,118 @@ def max_csp_per_pair():
     print("max_csp_per_pair.png written")
 
 
+def csp_merged_logy():
+    """Overlay per-residue CSPs and max-per-pair CSPs on shared bins, log-y.
+
+    Replaces the slide 10 left histogram by combining both views in one panel.
+    """
+    from csp_analysis import trimmed_mean_threshold  # noqa: E402
+
+    pairs = _gather_all_csp_pairs()
+    per_residue = np.concatenate(
+        [csp[~np.isnan(csp)] for _, _, _, csp in pairs]
+    )
+    per_pair_max = np.array([float(np.nanmax(csp)) for _, _, _, csp in pairs])
+    print(f"  per-residue CSPs : {per_residue.size:,}")
+    print(f"  max-per-pair CSPs: {per_pair_max.size:,}")
+
+    _, threshold = trimmed_mean_threshold(per_residue.tolist())
+
+    upper_residue = float(np.quantile(per_residue, 0.99))
+    upper_max = float(np.quantile(per_pair_max, 0.99))
+    x_hi = max(upper_residue, upper_max) * 1.05
+    bins = np.linspace(0, x_hi, 60)
+    n_clipped_residue = int(np.sum(per_residue > x_hi))
+    n_clipped_max = int(np.sum(per_pair_max > x_hi))
+
+    fig, ax = plt.subplots(figsize=(9, 5.0))
+    ax.hist(
+        np.clip(per_residue, 0, x_hi), bins=bins,
+        color="#2a9d8f", alpha=0.65,
+        label=f"per-residue CSPs (n = {per_residue.size:,})",
+    )
+    ax.hist(
+        np.clip(per_pair_max, 0, x_hi), bins=bins,
+        color="#e76f51", alpha=0.75,
+        label=f"max CSP per pair (n = {per_pair_max.size:,})",
+    )
+    ax.axvline(
+        threshold, color="black", ls="--", lw=1.2,
+        label=f"residue-level threshold = {threshold:.3f} ppm",
+    )
+    ax.set_yscale("log")
+    ax.set_xlim(0, x_hi)
+    ax.set_xlabel("CSP (ppm)")
+    ax.set_ylabel("count (log scale)")
+    ax.set_title("HN/N CSP — per-residue vs max-per-pair (overlaid, log-y)")
+    ax.legend()
+    if n_clipped_residue or n_clipped_max:
+        ax.text(
+            0.99, 0.02,
+            f"clipped: {n_clipped_residue} residue · {n_clipped_max} pair > {x_hi:.2f} ppm",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=8,
+            color="#666666",
+        )
+    fig.tight_layout()
+    fig.savefig(FIG / "csp_merged_logy.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("csp_merged_logy.png written")
+
+
+def valine_structure():
+    """Schematic of the valine side chain — the two methyls (CG1, CG2) are
+    geminal partners, NMR-equivalent under standard pulse sequences. Used on
+    slide 3 to give the audience a quick mental anchor for the methyl-wildcard
+    rewrite.
+    """
+    fig, ax = plt.subplots(figsize=(4.2, 4.0))
+    ax.set_xlim(-2.4, 2.4)
+    ax.set_ylim(-2.2, 3.4)
+    ax.axis("off")
+
+    purple = "#361a54"
+    accent = "#5a2e8c"
+    arrow = "#d62728"
+    grey = "#666666"
+
+    # Bonds (drawn first so labels overlay)
+    ax.plot([0, 0], [0.35, 1.05], color=purple, lw=1.6)         # Cα — Cβ
+    ax.plot([0, -1.0], [1.55, 2.4], color=purple, lw=1.6)        # Cβ — CG1
+    ax.plot([0, 1.0], [1.55, 2.4], color=purple, lw=1.6)         # Cβ — CG2
+    ax.plot([0, 0], [-0.35, -1.05], color=purple, lw=1.6)        # Cα — backbone
+    # implicit Cβ-H stub
+    ax.plot([0.35, 0.85], [1.3, 1.0], color=purple, lw=1.0)
+    ax.text(0.95, 0.95, "H", ha="left", va="center", fontsize=9, color=grey)
+
+    # Atom labels
+    ax.text(0, 0, "Cα", ha="center", va="center", fontsize=15, fontweight="bold", color=purple,
+            bbox=dict(facecolor="white", edgecolor="none", pad=2))
+    ax.text(0, 1.3, "Cβ", ha="center", va="center", fontsize=15, fontweight="bold", color=purple,
+            bbox=dict(facecolor="white", edgecolor="none", pad=2))
+    ax.text(-1.1, 2.55, "CH₃", ha="center", va="center", fontsize=14, fontweight="bold", color=accent,
+            bbox=dict(facecolor="white", edgecolor="none", pad=2))
+    ax.text(-1.1, 2.95, "CG1", ha="center", va="center", fontsize=10, color=accent)
+    ax.text(1.1, 2.55, "CH₃", ha="center", va="center", fontsize=14, fontweight="bold", color=accent,
+            bbox=dict(facecolor="white", edgecolor="none", pad=2))
+    ax.text(1.1, 2.95, "CG2", ha="center", va="center", fontsize=10, color=accent)
+
+    # Backbone label
+    ax.text(0, -1.4, "backbone\n(N · Cα · C=O)", ha="center", va="top", fontsize=9, color=grey)
+
+    # NMR-equivalence arrow between the two methyls
+    ax.annotate(
+        "", xy=(0.7, 2.55), xytext=(-0.7, 2.55),
+        arrowprops=dict(arrowstyle="<->", color=arrow, lw=1.6),
+    )
+    ax.text(0, 3.15, "NMR-equivalent\n→ CG1 / CG2 indistinguishable",
+            ha="center", va="bottom", fontsize=9, color=arrow, fontstyle="italic")
+
+    fig.tight_layout()
+    fig.savefig(FIG / "valine.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("valine.png written")
+
+
 if __name__ == "__main__":
     architecture_diagram()
     workflow_diagram()
@@ -327,3 +439,5 @@ if __name__ == "__main__":
     lacs_vs_potenci_overlap()
     flip_count_by_tier()
     max_csp_per_pair()
+    csp_merged_logy()
+    valine_structure()

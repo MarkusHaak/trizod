@@ -1,6 +1,6 @@
 // =============================================================================
 // TriZOD — Final Pipeline & Re-Referenced Dataset
-// 6 May 2026 project meeting talk · 14 slides · target ~14 min
+// 6 May 2026 project meeting talk · 13 slides · target ~13 min
 // touying 0.7.3 + metropolis theme
 //
 // Iterated 2026-05-06: workflow centerpiece, no step-number framing,
@@ -192,11 +192,20 @@
 // Slide 3 — What's new since 22 April
 == What's new since 22 April
 
-- Methyl wildcards in the parser (Leu `CD1`/`CD2` → `CDx`, Val `CG1`/`CG2` → `CGx`)
-- LACS pre-correction baked into the scoring pipeline
-- New flag: `--rereference-mode {none, lacs, potenci-only, both}` (default `both`)
-- New flag: `--emit-str <dir>` writes one re-referenced NMR-STAR per scored entity
-- *Zenodo deposit metadata* in repo (DOI on first tagged release)
+#slide(composer: (1.7fr, 1fr))[
+  - Methyl wildcards in the parser (Leu `CD1`/`CD2` → `CDx`, Val `CG1`/`CG2` → `CGx`)
+  - LACS pre-correction baked into the scoring pipeline
+  - New flag: `--rereference-mode {none, lacs, potenci-only, both}` (default `both`)
+  - New flag: `--emit-str <dir>` writes one re-referenced NMR-STAR per scored entity
+  - *Zenodo deposit metadata* in repo (DOI on first tagged release)
+][
+  #set align(center + horizon)
+  #image("figures/valine.png", height: 78%)
+
+  #text(size: 11pt, fill: rgb("#666"))[
+    Valine side chain — geminal methyls
+  ]
+]
 
 
 // Slide 4 — Filter improvements + per-tier deltas
@@ -262,37 +271,23 @@
 #text(size: 15pt)[Red = entries with $|"LACS offset"| > 0.5$ ppm on at least one of C/CA/CB. Re-referencing meaningfully changes the input shifts for *21%* (tolerant), *25%* (moderate), *32%* (strict).]
 
 
-// Slide 9 — Reid #2: alpha-synuclein + top-3 flippers
-== α-synuclein and top-3 G-score flippers
+// Slide 9 — Reid #1: CSP distribution (per-residue vs max-per-pair, log-y)
+== Chemical-shift perturbation distribution
 
-#align(center)[#image("figures/gscore_flips.png", height: 70%)]
+#align(center)[#image("figures/csp_merged_logy.png", height: 68%)]
 
-#text(size: 15pt)[Panel A · BMRB *17665* (αSyn, mis-referenced) raw vs re-referenced + BMRB *6968* (αSyn ground truth). Panels B-D · top-3 flippers BMRB *51068* / *52619* / *51262*. Gaps come from `k = 0` triplets (insufficient comparable shifts → G-score is NaN).]
-
-
-// Slide 10 — Reid #1: residue-level CSPs
-== Chemical-shift perturbations (residue-level)
-
-#slide(composer: (1fr, 1fr))[
-  #image("figures/csp_histogram.png", width: 100%)
-
-  #text(size: 13pt)[All 61,063 per-residue CSPs across 581 pairs. Threshold *0.224 ppm* = trimmed-mean+SD on the bottom 90% (top 10% dropped so the threshold isn't inflated by interface residues).]
-][
-  #image("figures/csp_interface_example.png", width: 100%)
-
-  #text(size: 13pt)[FKBP12 apo (bmr16925) vs bound (bmr16931). Two binding-pocket residues (55, 58) far above threshold.]
-]
+#text(size: 14pt)[*Teal:* 61,063 per-residue HN/N CSPs · *orange:* one max CSP per pair (n = 491). Threshold *0.224 ppm* = trimmed-mean+SD on the bottom 90%. Most residues sit below it; almost every pair has at least one residue above. 90 of 581 candidate pairs dropped — no overlapping HN+N coverage between the two entries.]
 
 
-// Slide 11 — Max CSP per pair
+// Slide 10 — Max CSP per pair
 == Max CSP per pair · how strong is the strongest binding shift?
 
 #align(center)[#image("figures/max_csp_per_pair.png", height: 75%)]
 
-#text(size: 15pt)[One value per pair (581 points): the *maximum* HN/N CSP within each pair. Pairs below the 0.224-ppm threshold are essentially silent; those above are real binding events.]
+#text(size: 15pt)[One value per pair (491 points): the *maximum* HN/N CSP within each pair. Pairs below the 0.224-ppm threshold are essentially silent; those above are real binding events.]
 
 
-// Slide 12 — What's still TODO
+// Slide 11 — What's still TODO
 == What's still TODO
 
 - *Multi-molecule entries distort G-scores* — exclude entries with a non-polymer or nucleic-acid binding partner from the dataset.
@@ -301,7 +296,7 @@
 - All three are flagged as TODO in the workflow on slide 2.
 
 
-// Slide 13 — Released artefacts
+// Slide 12 — Released artefacts
 == Released artefacts
 
 - `data/release/<tier>/scores.json` — per-residue Z/G + LACS + POTENCI offsets
@@ -324,7 +319,7 @@
 ]
 
 
-// Slide 14 — Next steps
+// Slide 13 — Next steps
 == Next steps
 
 - Push deposit to Zenodo (DOI placeholder until first tag)
