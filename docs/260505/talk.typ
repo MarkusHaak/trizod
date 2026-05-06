@@ -10,13 +10,14 @@
 // ── 1. IMPORTS ────────────────────────────────────────────────────────────────
 #import "@preview/touying:0.7.3": *
 #import themes.metropolis: *
+#import "@preview/fletcher:0.5.8" as fletcher: diagram, edge, node
 
 
 // ── 2. THEME SETUP ────────────────────────────────────────────────────────────
 #show: metropolis-theme.with(
   aspect-ratio: "16-9",
   footer: self => self.info.title,
-  font: ("Aptos",),
+  font: ("Helvetica Neue", "Helvetica", "Arial"),
 
   config-info(
     title: [TriZOD — Final Pipeline & Re-Referenced Dataset],
@@ -38,7 +39,7 @@
 
 
 // ── 3. GLOBAL TEXT / STYLE RULES ─────────────────────────────────────────────
-#set text(font: "Aptos", size: 22pt)
+#set text(font: ("Helvetica Neue", "Helvetica", "Arial"), size: 22pt)
 #set strong(delta: 100)
 #show strong: it => text(weight: "bold", it.body)
 #set par(justify: true)
@@ -53,12 +54,139 @@
 #title-slide()
 
 
-// Slide 2 — Workflow (centerpiece)
+// Slide 2 — Workflow (centerpiece, native fletcher diagram)
 == TriZOD pipeline at a glance
 
-#align(center)[#image("figures/workflow.png", height: 78%)]
+// ── Visual vocabulary ────────────────────────────────────────────────────────
+// • Grey, dashed border  : input archive
+// • Light purple, solid  : implemented transformation step
+// • Deep purple, solid   : the new core (re-referencing) — the spotlight
+// • Amber, solid         : output products
+// • Small grey, no fill  : annotations (caches, CLI flags, counts)
+// ────────────────────────────────────────────────────────────────────────────
 
-#text(size: 15pt)[Goal: per-residue disorder scores (Z-score, G-score) from BMRB NMR shifts. Inputs at the left; output `.str` + JSON at the right; deferred work in the dashed branch.]
+#let _input-fill = rgb("#f4f1f8")
+#let _input-stroke = (paint: rgb("#888888"), dash: "dashed", thickness: 0.6pt)
+#let _step-fill = rgb("#ede4f7")
+#let _step-stroke = rgb("#361a54") + 0.7pt
+#let _core-fill = rgb("#5a2e8c")        // dark purple "spotlight"
+#let _core-stroke = rgb("#361a54") + 1.2pt
+#let _output-fill = rgb("#fde6b0")
+#let _output-stroke = rgb("#a06700") + 0.7pt
+#let _badge-fill = rgb("#fffaf0")
+#let _badge-stroke = rgb("#a06700") + 0.5pt
+#let _text-on-purple = rgb("#222")
+#let _text-on-core = rgb("#ffffff")
+
+#let stage(title, body, fill: _step-fill, stroke: _step-stroke) = box(
+  width: 100pt,
+  height: 90pt,
+  inset: 5pt,
+  radius: 5pt,
+  fill: fill,
+  stroke: stroke,
+)[
+  #set align(center + horizon)
+  #set par(leading: 0.4em)
+  #set text(fill: _text-on-purple)
+  #show strong: it => text(weight: "bold", fill: _text-on-purple, it.body)
+  #text(size: 11pt, weight: "bold")[#title]
+  #v(2pt)
+  #text(size: 8.5pt, fill: rgb("#444"))[#body]
+]
+
+#let core-stage(title, body) = box(
+  width: 130pt,
+  height: 90pt,
+  inset: 5pt,
+  radius: 5pt,
+  fill: _core-fill,
+  stroke: _core-stroke,
+)[
+  #set align(center + horizon)
+  #set par(leading: 0.4em)
+  #set text(fill: _text-on-core)
+  #show strong: it => text(weight: "bold", fill: _text-on-core, it.body)
+  #text(size: 11pt, weight: "bold")[#title]
+  #v(2pt)
+  #text(size: 8.5pt)[#body]
+]
+
+#align(center)[
+#diagram(
+  spacing: (1.0em, 0.7em),
+  edge-stroke: 0.9pt + rgb("#361a54"),
+
+  // ── Main horizontal pipeline (y = 0) ──────────────────────────────────────
+  node((0, 0), stage(
+    "BMRB",
+    [NMR-STAR \ archive \ #text(weight: "bold")[17,388 entries]],
+    fill: _input-fill, stroke: _input-stroke,
+  )),
+  node((1, 0), stage(
+    "Parser",
+    [`bmrb.py` \ methyl wildcards \ Leu CDx · Val CGx],
+  )),
+  node((2, 0), stage(
+    "Filter",
+    [4 stringency tiers \ keyword + paramag \ + shift-coverage],
+  )),
+  node((3, 0), core-stage(
+    "Re-referencing",
+    [*LACS* (CA, CB, C′, \ HA, H, N) \ then *POTENCI / AIC* \ residual (HB + others)],
+  )),
+  node((4, 0), stage(
+    "Scoring",
+    [backbone-only \ Z-score (signed) \ G-score (3-residue \ triplet, geom. mean)],
+  )),
+  node((5, 0), stage(
+    "Output",
+    [`scores.json` \ `*_rereferenced.str` \ Zenodo metadata],
+    fill: _output-fill, stroke: _output-stroke,
+  )),
+
+  // fletcher 0.5.8: edge(A, B, "=>") draws B→A (head at first coord).
+  // To draw the visual flow left→right (BMRB → ... → Output) we write the
+  // destination as the first coord.
+  edge((1, 0), (0, 0), "=>"),
+  edge((2, 0), (1, 0), "=>"),
+  edge((3, 0), (2, 0), "=>"),
+  edge((4, 0), (3, 0), "=>"),
+  edge((5, 0), (4, 0), "=>"),
+
+  // ── Row 1 — annotations directly under each stage ────────────────────────
+  node((1, 1), text(size: 7.5pt, fill: rgb("#888"))[cache: `tmp/bmrb_entries/*.pkl`]),
+  node((2, 1), align(left)[#text(size: 8pt, fill: rgb("#444"))[
+    *entries passing* \
+    #box(fill: _step-fill, inset: 2pt, radius: 2pt)[unfilt 16,851] \
+    #box(fill: _step-fill, inset: 2pt, radius: 2pt)[tolerant 15,433] \
+    #box(fill: _step-fill, inset: 2pt, radius: 2pt)[moderate 10,107] \
+    #box(fill: _step-fill, inset: 2pt, radius: 2pt)[strict 3,033]
+  ]]),
+  node((3, 1), [
+    #set align(center)
+    #box(fill: _badge-fill, stroke: _badge-stroke, inset: 4pt, radius: 3pt)[
+      #text(size: 8pt, fill: rgb("#a06700"))[`--rereference-mode` \ {none, lacs, potenci-only, *both*}]
+    ]
+    #v(2pt)
+    #text(size: 7.5pt, fill: rgb("#888"))[cache: `tmp/potenci/*.json` · `tmp/wSCS/*.npz`]
+  ]),
+  node((5, 1), [
+    #set align(center)
+    #box(fill: _badge-fill, stroke: _badge-stroke, inset: 4pt, radius: 3pt)[
+      #text(size: 8pt, fill: rgb("#a06700"))[`--emit-str <dir>`]
+    ]
+  ]),
+)
+]
+
+#v(0.4em)
+#text(size: 11pt, fill: rgb("#666"))[
+  #strong[Next steps:]
+  - exclude multi-molecule (bound) entries that distort G-scores
+  - per-sequence representative pick (best conditions → median G-score)
+  - mmseqs2 sequence clustering for ML train/val/test split
+]
 
 
 // Slide 3 — What's new since 22 April
@@ -139,11 +267,11 @@
 
 #align(center)[#image("figures/gscore_flips.png", height: 70%)]
 
-#text(size: 15pt)[Panel A · BMRB *17665* (αSyn, mis-referenced) raw vs re-referenced + BMRB *6968* (αSyn ground truth). Panels B-D · top-3 flippers BMRB *51068* / *52619* / *51262*. Gaps come from `k = 0` triplets (insufficient comparable shifts → G-score is NaN). αSyn LACS offset CA/CB = +2.82 ppm.]
+#text(size: 15pt)[Panel A · BMRB *17665* (αSyn, mis-referenced) raw vs re-referenced + BMRB *6968* (αSyn ground truth). Panels B-D · top-3 flippers BMRB *51068* / *52619* / *51262*. Gaps come from `k = 0` triplets (insufficient comparable shifts → G-score is NaN).]
 
 
 // Slide 10 — Reid #1: residue-level CSPs
-== Reid \#1: chemical-shift perturbations (residue-level)
+== Chemical-shift perturbations (residue-level)
 
 #slide(composer: (1fr, 1fr))[
   #image("figures/csp_histogram.png", width: 100%)
