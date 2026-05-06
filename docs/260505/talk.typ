@@ -1,6 +1,6 @@
 // =============================================================================
 // TriZOD — Final Pipeline & Re-Referenced Dataset
-// 6 May 2026 project meeting talk · 13 slides · target ~13 min
+// 6 May 2026 project meeting talk · 11 slides · target ~11 min
 // touying 0.7.3 + metropolis theme
 //
 // Iterated 2026-05-06: workflow centerpiece, no step-number framing,
@@ -190,14 +190,13 @@
 
 
 // Slide 3 — What's new since 22 April
-== What's new since 22 April
+== Implementation update
 
 #slide(composer: (1.7fr, 1fr))[
   - Methyl wildcards in the parser (Leu `CD1`/`CD2` → `CDx`, Val `CG1`/`CG2` → `CGx`)
   - LACS pre-correction baked into the scoring pipeline
   - New flag: `--rereference-mode {none, lacs, potenci-only, both}` (default `both`)
   - New flag: `--emit-str <dir>` writes one re-referenced NMR-STAR per scored entity
-  - *Zenodo deposit metadata* in repo (DOI on first tagged release)
 ][
   #set align(center + horizon)
   #image("figures/valine.png", height: 78%)
@@ -216,37 +215,7 @@
 #text(size: 15pt)[Removed denaturant false-positives, fixed the solid-state regex, added a paramagnetic-sample filter, relaxed `min-backbone-shift-types` 5→4 in strict, and broadened the Celsius heuristic.]
 
 
-// Slide 5 — Methyl wildcards explained
-== Methyl wildcards: what and why
-
-#text(size: 19pt)[
-- Leucine: two methyls `CD1` + `CD2` (γ-carbon).
-- Valine: two methyls `CG1` + `CG2` (β-carbon).
-- *Geminal pairs are NMR-equivalent* — most pulse sequences cannot tell them apart.
-- BMRB depositors must label one of each pair anyway: arbitrary stereospecificity.
-]
-
-#v(0.4em)
-#align(center)[#text(size: 18pt)[
-  *Before:* `LEU CD1 23.4 ppm` · `LEU CD2 24.1 ppm` (false claim of stereospecificity)
-
-  *After (ambiguity ≠ 1):* `LEU CDx 23.4 ppm` · `LEU CDx 24.1 ppm`
-]]
-
-#v(0.4em)
-#text(size: 14pt)[Backbone scoring is unchanged (these are side-chain methyls). The wildcards surface in the emitted `.str` files so downstream auto-assignment tools no longer propagate the false stereospecificity.]
-
-
-// Slide 6 — Re-referencing pipeline diagram
-== Re-referencing in the pipeline
-
-#align(center)[#image("figures/architecture.png", width: 92%)]
-
-#v(0.4em)
-#text(size: 15pt)[raw shifts → *LACS pre-correction* (Wishart RC tables, robust line fits) → *POTENCI residual* (AIC-gated rolling 9-window) → Z / G-scores. Default mode is `both`.]
-
-
-// Slide 7 — LACS vs POTENCI residual capture
+// Slide 5 — LACS vs POTENCI residual capture
 == LACS vs POTENCI residual capture
 
 #slide(composer: (1.2fr, 1fr))[
@@ -263,7 +232,7 @@
 ]
 
 
-// Slide 8 — Entries materially affected by LACS
+// Slide 6 — Entries materially affected by LACS
 == Entries materially affected by LACS
 
 #align(center)[#image("figures/flip_count_by_tier.png", height: 68%)]
@@ -271,7 +240,7 @@
 #text(size: 15pt)[Red = entries with $|"LACS offset"| > 0.5$ ppm on at least one of C/CA/CB. Re-referencing meaningfully changes the input shifts for *21%* (tolerant), *25%* (moderate), *32%* (strict).]
 
 
-// Slide 9 — Reid #1: CSP distribution (per-residue vs max-per-pair, log-y)
+// Slide 7 — Reid #1: CSP distribution (per-residue vs max-per-pair, log-y)
 == Chemical-shift perturbation distribution
 
 #align(center)[#image("figures/csp_merged_logy.png", height: 68%)]
@@ -279,7 +248,7 @@
 #text(size: 14pt)[*Teal:* 61,063 per-residue HN/N CSPs · *orange:* one max CSP per pair (n = 491). Threshold *0.224 ppm* = trimmed-mean+SD on the bottom 90%. Most residues sit below it; almost every pair has at least one residue above. 90 of 581 candidate pairs dropped — no overlapping HN+N coverage between the two entries.]
 
 
-// Slide 10 — Max CSP per pair
+// Slide 8 — Max CSP per pair
 == Max CSP per pair · how strong is the strongest binding shift?
 
 #align(center)[#image("figures/max_csp_per_pair.png", height: 75%)]
@@ -287,7 +256,7 @@
 #text(size: 15pt)[One value per pair (491 points): the *maximum* HN/N CSP within each pair. Pairs below the 0.224-ppm threshold are essentially silent; those above are real binding events.]
 
 
-// Slide 11 — What's still TODO
+// Slide 9 — What's still TODO
 == What's still TODO
 
 - *Multi-molecule entries distort G-scores* — exclude entries with a non-polymer or nucleic-acid binding partner from the dataset.
@@ -296,7 +265,7 @@
 - All three are flagged as TODO in the workflow on slide 2.
 
 
-// Slide 12 — Released artefacts
+// Slide 10 — Released artefacts
 == Released artefacts
 
 - `data/release/<tier>/scores.json` — per-residue Z/G + LACS + POTENCI offsets
@@ -319,7 +288,7 @@
 ]
 
 
-// Slide 13 — Next steps
+// Slide 11 — Next steps
 == Next steps
 
 - Push deposit to Zenodo (DOI placeholder until first tag)
