@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build the NEW (non-22-April) figures for the 6 May talk."""
+"""Build the figures for the 6 May talk."""
 
 import json
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,6 +11,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 FIG = ROOT / "docs" / "260505" / "figures"
 FIG.mkdir(parents=True, exist_ok=True)
+
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def per_tier_deltas():
@@ -173,8 +177,153 @@ def architecture_diagram():
     print("architecture.png written")
 
 
+def workflow_diagram():
+    """End-to-end TriZOD workflow with stage numbers + a TODO branch.
+
+    Slide 2 centerpiece. Six stages left to right, with the headline number
+    annotated under each. A dashed TODO branch hangs off the output stage.
+    """
+    fig, ax = plt.subplots(figsize=(13.5, 6.0))
+    ax.set_xlim(0, 13.5)
+    ax.set_ylim(-0.5, 6)
+    ax.axis("off")
+
+    # Implemented stages: (x, y, w, h, title, body)
+    stages = [
+        (0.2,  3.6, 2.0, 1.4, "BMRB NMR-STAR",   "17,388 entries"),
+        (2.6,  3.6, 2.2, 1.4, "Parser",          "methyl wildcards\n(Leu CDx, Val CGx)"),
+        (5.2,  3.6, 2.2, 1.4, "Filter (4 tiers)","unfilt 16,851\ntol 15,433\nmod 10,107\nstr 3,033"),
+        (7.8,  3.6, 2.4, 1.4, "Re-referencing",  "LACS pre-correction\n+ POTENCI/AIC residual"),
+        (10.6, 3.6, 1.6, 1.4, "Scoring",         "Z-score · G-score\n3-residue triplet"),
+        (12.4, 3.6, 1.0, 1.4, "Output",          ".str + JSON\n+ Zenodo meta"),
+    ]
+    for x, y, w, h, title, body in stages:
+        ax.add_patch(plt.Rectangle((x, y), w, h, fill=False, lw=1.6, ec="#361a54"))
+        ax.text(x + w / 2, y + h - 0.22, title, ha="center", va="top",
+                fontsize=12, fontweight="bold", color="#361a54")
+        ax.text(x + w / 2, y + 0.25, body, ha="center", va="bottom",
+                fontsize=9, color="#361a54")
+
+    # Forward arrows
+    for s1, s2 in zip(stages[:-1], stages[1:]):
+        x_start = s1[0] + s1[2]
+        x_end = s2[0]
+        y = s1[1] + s1[3] / 2
+        ax.annotate("", xy=(x_end, y), xytext=(x_start, y),
+                    arrowprops=dict(arrowstyle="->", lw=1.6, color="#361a54"))
+
+    # TODO branch off the Output stage
+    out_x = stages[-1][0] + stages[-1][2] / 2
+    out_y = stages[-1][1]
+    todo_x, todo_y, todo_w, todo_h = 5.0, 0.2, 7.5, 2.6
+    ax.annotate(
+        "",
+        xy=(todo_x + todo_w / 2, todo_y + todo_h),
+        xytext=(out_x, out_y),
+        arrowprops=dict(arrowstyle="->", lw=1.4, color="#888888", ls="dashed"),
+    )
+    ax.add_patch(plt.Rectangle(
+        (todo_x, todo_y), todo_w, todo_h,
+        fill=True, facecolor="#fafafa", lw=1.4, ec="#888888", ls="dashed",
+    ))
+    ax.text(
+        todo_x + 0.18, todo_y + todo_h - 0.18, "TODO (post-talk)",
+        ha="left", va="top", fontsize=11, fontweight="bold", color="#666666",
+    )
+    todos = [
+        "exclude multi-molecule (bound) entries that distort G-scores",
+        "per-sequence representative pick (best conditions → median G-score)",
+        "mmseqs2 sequence clustering for ML train/val/test split",
+    ]
+    for i, t in enumerate(todos):
+        ax.text(todo_x + 0.18, todo_y + todo_h - 0.7 - 0.55 * i,
+                f"·  {t}", ha="left", va="top", fontsize=10, color="#444444")
+
+    # Title
+    ax.text(6.75, 5.55, "TriZOD pipeline — input to output",
+            ha="center", va="bottom", fontsize=14, fontweight="bold",
+            color="#361a54")
+
+    fig.tight_layout()
+    fig.savefig(FIG / "workflow.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("workflow.png written")
+
+
+def _gather_all_csp_pairs():
+    """Walk the bound/unbound pairs and return [(seq, single_id, bound_id, csp_array)]."""
+    from csp_analysis import (  # noqa: E402
+        compute_pair_csp,
+        find_pairs,
+        load_baseline,
+        shifts_for,
+    )
+
+    baseline = ROOT / "data" / "baseline" / "tolerant.json"
+    cache = ROOT / "tmp" / "bmrb_entries"
+    rows = load_baseline(baseline)
+    pairs = find_pairs(rows, cache)
+    out = []
+    for seq, s, b in pairs:
+        arr_s, mask_s, _ = shifts_for(s["entryID"], cache, s.get("entityID"))
+        arr_b, mask_b, _ = shifts_for(b["entryID"], cache, b.get("entityID"))
+        if arr_s is None or arr_b is None or arr_s.shape != arr_b.shape:
+            continue
+        csp = compute_pair_csp(seq, arr_s, mask_s, arr_b, mask_b)
+        if np.all(np.isnan(csp)):
+            continue
+        out.append((seq, s, b, csp))
+    return out
+
+
+def max_csp_per_pair():
+    """One value per pair: the maximum CSP within each pair. 581 points."""
+    pairs = _gather_all_csp_pairs()
+    max_csp = np.array([float(np.nanmax(csp)) for _, _, _, csp in pairs])
+    print(f"  collected {len(pairs)} pairs with max CSP")
+
+    # Use the same trimmed-mean threshold from csp_analysis on the residue-level data
+    # (so the threshold matches slide 9). Hard-coded to 0.224 ppm to avoid a slow re-scan.
+    threshold = 0.224
+
+    fig, (ax_h, ax_s) = plt.subplots(
+        2, 1, figsize=(9, 5.5), gridspec_kw={"height_ratios": [4, 1]}, sharex=True
+    )
+    upper = float(np.quantile(max_csp, 0.99)) if max_csp.size else 1.0
+    bins = np.linspace(0, max(upper, 0.5), 50)
+    ax_h.hist(max_csp[max_csp <= upper * 1.5], bins=bins, color="#4C72B0", alpha=0.85)
+    ax_h.axvline(threshold, color="red", ls="--", lw=1.4,
+                 label=f"residue-level threshold = {threshold} ppm")
+    ax_h.set_ylabel("number of pairs")
+    ax_h.set_title(
+        f"max HN/N CSP per pair · {len(pairs)} bound/unbound pairs · 99% clip"
+    )
+    ax_h.legend()
+    n_above = int(np.sum(max_csp > threshold))
+    ax_h.text(
+        0.99, 0.92, f"{n_above} / {len(pairs)} pairs above threshold",
+        transform=ax_h.transAxes, ha="right", va="top", fontsize=10,
+        bbox={"facecolor": "white", "edgecolor": "#cccccc"},
+    )
+    # Strip plot below for individual pair visibility
+    rng = np.random.default_rng(0)
+    jitter = rng.uniform(-0.4, 0.4, size=max_csp.size)
+    ax_s.scatter(max_csp, jitter, s=8, alpha=0.5, color="#4C72B0")
+    ax_s.axvline(threshold, color="red", ls="--", lw=1.0)
+    ax_s.set_xlim(0, max(upper * 1.5, 0.5))
+    ax_s.set_ylim(-1, 1)
+    ax_s.set_yticks([])
+    ax_s.set_xlabel("max CSP within pair (ppm)")
+    fig.tight_layout()
+    fig.savefig(FIG / "max_csp_per_pair.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("max_csp_per_pair.png written")
+
+
 if __name__ == "__main__":
     architecture_diagram()
+    workflow_diagram()
     per_tier_deltas()
     lacs_vs_potenci_overlap()
     flip_count_by_tier()
+    max_csp_per_pair()

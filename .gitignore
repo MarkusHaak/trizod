@@ -32,5 +32,8 @@ docs/_planning/
 docs/260415/
 docs/pipeline-overview.md
 
+# Per-pair CSP review (regenerable via scripts/csp_per_pair_grid.py)
+docs/260505/csp_pairs/
+
 # OS
 .DS_Store
