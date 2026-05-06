@@ -45,16 +45,24 @@ def per_tier_deltas():
     print("per_tier_deltas.png written")
 
 
-def lacs_vs_potenci_overlap():
-    """Scatter: LACS offset vs POTENCI residual offset. Strict tier."""
-    src = ROOT / "data" / "release" / "strict" / "scores.json"
+def lacs_vs_potenci_overlap(tier="strict"):
+    """Scatter: LACS offset vs POTENCI residual offset for one filter tier.
+
+    Output: figures/lacs_vs_potenci_overlap_<tier>.png
+    """
+    src = ROOT / "data" / "release" / tier / "scores.json"
+    out_path = FIG / f"lacs_vs_potenci_overlap_{tier}.png"
     if not src.exists():
         # Fallback: empty placeholder so the talk still compiles
         fig, ax = plt.subplots(figsize=(6, 4.5))
-        ax.text(0.5, 0.5, "rerun pending", ha="center", va="center", fontsize=12)
+        ax.text(
+            0.5, 0.5,
+            f"rerun pending ({tier})",
+            ha="center", va="center", fontsize=12,
+        )
         ax.set_xticks([])
         ax.set_yticks([])
-        fig.savefig(FIG / "lacs_vs_potenci_overlap.png", dpi=150, bbox_inches="tight")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return
     pts_lacs, pts_pot, atoms = [], [], []
@@ -94,12 +102,13 @@ def lacs_vs_potenci_overlap():
     ax.axvline(0, color="grey", lw=0.5)
     ax.set_xlabel("LACS offset (ppm)")
     ax.set_ylabel("POTENCI/AIC residual offset (ppm)")
-    ax.set_title("LACS vs POTENCI residual — strict tier")
+    n_pts = len(pts_lacs)
+    ax.set_title(f"LACS vs POTENCI residual — {tier} tier ({n_pts:,} points)")
     ax.legend()
     fig.tight_layout()
-    fig.savefig(FIG / "lacs_vs_potenci_overlap.png", dpi=150, bbox_inches="tight")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("lacs_vs_potenci_overlap.png written")
+    print(f"{out_path.name} written")
 
 
 def flip_count_by_tier():
@@ -146,108 +155,6 @@ def flip_count_by_tier():
     fig.savefig(FIG / "flip_count_by_tier.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("flip_count_by_tier.png written")
-
-
-def architecture_diagram():
-    """Boxes-and-arrows pipeline diagram."""
-    fig, ax = plt.subplots(figsize=(11, 3.5))
-    ax.set_xlim(0, 11)
-    ax.set_ylim(0, 4)
-    ax.axis("off")
-    boxes = [
-        (0.5, 1.5, 1.7, 1, "BMRB\nNMR-STAR"),
-        (2.7, 1.5, 1.7, 1, "Step 8\nwildcards"),
-        (4.9, 1.5, 1.4, 1, "LACS\noffsets"),
-        (6.7, 1.5, 1.4, 1, "POTENCI\nresidual"),
-        (8.5, 1.5, 1.4, 1, "Z/G\nscores"),
-    ]
-    for x, y, w, h, label in boxes:
-        ax.add_patch(plt.Rectangle((x, y), w, h, fill=False, lw=1.5))
-        ax.text(x + w / 2, y + h / 2, label, ha="center", va="center", fontsize=11)
-    for x_start, x_end in [(2.2, 2.7), (4.4, 4.9), (6.3, 6.7), (8.1, 8.5)]:
-        ax.annotate(
-            "", xy=(x_end, 2), xytext=(x_start, 2), arrowprops=dict(arrowstyle="->", lw=1.5)
-        )
-    ax.annotate(
-        "", xy=(6.0, 0.6), xytext=(6.0, 1.45), arrowprops=dict(arrowstyle="->", lw=1.2, color="grey")
-    )
-    ax.text(6.0, 0.4, ".str + JSON", ha="center", va="top", color="grey", fontsize=10)
-    fig.savefig(FIG / "architecture.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("architecture.png written")
-
-
-def workflow_diagram():
-    """End-to-end TriZOD workflow with stage numbers + a TODO branch.
-
-    Slide 2 centerpiece. Six stages left to right, with the headline number
-    annotated under each. A dashed TODO branch hangs off the output stage.
-    """
-    fig, ax = plt.subplots(figsize=(13.5, 6.0))
-    ax.set_xlim(0, 13.5)
-    ax.set_ylim(-0.5, 6)
-    ax.axis("off")
-
-    # Implemented stages: (x, y, w, h, title, body)
-    stages = [
-        (0.2,  3.6, 2.0, 1.4, "BMRB NMR-STAR",   "17,388 entries"),
-        (2.6,  3.6, 2.2, 1.4, "Parser",          "methyl wildcards\n(Leu CDx, Val CGx)"),
-        (5.2,  3.6, 2.2, 1.4, "Filter (4 tiers)","unfilt 16,851\ntol 15,433\nmod 10,107\nstr 3,033"),
-        (7.8,  3.6, 2.4, 1.4, "Re-referencing",  "LACS pre-correction\n+ POTENCI/AIC residual"),
-        (10.6, 3.6, 1.6, 1.4, "Scoring",         "Z-score · G-score\n3-residue triplet"),
-        (12.4, 3.6, 1.0, 1.4, "Output",          ".str + JSON\n+ Zenodo meta"),
-    ]
-    for x, y, w, h, title, body in stages:
-        ax.add_patch(plt.Rectangle((x, y), w, h, fill=False, lw=1.6, ec="#361a54"))
-        ax.text(x + w / 2, y + h - 0.22, title, ha="center", va="top",
-                fontsize=12, fontweight="bold", color="#361a54")
-        ax.text(x + w / 2, y + 0.25, body, ha="center", va="bottom",
-                fontsize=9, color="#361a54")
-
-    # Forward arrows
-    for s1, s2 in zip(stages[:-1], stages[1:]):
-        x_start = s1[0] + s1[2]
-        x_end = s2[0]
-        y = s1[1] + s1[3] / 2
-        ax.annotate("", xy=(x_end, y), xytext=(x_start, y),
-                    arrowprops=dict(arrowstyle="->", lw=1.6, color="#361a54"))
-
-    # TODO branch off the Output stage
-    out_x = stages[-1][0] + stages[-1][2] / 2
-    out_y = stages[-1][1]
-    todo_x, todo_y, todo_w, todo_h = 5.0, 0.2, 7.5, 2.6
-    ax.annotate(
-        "",
-        xy=(todo_x + todo_w / 2, todo_y + todo_h),
-        xytext=(out_x, out_y),
-        arrowprops=dict(arrowstyle="->", lw=1.4, color="#888888", ls="dashed"),
-    )
-    ax.add_patch(plt.Rectangle(
-        (todo_x, todo_y), todo_w, todo_h,
-        fill=True, facecolor="#fafafa", lw=1.4, ec="#888888", ls="dashed",
-    ))
-    ax.text(
-        todo_x + 0.18, todo_y + todo_h - 0.18, "TODO (post-talk)",
-        ha="left", va="top", fontsize=11, fontweight="bold", color="#666666",
-    )
-    todos = [
-        "exclude multi-molecule (bound) entries that distort G-scores",
-        "per-sequence representative pick (best conditions → median G-score)",
-        "mmseqs2 sequence clustering for ML train/val/test split",
-    ]
-    for i, t in enumerate(todos):
-        ax.text(todo_x + 0.18, todo_y + todo_h - 0.7 - 0.55 * i,
-                f"·  {t}", ha="left", va="top", fontsize=10, color="#444444")
-
-    # Title
-    ax.text(6.75, 5.55, "TriZOD pipeline — input to output",
-            ha="center", va="bottom", fontsize=14, fontweight="bold",
-            color="#361a54")
-
-    fig.tight_layout()
-    fig.savefig(FIG / "workflow.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("workflow.png written")
 
 
 def _gather_all_csp_pairs():
@@ -433,10 +340,9 @@ def valine_structure():
 
 
 if __name__ == "__main__":
-    architecture_diagram()
-    workflow_diagram()
     per_tier_deltas()
-    lacs_vs_potenci_overlap()
+    for _tier in ("unfiltered", "tolerant", "moderate", "strict"):
+        lacs_vs_potenci_overlap(_tier)
     flip_count_by_tier()
     max_csp_per_pair()
     csp_merged_logy()

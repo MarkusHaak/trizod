@@ -1,6 +1,6 @@
 // =============================================================================
 // TriZOD — Final Pipeline & Re-Referenced Dataset
-// 6 May 2026 project meeting talk · 11 slides · target ~11 min
+// 6 May 2026 project meeting talk · 10 slides · target ~10 min
 // touying 0.7.3 + metropolis theme
 //
 // Iterated 2026-05-06: workflow centerpiece, no step-number framing,
@@ -219,11 +219,10 @@
 == LACS vs POTENCI residual capture
 
 #slide(composer: (1.2fr, 1fr))[
-  #image("figures/lacs_vs_potenci_overlap.png", width: 100%)
+  #image("figures/lacs_vs_potenci_overlap_strict.png", width: 100%)
 ][
   #text(size: 18pt)[
     Each dot is *one entry × one atom* (CA / CB / C, strict tier).
-    Not accumulated.
 
     *LACS* catches the large systematic referencing bias.
 
@@ -232,40 +231,37 @@
 ]
 
 
-// Slide 6 — Entries materially affected by LACS
-== Entries materially affected by LACS
+// Slide 6 — Entries affected by LACS
+== Entries affected by LACS
 
 #align(center)[#image("figures/flip_count_by_tier.png", height: 68%)]
 
 #text(size: 15pt)[Red = entries with $|"LACS offset"| > 0.5$ ppm on at least one of C/CA/CB. Re-referencing meaningfully changes the input shifts for *21%* (tolerant), *25%* (moderate), *32%* (strict).]
 
 
-// Slide 7 — Reid #1: CSP distribution (per-residue vs max-per-pair, log-y)
+// Slide 7 — Reid #1: CSP distribution + binding-interface example
 == Chemical-shift perturbation distribution
 
-#align(center)[#image("figures/csp_merged_logy.png", height: 68%)]
+#slide(composer: (1.2fr, 1fr))[
+  #image("figures/csp_merged_logy.png", width: 100%)
 
-#text(size: 14pt)[*Teal:* 61,063 per-residue HN/N CSPs · *orange:* one max CSP per pair (n = 491). Threshold *0.224 ppm* = trimmed-mean+SD on the bottom 90%. Most residues sit below it; almost every pair has at least one residue above. 90 of 581 candidate pairs dropped — no overlapping HN+N coverage between the two entries.]
+  #text(size: 12pt)[*Teal:* 61,063 per-residue HN/N CSPs · *orange:* one max CSP per pair (n = 491/581). Threshold *0.224 ppm* = trimmed-mean+SD on the bottom 90%. 90 pairs dropped — no overlapping HN+N coverage.]
+][
+  #image("figures/csp_interface_example.png", width: 100%)
 
-
-// Slide 8 — Max CSP per pair
-== Max CSP per pair · how strong is the strongest binding shift?
-
-#align(center)[#image("figures/max_csp_per_pair.png", height: 75%)]
-
-#text(size: 15pt)[One value per pair (491 points): the *maximum* HN/N CSP within each pair. Pairs below the 0.224-ppm threshold are essentially silent; those above are real binding events.]
+  #text(size: 12pt)[FKBP12 apo (bmr16925) vs bound (bmr16931). Two binding-pocket residues (55, 58) far above threshold.]
+]
 
 
-// Slide 9 — What's still TODO
+// Slide 8 — What's still TODO
 == What's still TODO
 
 - *Multi-molecule entries distort G-scores* — exclude entries with a non-polymer or nucleic-acid binding partner from the dataset.
 - *Per-sequence representative selection* — for the same protein with multiple BMRB entries, pick the one with best experimental conditions; tiebreak by median G-score.
 - *mmseqs2 sequence clustering* for the ML train/val/test split (per the original CheZOD/TriZOD report).
-- All three are flagged as TODO in the workflow on slide 2.
 
 
-// Slide 10 — Released artefacts
+// Slide 9 — Released artefacts
 == Released artefacts
 
 - `data/release/<tier>/scores.json` — per-residue Z/G + LACS + POTENCI offsets
@@ -288,7 +284,7 @@
 ]
 
 
-// Slide 11 — Next steps
+// Slide 10 — Next steps
 == Next steps
 
 - Push deposit to Zenodo (DOI placeholder until first tag)
