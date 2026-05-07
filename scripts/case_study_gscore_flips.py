@@ -145,32 +145,61 @@ def find_top_flippers(
 
 
 def render(panels, out_path):
-    """Render up to 4 panels as a 2x2 grid."""
-    fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharey=True)
+    """Render up to 4 panels as a 2x2 grid.
+
+    Each trace dict supports keys: label, gscores (required); color, ls, lw,
+    alpha, dashes, marker, markevery (optional).
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(13, 7.5), sharey=True)
     for ax, panel in zip(axes.flat, panels):
         traces = panel.get("traces", [])
         if not traces:
             ax.set_axis_off()
             continue
         for tr in traces:
-            ax.plot(
-                panel["residues"],
-                tr["gscores"],
-                tr["ystyle"],
+            kwargs = dict(
+                color=tr.get("color", "#1f77b4"),
+                lw=tr.get("lw", 1.3),
+                alpha=tr.get("alpha", 0.9),
                 label=tr["label"],
-                lw=1.4,
             )
-        ax.axhline(0.5, color="grey", ls=":", lw=0.8, label="G=0.5 disorder threshold")
+            if "dashes" in tr:
+                kwargs["dashes"] = tr["dashes"]
+            else:
+                kwargs["ls"] = tr.get("ls", "-")
+            if "marker" in tr:
+                kwargs["marker"] = tr["marker"]
+                kwargs["markersize"] = tr.get("markersize", 4)
+                kwargs["markevery"] = tr.get("markevery", 4)
+                kwargs["markerfacecolor"] = tr.get("markerfacecolor", tr.get("color"))
+                kwargs["markeredgecolor"] = tr.get("markeredgecolor", tr.get("color"))
+            ax.plot(panel["residues"], tr["gscores"], **kwargs)
+        ax.axhline(0.5, color="grey", ls=":", lw=0.8, label="G = 0.5")
         ax.set_xlabel("residue")
         ax.set_ylabel("G-score")
         ax.set_ylim(0, 1)
         ax.set_title(panel["title"], fontsize=10)
-        ax.legend(loc="best", fontsize=8)
+        ax.legend(loc="best", fontsize=7, ncol=2)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"figure written to {out_path}")
+
+
+# Trace styling per re-referencing mode.
+# Idea: raw and "both" are thick translucent SCAFFOLDING that defines the
+# two extremes; the diagnostic LACS/POTENCI traces are bold-saturated
+# narrower lines with distinctive dash patterns + markers — so when a
+# diagnostic trace coincides with the scaffolding, the markers + bold color
+# punch through unambiguously.
+_MODE_STYLE = {
+    "none":         dict(color="#9e9e9e", ls="-",        lw=5.5, alpha=0.30),
+    "both":         dict(color="#ff5252", ls="-",        lw=5.5, alpha=0.30),
+    "lacs":         dict(color="#1565c0", dashes=(5, 2), lw=1.8, alpha=1.0),
+    "potenci-only": dict(color="#2e7d32", dashes=(1, 2), lw=1.8, alpha=1.0),
+    "truth":        dict(color="#000000", ls=":",        lw=1.6, alpha=1.0),
+}
 
 
 def name_for(entry):
@@ -226,10 +255,12 @@ def main():
             entry_6968 = pickle.load(f)
 
     g_raw, seq_17665 = score_entry(entry_17665, args.potenci_cache, "none")
-    g_ref, _ = score_entry(entry_17665, args.potenci_cache, "both")
+    g_lacs, _ = score_entry(entry_17665, args.potenci_cache, "lacs")
+    g_pot, _ = score_entry(entry_17665, args.potenci_cache, "potenci-only")
+    g_both, _ = score_entry(entry_17665, args.potenci_cache, "both")
     g_truth, seq_6968 = score_entry(entry_6968, args.potenci_cache, "both")
 
-    if g_raw is None or g_ref is None:
+    if g_raw is None or g_both is None:
         print("ERROR: could not score 17665", file=sys.stderr)
         sys.exit(1)
 
@@ -245,31 +276,39 @@ def main():
         {
             "title": "alpha-synuclein BMRB 17665 (mis-referenced)",
             "residues": residues_a,
+            # Draw order: solid extremes first (raw, both) so the dashed
+            # diagnostics (LACS only, POTENCI only) overlay on top and stay
+            # visible when they coincide with one of the extremes. Truth
+            # last so it sits on top of everything.
             "traces": [
-                {"label": "17665 raw", "ystyle": "-", "gscores": g_raw},
-                {"label": "17665 re-referenced", "ystyle": "--", "gscores": g_ref},
-                {
-                    "label": "6968 ground truth",
-                    "ystyle": ":",
-                    "gscores": g_truth_aligned,
-                },
+                {"label": "17665 raw",            "gscores": g_raw,           **_MODE_STYLE["none"]},
+                {"label": "17665 both (default)", "gscores": g_both,          **_MODE_STYLE["both"]},
+                {"label": "17665 LACS only",      "gscores": g_lacs,          **_MODE_STYLE["lacs"]},
+                {"label": "17665 POTENCI only",   "gscores": g_pot,           **_MODE_STYLE["potenci-only"]},
+                {"label": "6968 ground truth",    "gscores": g_truth_aligned, **_MODE_STYLE["truth"]},
             ],
         }
     )
 
-    # Panels B/C/D: top-3 flippers
+    # Panels B/C: top-2 POTENCI-dominant flippers (largest mean |ΔG_both|).
+    # Panel D: BMRB 34865 — strongest *LACS-dominant* entry from the
+    # find_lacs_dominant.py scan: LACS catches the offset (|ΔG_lacs|=0.105),
+    # POTENCI/AIC's AIC gate rejects it (|ΔG_pot|=0.000). Demonstrates the
+    # complementary regime — LACS as a safety net for sub-AIC-threshold
+    # systematic offsets.
     if args.baseline_tolerant.exists():
         top_ids = find_top_flippers(
             args.baseline_tolerant,
             args.bmrb_cache,
             args.potenci_cache,
             exclude_ids={"17665"},
-            k=3,
+            k=2,
             max_scan=args.max_scan,
         )
+        top_ids.append("34865")
     else:
         print(
-            f"WARNING: {args.baseline_tolerant} missing - skipping top-3 flippers",
+            f"WARNING: {args.baseline_tolerant} missing - skipping top flippers",
             file=sys.stderr,
         )
         top_ids = []
@@ -285,8 +324,10 @@ def main():
             except Exception:
                 continue
         g_raw, seq = score_entry(entry, args.potenci_cache, "none")
-        g_ref, _ = score_entry(entry, args.potenci_cache, "both")
-        if g_raw is None or g_ref is None:
+        g_lacs_e, _ = score_entry(entry, args.potenci_cache, "lacs")
+        g_pot_e, _ = score_entry(entry, args.potenci_cache, "potenci-only")
+        g_both_e, _ = score_entry(entry, args.potenci_cache, "both")
+        if g_raw is None or g_both_e is None:
             continue
         residues = np.arange(1, len(seq) + 1)
         title = f"BMRB {eid}: {name_for(entry)[:40]}"
@@ -294,9 +335,13 @@ def main():
             {
                 "title": title,
                 "residues": residues,
+                # Draw order matches Panel A: solid extremes first, dashed
+                # diagnostics on top so overlapping pairs stay legible.
                 "traces": [
-                    {"label": "raw", "ystyle": "-", "gscores": g_raw},
-                    {"label": "re-referenced", "ystyle": "--", "gscores": g_ref},
+                    {"label": "raw",          "gscores": g_raw,    **_MODE_STYLE["none"]},
+                    {"label": "both",         "gscores": g_both_e, **_MODE_STYLE["both"]},
+                    {"label": "LACS only",    "gscores": g_lacs_e, **_MODE_STYLE["lacs"]},
+                    {"label": "POTENCI only", "gscores": g_pot_e,  **_MODE_STYLE["potenci-only"]},
                 ],
             }
         )
