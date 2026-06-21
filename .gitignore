@@ -40,5 +40,8 @@ docs/pipeline-overview.md
 # Per-pair CSP review (regenerable via scripts/csp_per_pair_grid.py)
 docs/260505/csp_pairs/
 
+# Generated dataset artefacts (large; regenerable via docs/260520/scripts/, released via Zenodo)
+docs/260520/data/
+
 # OS
 .DS_Store
