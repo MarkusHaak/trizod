@@ -27,6 +27,11 @@ tmp*/
 # Local tools (not version-controlled)
 tools/
 
+# Publication wrapper — separate private repo (tsenoner/trizod-publication);
+# holds the manuscript Overleaf clone + submission material. Lives here for
+# single-folder convenience but is never tracked by this public repo.
+/publication/
+
 # Internal docs
 docs/_planning/
 docs/260415/
