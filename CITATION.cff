@@ -6,9 +6,28 @@ authors:
   - family-names: Senoner
     given-names: Tobias
     email: tobias.senoner94@gmail.com
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+  - family-names: Haak
+    given-names: Markus
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+  - family-names: Heinzinger
+    given-names: Michael
+    affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
+  - family-names: Wagemann
+    given-names: David
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+  - family-names: Pritišanac
+    given-names: Iva
+    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
+  - family-names: Rost
+    given-names: Burkhard
+    affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
+  - family-names: Alderson
+    given-names: Reid
+    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
 repository-code: "https://github.com/tsenoner/trizod"
 license: MIT
-version: "0.1.0-pipeline"
+version: "0.2.0-dataset"
 date-released: "2026-05-05"
 keywords:
   - NMR
