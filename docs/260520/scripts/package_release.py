@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Assemble the TriZOD dataset release bundle for Zenodo.
+
+Gathers the canonical training sets, per-residue score labels, frozen test
+sets, and the datasheet into a single staging directory, and writes a
+``MANIFEST.json`` with byte sizes, SHA-256 checksums and record/sequence
+counts for every file.
+
+Core bundle (~115 MB):
+  train/<tier>/   train_<tier>_best.fasta (canonical), train_<tier>.fasta,
+                  clusters_best.tsv, clusters.tsv
+  scores/<tier>/  scores.json   (per-residue Z/G/k + offsets = the labels)
+  test/           CheZOD117_test_set.fasta, TriZOD_test_set.fasta
+  README.md       (the datasheet)
+  MANIFEST.json
+
+Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
+
+Usage
+-----
+    uv run python docs/260520/scripts/package_release.py [--version VER]
+        [--include-str] [--out DIR]
+
+The output directory is under docs/260520/data/ (gitignored). Nothing is
+uploaded; this only stages files locally for a manual Zenodo deposit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+RELEASE = ROOT / "data" / "release"
+MMSEQS = ROOT / "docs" / "260520" / "data" / "mmseqs"
+TESTSETS = ROOT / "data" / "2024-05-09"
+DATASHEET = ROOT / "docs" / "260520" / "datasheet.md"
+DEFAULT_OUT = ROOT / "docs" / "260520" / "data" / "release_bundle"
+
+TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
+DEFAULT_VERSION = "2026-05"
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def count_fasta(path: Path) -> int:
+    return sum(1 for ln in path.open() if ln.startswith(">"))
+
+
+def count_jsonl(path: Path) -> int:
+    return sum(1 for ln in path.open() if ln.strip())
+
+
+def copy_in(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def record_entry(rel: str, abs_path: Path) -> dict:
+    entry = {"bytes": abs_path.stat().st_size, "sha256": sha256(abs_path)}
+    if abs_path.suffix == ".fasta":
+        entry["n_sequences"] = count_fasta(abs_path)
+    elif abs_path.name == "scores.json":
+        entry["n_records"] = count_jsonl(abs_path)
+    return {rel: entry}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--version", default=DEFAULT_VERSION)
+    ap.add_argument(
+        "--include-str",
+        action="store_true",
+        help="also bundle the ~1.4 GB re-referenced .str files",
+    )
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    args = ap.parse_args()
+
+    bundle = args.out / f"trizod-dataset-{args.version}"
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    bundle.mkdir(parents=True)
+
+    planned: list[tuple[Path, str]] = []  # (source, relative path in bundle)
+
+    # Datasheet -> README.md
+    if not DATASHEET.exists():
+        raise SystemExit(f"datasheet not found: {DATASHEET}")
+    planned.append((DATASHEET, "README.md"))
+
+    for tier in TIERS:
+        best = MMSEQS / f"train_{tier}_best.fasta"
+        reps = MMSEQS / f"train_{tier}.fasta"
+        clu_best = MMSEQS / f"train_{tier}_clu_best.tsv"
+        clu = MMSEQS / f"train_{tier}_clu.tsv"
+        scores = RELEASE / tier / "scores.json"
+        for src, rel in [
+            (best, f"train/{tier}/train_{tier}_best.fasta"),
+            (reps, f"train/{tier}/train_{tier}.fasta"),
+            (clu_best, f"train/{tier}/clusters_best.tsv"),
+            (clu, f"train/{tier}/clusters.tsv"),
+            (scores, f"scores/{tier}/scores.json"),
+        ]:
+            if not src.exists():
+                raise SystemExit(f"missing required input: {src}")
+            planned.append((src, rel))
+        if args.include_str:
+            str_dir = RELEASE / tier / "str"
+            for sf in sorted(str_dir.glob("*.str")):
+                planned.append((sf, f"str/{tier}/{sf.name}"))
+
+    for src in [
+        TESTSETS / "CheZOD117_test_set.fasta",
+        TESTSETS / "TriZOD_test_set.fasta",
+    ]:
+        if not src.exists():
+            raise SystemExit(f"missing test set: {src}")
+        planned.append((src, f"test/{src.name}"))
+
+    manifest: dict[str, dict] = {}
+    total = 0
+    print(f"Staging {len(planned)} files into {bundle} ...")
+    for src, rel in planned:
+        dst = bundle / rel
+        copy_in(src, dst)
+        manifest.update(record_entry(rel, dst))
+        total += dst.stat().st_size
+
+    summary = {
+        "version": args.version,
+        "pipeline_version": "trizod-2026-05-05",
+        "rereference_mode": "both",
+        "canonical_training_fasta": "train/<tier>/train_<tier>_best.fasta",
+        "tiers": {
+            t: {
+                "scored_records": manifest[f"scores/{t}/scores.json"]["n_records"],
+                "training_reps": manifest[f"train/{t}/train_{t}_best.fasta"][
+                    "n_sequences"
+                ],
+            }
+            for t in TIERS
+        },
+        "test_sets": {
+            "CheZOD117": manifest["test/CheZOD117_test_set.fasta"]["n_sequences"],
+            "TriZOD_test": manifest["test/TriZOD_test_set.fasta"]["n_sequences"],
+        },
+        "total_bytes": total,
+        "n_files": len(planned),
+        "files": dict(sorted(manifest.items())),
+    }
+    (bundle / "MANIFEST.json").write_text(json.dumps(summary, indent=2))
+
+    print(f"\nBundle: {bundle}")
+    print(f"  files: {len(planned)} (+ MANIFEST.json)")
+    print(f"  size:  {total / 1e6:.1f} MB")
+    for t in TIERS:
+        print(
+            f"  {t:>10}: {summary['tiers'][t]['scored_records']:>6} scored, "
+            f"{summary['tiers'][t]['training_reps']:>5} training reps"
+        )
+    print(
+        f"  test: CheZOD117={summary['test_sets']['CheZOD117']}, "
+        f"TriZOD={summary['test_sets']['TriZOD_test']}"
+    )
+    print("\nNothing uploaded. Review the bundle, then deposit to Zenodo manually.")
+
+
+if __name__ == "__main__":
+    main()
