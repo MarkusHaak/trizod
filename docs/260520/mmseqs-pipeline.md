@@ -29,22 +29,30 @@ section *"Redundancy reduction"*:
 > identity and 80% coverage to yield all remaining training sets that
 > all share the same cluster representatives for common clusters.
 
-The CheZOD117 set (115 sequences) and the TriZOD test set (348
-sequences) were derived in November 2025 and live in
-`data/2024-05-09/`. We treat both as **frozen inputs** — they are not
-re-derived in this folder. Everything downstream of the test sets is
-re-run on the May 2026 dataset.
+CheZOD117 (115 sequences, the fixed external benchmark) lives in
+`data/2024-05-09/`. The TriZOD test set (344 sequences) is **recreated
+from the current snapshot** by `scripts/build_test_set.py` (seeded; see
+the recipe quoted above) and written to
+`docs/260520/data/testset/TriZOD_test_set.fasta`. Run `build_test_set.py`
+before `run_mmseqs_pipeline.py`.
 
 ## Pipeline (`scripts/run_mmseqs_pipeline.py`)
 
 For each tier:
 
-1. **Step A** — `mmseqs easy-search <tier>.fasta combined_testset.fasta
-   --min-seq-id 0.3 -c 0.8 --alignment-mode 3 --cov-mode 0 -s 7.5
-   --comp-bias-corr 0 --mask 0`.
-   Drop every sequence that hits either CheZOD117 or the TriZOD test
-   set.
-   Output: `<tier>_no_testset.fasta`.
+1. **Step A — test-set leakage removal (two stages)** against the
+   combined test set (CheZOD117 + TriZOD test), both at
+   `--min-seq-id 0.3 -c 0.8 [common options]`:
+   * *Stage 1 ("remove all cluster members", Step A0)* — `mmseqs
+     easy-cluster` the unfiltered superset together with the test
+     sequences and drop every training sequence that shares a cluster
+     with a test sequence (catches transitive leaks A~B~test). The
+     leaked IDs are removed from every nested tier.
+   * *Stage 2 ("search & remove")* — `mmseqs easy-search <tier>.fasta
+     combined_testset.fasta` and drop every direct hit.
+   Output: `<tier>_no_testset.fasta` (tier minus stage-1 ∪ stage-2).
+   CheZOD1325 is **not** a leakage target here (it only shapes the
+   TriZOD test set during its construction).
 
 2. **Step B** — `mmseqs createdb` then `mmseqs cluster` on
    `strict_no_testset.fasta` at `--min-seq-id 0.5 -c 0.8 [common
@@ -71,26 +79,28 @@ For each tier:
 
 | tier | input seqs | after test-set filter | clusters | reps |
 |---|---:|---:|---:|---:|
-| strict | 2,039 | 1,657 | 1,388 | 1,388 |
-| moderate | 6,346 | 5,604 | 4,205 | 4,205 |
-| tolerant | 9,035 | 8,062 | 5,828 | 5,828 |
-| unfiltered | 9,480 | 8,473 | 6,071 | 6,071 |
+| strict | 2,039 | 1,547 | 1,254 | 1,254 |
+| moderate | 6,346 | 5,425 | 4,063 | 4,063 |
+| tolerant | 9,035 | 7,867 | 5,684 | 5,684 |
+| unfiltered | 9,480 | 8,290 | 5,927 | 5,927 |
 
-Hits against the combined test set (CheZOD117 + TriZOD test):
+Per-tier removal against the combined test set (CheZOD117 + TriZOD
+test), split by stage (stage-2 = direct easy-search hits; stage-1
+only = additional transitive leaks):
 
-| tier | distinct queries with a hit |
-|---|---:|
-| strict | 382 |
-| moderate | 742 |
-| tolerant | 973 |
-| unfiltered | 1,007 |
+| tier | stage-2 hits | stage-1 only | total removed |
+|---|---:|---:|---:|
+| strict | 461 | 31 | 492 |
+| moderate | 809 | 112 | 921 |
+| tolerant | 1,025 | 143 | 1,168 |
+| unfiltered | 1,042 | 148 | 1,190 |
 
 **Comparison to the paper's numbers**: the paper reports ~7,324
-unfiltered cluster representatives; we get 6,071. The drop is
+unfiltered cluster representatives; we get 5,927. The drop is
 attributable to (a) the bound-complex filter (~27% of pkl entries
 flagged multi-molecule, more aggressive than the paper's pipeline),
-and (b) the May 2026 BMRB snapshot causing some new sequences to
-collapse into existing clusters.
+(b) exact-sequence dedup, and (c) the May 2026 BMRB snapshot causing
+some new sequences to collapse into existing clusters.
 
 ## Quality-best cluster representative override
 
@@ -109,10 +119,10 @@ Override stats:
 
 | tier | clusters | overrides | % |
 |---|---:|---:|---:|
-| strict | 1,388 | 109 | 7.9% |
-| moderate | 4,205 | 341 | 8.1% |
-| tolerant | 5,828 | 434 | 7.4% |
-| unfiltered | 6,071 | 444 | 7.3% |
+| strict | 1,254 | 110 | 8.8% |
+| moderate | 4,063 | 339 | 8.3% |
+| tolerant | 5,684 | 433 | 7.6% |
+| unfiltered | 5,927 | 443 | 7.5% |
 
 Top-3 quality-difference examples (strict): the mmseqs-pick was
 within-tier, but the override gains 400–600 points of quality
@@ -140,11 +150,16 @@ cluster_repr  member  best_repr  member_quality  best_repr_quality  quality_diff
 ## Reproducing
 
 ```bash
-# 1. Cleanly re-cluster (paths are derived from script location).
+# 1. Recreate the TriZOD test set from the current snapshot (seeded).
+uv run python docs/260520/scripts/build_test_set.py
+
+# 2. Cleanly re-cluster (paths are derived from script location).
 uv run python docs/260520/scripts/run_mmseqs_pipeline.py
 
-# 2. Add quality-best override columns + FASTA.
+# 3. Add quality-best override columns + FASTA.
 uv run python docs/260520/scripts/cluster_best_repr.py
 ```
+
+Or run the whole release end to end: `docs/260520/scripts/run_all.sh`.
 
 All artefacts land in `docs/260520/data/mmseqs/`.

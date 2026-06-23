@@ -22,12 +22,13 @@ moderate ⊃ strict`) so users can trade quantity for quality.
 
 | tier | scored records | unique-seq training reps |
 |---|---:|---:|
-| unfiltered | 16,851 | 6,071 |
-| tolerant | 15,433 | 5,828 |
-| moderate | 10,107 | 4,205 |
-| strict | 3,033 | 1,388 |
+| unfiltered | 16,851 | 5,927 |
+| tolerant | 15,433 | 5,684 |
+| moderate | 10,107 | 4,063 |
+| strict | 3,033 | 1,254 |
 
-Pipeline version: `trizod-2026-05-05`, `--rereference-mode both`.
+Pipeline version: `trizod-2026-05-05`, `--rereference-mode both`. Dataset
+release: `2026-06`.
 
 ## 2. Composition
 
@@ -49,7 +50,7 @@ Two layers are shipped:
    - `clusters_best.tsv` / `clusters.tsv` — cluster membership (`repr`,`member`).
 
 Held-out **test sets** (`test/`): `CheZOD117_test_set.fasta` (115 seq) and
-`TriZOD_test_set.fasta` (348 seq), with per-residue targets obtainable from the
+`TriZOD_test_set.fasta` (344 seq), with per-residue targets obtainable from the
 corresponding score records by `ID`.
 
 ## 3. How it was built (provenance)
@@ -71,22 +72,35 @@ corresponding score records by `ID`.
    `quality_score = tier_rank·10⁶ + (n_bb_pos × n_bb_types) − max|POTENCI residual|`.
 8. **Redundancy reduction (mmseqs2)**, verbatim from the original TriZOD report
    (common options `--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0
-   --mask 0`): test-set leakage removal (`easy-search`, 30% id / 80% cov),
-   `cluster` strict @ 50/80, iterative `clusterupdate` moderate→tolerant→
-   unfiltered so shared sequences keep the strict-tier representative.
+   --mask 0`): test-set leakage removal against CheZOD117 + TriZOD-344 in **two
+   stages** — stage-1 cluster-membership removal (cluster the superset with the
+   test sequences and drop any training sequence sharing a cluster with a test
+   sequence) then stage-2 `easy-search`, both at 30% id / 80% cov — followed by
+   `cluster` strict @ 50/80 and iterative `clusterupdate`
+   moderate→tolerant→unfiltered so shared sequences keep the strict-tier
+   representative.
 9. **Quality-best override** of cluster representatives (`train_<tier>_best`).
 
-Reproduce: `docs/260520/scripts/{build_final_dataset,run_mmseqs_pipeline,cluster_best_repr}.py`.
+The TriZOD test set is reconstructed from the current snapshot by
+`build_test_set.py` (seeded). Reproduce the whole release with
+`docs/260520/scripts/run_all.sh` (chains `build_final_dataset` →
+`build_test_set` → `run_mmseqs_pipeline` → `cluster_best_repr` →
+`package_release`).
 
 ## 4. Splits and the leakage guarantee
 
 Every `train_<tier>` set is **redundancy-reduced against CheZOD117 + the
-TriZOD-348 test set** at 30% identity / 80% coverage (sequences hitting a test
-sequence are dropped: 1,007 / 973 / 742 / 382 per tier). The TriZOD-348 set was
-itself constructed from clusters containing no CheZOD sequence. Therefore a
-model trained on any `train_<tier>` set can be evaluated on CheZOD117 (or
-TriZOD-348) **with no train/test leakage** — the basis for the UdonPred
-benchmark.
+TriZOD-344 test set** at 30% identity / 80% coverage, in two stages
+(cluster-membership removal + `easy-search`); 1,190 / 1,168 / 921 / 492 training
+sequences are dropped per tier (of which 148 / 143 / 112 / 31 are transitive
+leaks caught only by stage-1). The TriZOD-344 set is itself constructed (with a
+fixed seed) from strict-tier clusters containing no CheZOD sequence (CheZOD117
+and CheZOD1325). Therefore a model trained on any `train_<tier>` set can be
+evaluated on CheZOD117 (or TriZOD-344) **with no train/test leakage** — the
+basis for the UdonPred benchmark. The training sets are *not* reduced against the larger CheZOD1325
+set, which enters only the test-set selection; evaluating on CheZOD1325 is
+therefore not leakage-free. A release-time gate in `package_release.py` asserts
+that no test ID or exact test sequence appears in any training set.
 
 ## 5. Recommended use
 

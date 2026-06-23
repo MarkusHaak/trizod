@@ -92,7 +92,9 @@ What this folder finishes:
    **Not done in this folder** — flagged as a follow-up commit.
 
 6. **mmseqs cluster sizes are smaller than the paper.** Paper reports
-   ~7,324 unfiltered cluster reps; we get 6,071. Likely causes: (a)
+   ~7,324 unfiltered cluster reps; we get 5,927 (2026-06 build, with
+   stage-1 cluster-membership leakage removal added and the TriZOD test
+   set recreated from the current snapshot). Likely causes: (a)
    bound-complex removal (~27%) is more aggressive here than in the
    paper's pipeline, (b) the May 2026 BMRB snapshot adds new
    chains that further consolidate clusters. **Not blocking.**

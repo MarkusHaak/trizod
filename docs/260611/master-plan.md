@@ -32,7 +32,7 @@ report-style manuscript into a dataset paper.
 | Bound-complex removal + exact-seq dedup + quality ranking | ✅ `docs/260520/scripts/build_final_dataset.py` |
 | mmseqs2 redundancy reduction + CheZOD/TriZOD-test leakage removal | ✅ `docs/260520/scripts/run_mmseqs_pipeline.py` |
 | Quality-best representative override | ✅ `docs/260520/scripts/cluster_best_repr.py` |
-| Frozen leakage-free test sets (CheZOD117=115, TriZOD=348) | ✅ `data/2024-05-09/` |
+| Leakage-free test sets (CheZOD117=115, TriZOD=344, seeded rebuild) | ✅ `build_test_set.py` |
 | **Data committed / released (Zenodo DOI)** | ❌ **datasets are UNTRACKED + ungitted; nothing deposited** |
 | Manuscript | ⚠️ old report-style draft, mid-LaTeX-migration; reframe to dataset paper |
 
@@ -47,7 +47,7 @@ report-style manuscript into a dataset paper.
 | Post-leakage, pre-cluster sets | `docs/260520/data/mmseqs/<tier>_no_testset.fasta` |
 | Deduplicated sets + full metadata | `docs/260520/data/final_dataset/<tier>/<tier>.fasta` + `<tier>_all_ranked.tsv` |
 | Per-residue scores (Z/G/k + POTENCI & LACS offsets) | `data/release/<tier>/scores.json` |
-| Frozen test sets | `data/2024-05-09/{CheZOD117_test_set,TriZOD_test_set}.fasta` |
+| Test sets | CheZOD117: `data/2024-05-09/CheZOD117_test_set.fasta`; TriZOD: `docs/260520/data/testset/TriZOD_test_set.fasta` (rebuilt) |
 | Combined test set used for leakage removal | `docs/260520/data/mmseqs/combined_testset.fasta` |
 
 **Tracking status:** `data/` is gitignored; `docs/260520/` is entirely
@@ -69,14 +69,17 @@ untracked (0 tracked files). The finished datasets exist only on this machine �
 5. **Exact-sequence dedup**: keep the highest-quality member per identical
    sequence; carry a `global_repr_ID` stable across tiers (needed for
    `clusterupdate`). Unique seqs: 9,480 / 9,035 / 6,346 / 2,039.
-6. **Leakage removal** (`run_mmseqs_pipeline.py` Step A): `mmseqs easy-search`
-   each tier vs `combined_testset` = CheZOD117 + TriZOD-348 at **30% id / 80%
-   cov**; drop hits. Dropped: 1,007 / 973 / 742 / 382 → kept 8,473 / 8,062 /
-   5,604 / 1,657.
+6. **Leakage removal** (`run_mmseqs_pipeline.py` Steps A0+A) vs `combined_testset`
+   = CheZOD117 + TriZOD-344 at **30% id / 80% cov**, in **two stages**: stage-1
+   "remove all cluster members" (cluster the superset with the test seqs, drop
+   any training seq sharing a cluster with a test seq) then stage-2
+   `easy-search`. Dropped: 1,190 / 1,168 / 921 / 492 (of which 148 / 143 / 112 /
+   31 are transitive leaks unique to stage-1) → kept 8,290 / 7,867 / 5,425 /
+   1,547. CheZOD1325 is test-set-selection only (not a training-leakage target).
 7. **Cluster** strict residual at **50% id / 80% cov** (Step B), then iterative
    **`clusterupdate`** moderate→tolerant→unfiltered (Step C) so shared sequences
-   keep the strict-tier representative. Final cluster reps: 6,071 / 5,828 /
-   4,205 / 1,388.
+   keep the strict-tier representative. Final cluster reps: 5,927 / 5,684 /
+   4,063 / 1,254.
 8. **Optional quality-best override** (`cluster_best_repr.py`): replace mmseqs'
    internal representative with the highest-quality cluster member (differs in
    7.3–8.1% of clusters) → `train_<tier>_best.fasta`.
@@ -88,21 +91,22 @@ Full funnel:
 
 | tier | scored | unique seqs | dropped (test leakage) | kept | cluster reps |
 |---|---:|---:|---:|---:|---:|
-| unfiltered | 16,851 | 9,480 | 1,007 | 8,473 | 6,071 |
-| tolerant | 15,433 | 9,035 | 973 | 8,062 | 5,828 |
-| moderate | 10,107 | 6,346 | 742 | 5,604 | 4,205 |
-| strict | 3,033 | 2,039 | 382 | 1,657 | 1,388 |
+| unfiltered | 16,851 | 9,480 | 1,190 | 8,290 | 5,927 |
+| tolerant | 15,433 | 9,035 | 1,168 | 7,867 | 5,684 |
+| moderate | 10,107 | 6,346 | 921 | 5,425 | 4,063 |
+| strict | 3,033 | 2,039 | 492 | 1,547 | 1,254 |
 
 ---
 
 ## 4. Data-leakage exclusion (the TriZOD principle) — implemented
 
-The training sets are **redundancy-reduced against CheZOD117 + the TriZOD-348
+The training sets are **redundancy-reduced against CheZOD117 + the TriZOD-344
 test set** at 30% identity / 80% coverage (Step 6 above), the same protocol the
-original TriZOD report used. Additionally, the TriZOD-348 test set was built
-(Nov 2025, frozen) from clusters containing **no** CheZOD sequence. Both test
-sets are therefore disjoint from every `train_<tier>` set, so UdonPred can train
-on TriZOD and evaluate on CheZOD117 with no leakage. This guarantee is the
+original TriZOD report used. Additionally, the TriZOD-344 test set is rebuilt
+from the current snapshot (`build_test_set.py`, seeded) from clusters containing
+**no** CheZOD sequence. Both test sets are therefore disjoint from every
+`train_<tier>` set, so UdonPred can train on TriZOD and evaluate on CheZOD117
+with no leakage. This guarantee is the
 load-bearing link between this dataset paper and the UdonPred paper.
 
 ---
@@ -127,14 +131,14 @@ Each leads with a **bold finding statement**, then description.
 ### Figure 1 — Dataset & construction pipeline
 **An automated, integrity-checked pipeline converts 17,388 raw BMRB entries into
 a re-referenced, redundancy-reduced, CheZOD-leakage-free continuous-disorder
-dataset of 1,388–6,071 non-redundant proteins per stringency tier — an order of
+dataset of 1,254–5,927 non-redundant proteins per stringency tier — an order of
 magnitude larger than the CheZOD datasets it is benchmarked against.**
 Panels: (A) end-to-end workflow (parse → 4-tier filtering → LACS re-referencing
 → Z/G scoring → bound removal → exact-seq dedup → mmseqs redundancy reduction);
 (B) per-tier funnel (Section 3 table); (C) leakage-removal step explicit
-(1,007/973/742/382 training sequences dropped for matching CheZOD117 +
-TriZOD-348). Supported by **Table 1** (4-tier filter matrix). *Status: numbers +
-sub-figures exist; needs the funnel/workflow panel drawn and composited.*
+(1,190/1,168/921/492 training sequences dropped for matching CheZOD117 +
+TriZOD-344). Supported by **Table 1** (4-tier filter matrix). *Status: numbers +
+figure redrawn (`2026-06-22_TriZOD_redundancy_reduction.drawio`).*
 
 ### Figure 2 — LACS re-referencing (data-quality advance)
 **LACS pre-correction removes systematic NMR referencing errors that shift at
@@ -176,7 +180,7 @@ max-offset distribution become supplementary figures.
    residue's G-score by >0.10 in 55% of strict-tier entries and recovers
    multi-ppm referencing errors the residual correction alone misses.**
 3. **Bound-complex removal, exact-sequence dedup, and mmseqs redundancy
-   reduction yield CheZOD-leakage-free training sets of 1,388–6,071 proteins per
+   reduction yield CheZOD-leakage-free training sets of 1,254–5,927 proteins per
    tier without arbitrary cutoffs.**
 4. **The k-independent, 0–1-bounded TriZOD G-score is a faithful continuous
    disorder label whose expected value does not inherit NMR experiment-count
@@ -226,7 +230,14 @@ finalization decisions run in parallel.
 - Commit the methyl-wildcard revert (uncommitted).
 - Move `docs/260520/scripts/*` and the dataset into tracked/released locations.
 - Mint Zenodo DOI (needs maintainer to authorise GitHub–Zenodo + a tag).
-- Reconcile cluster counts vs the paper (6,071 vs ~7,324 unfiltered — explained
-  by the more aggressive bound filter + the newer BMRB snapshot).
+- ~~Reconcile cluster counts vs the paper (6,071 vs ~7,324 unfiltered).~~
+  **Resolved (2026-06):** (a) stage-1 cluster-membership removal added to
+  `run_mmseqs_pipeline.py`; (b) the TriZOD test set recreated from the current
+  snapshot with a fixed seed (`build_test_set.py`, 344 seq) instead of the
+  frozen 2024 set; dataset re-run → reps 5,927 / 5,684 / 4,063 / 1,254; figure
+  (`2026-06-22_TriZOD_redundancy_reduction.drawio`) + datasheet + `Article.tex`
+  (1,547/1,254; 5,425/4,063; 243/5,927) refreshed to match. The larger
+  unfiltered/strict ratio vs the old 7,324 is the newer BMRB snapshot + the more
+  aggressive bound filter + exact-seq dedup.
 - Deferred expert items (non-blocking): disulfide/thiol-state CB handling, ²H
   isotope correction, ionic-strength relaxation, ambiguity-code filtering.

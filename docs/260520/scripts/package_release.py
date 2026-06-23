@@ -36,7 +36,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 RELEASE = ROOT / "data" / "release"
 MMSEQS = ROOT / "docs" / "260520" / "data" / "mmseqs"
-TESTSETS = ROOT / "data" / "2024-05-09"
+CHEZOD117 = ROOT / "data" / "2024-05-09" / "CheZOD117_test_set.fasta"
+TRIZOD_TEST = ROOT / "docs" / "260520" / "data" / "testset" / "TriZOD_test_set.fasta"
 DATASHEET = ROOT / "docs" / "260520" / "datasheet.md"
 DEFAULT_OUT = ROOT / "docs" / "260520" / "data" / "release_bundle"
 
@@ -63,6 +64,64 @@ def count_jsonl(path: Path) -> int:
 def copy_in(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
+
+
+def read_fasta(path: Path) -> dict[str, str]:
+    recs: dict[str, str] = {}
+    cur: str | None = None
+    buf: list[str] = []
+    for line in path.open():
+        if line.startswith(">"):
+            if cur is not None:
+                recs[cur] = "".join(buf)
+            cur = line[1:].split()[0]
+            buf = []
+        else:
+            buf.append(line.strip())
+    if cur is not None:
+        recs[cur] = "".join(buf)
+    return recs
+
+
+def assert_no_leakage(bundle: Path) -> None:
+    """Release gate: no training sequence may share an ID or an exact
+    sequence with any held-out test sequence. A shared BMRB entry ID (a
+    different shift record of the same entry, not a sequence leak) is only
+    reported, not failed."""
+    test: dict[str, str] = {}
+    for tf in sorted((bundle / "test").glob("*.fasta")):
+        test.update(read_fasta(tf))
+    test_ids = set(test)
+    test_entry = {i.split("_", 1)[0] for i in test_ids}
+    test_seqs = set(test.values())
+
+    id_hits: list[tuple[str, str]] = []
+    seq_hits: list[tuple[str, str]] = []
+    entry_hits = 0
+    for trf in sorted((bundle / "train").rglob("*.fasta")):
+        for tid, seq in read_fasta(trf).items():
+            if tid in test_ids:
+                id_hits.append((trf.name, tid))
+            if seq in test_seqs:
+                seq_hits.append((trf.name, tid))
+            if tid.split("_", 1)[0] in test_entry:
+                entry_hits += 1
+    if id_hits or seq_hits:
+        raise SystemExit(
+            f"LEAKAGE GATE FAILED: {len(id_hits)} shared IDs + {len(seq_hits)} "
+            f"exact-sequence matches between train and test, e.g. "
+            f"{(id_hits + seq_hits)[:5]}"
+        )
+    msg = (
+        f"  leakage gate: OK — 0 shared IDs & 0 exact-sequence matches "
+        f"vs {len(test_ids)} test sequences"
+    )
+    if entry_hits:
+        msg += (
+            f"; note: {entry_hits} train records share a BMRB entry ID with a "
+            f"test sequence (different shift record, not a sequence leak)"
+        )
+    print(msg)
 
 
 def record_entry(rel: str, abs_path: Path) -> dict:
@@ -118,10 +177,7 @@ def main() -> None:
             for sf in sorted(str_dir.glob("*.str")):
                 planned.append((sf, f"str/{tier}/{sf.name}"))
 
-    for src in [
-        TESTSETS / "CheZOD117_test_set.fasta",
-        TESTSETS / "TriZOD_test_set.fasta",
-    ]:
+    for src in [CHEZOD117, TRIZOD_TEST]:
         if not src.exists():
             raise SystemExit(f"missing test set: {src}")
         planned.append((src, f"test/{src.name}"))
@@ -134,6 +190,10 @@ def main() -> None:
         copy_in(src, dst)
         manifest.update(record_entry(rel, dst))
         total += dst.stat().st_size
+
+    # Release gate: enforce the train/test leakage guarantee on the staged
+    # bundle before it can be deposited.
+    assert_no_leakage(bundle)
 
     summary = {
         "version": args.version,
