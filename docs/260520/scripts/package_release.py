@@ -38,7 +38,7 @@ RELEASE = ROOT / "data" / "release"
 MMSEQS = ROOT / "docs" / "260520" / "data" / "mmseqs"
 CHEZOD117 = ROOT / "data" / "2024-05-09" / "CheZOD117_test_set.fasta"
 TRIZOD_TEST = ROOT / "docs" / "260520" / "data" / "testset" / "TriZOD_test_set.fasta"
-DATASHEET = ROOT / "docs" / "260520" / "datasheet.md"
+BUNDLE_README = ROOT / "docs" / "260520" / "bundle-README.md"
 DEFAULT_OUT = ROOT / "docs" / "260520" / "data" / "release_bundle"
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
@@ -151,10 +151,10 @@ def main() -> None:
 
     planned: list[tuple[Path, str]] = []  # (source, relative path in bundle)
 
-    # Datasheet -> README.md
-    if not DATASHEET.exists():
-        raise SystemExit(f"datasheet not found: {DATASHEET}")
-    planned.append((DATASHEET, "README.md"))
+    # Compact dataset README -> README.md
+    if not BUNDLE_README.exists():
+        raise SystemExit(f"bundle README not found: {BUNDLE_README}")
+    planned.append((BUNDLE_README, "README.md"))
 
     for tier in TIERS:
         best = MMSEQS / f"train_{tier}_best.fasta"
