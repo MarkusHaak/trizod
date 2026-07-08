@@ -6,7 +6,7 @@ import pandas as pd
 import scipy
 
 import trizod.bmrb.bmrb as bmrb
-from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS  # , Z_CORRECTION
+from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.lacs import compute_lacs_offsets
 
 
@@ -159,13 +159,11 @@ def compute_weighted_diffs(diff_arr, mask, offset_dict=None):
     return weighted_diffs, abs_weighted_diffs
 
 
-def compute_zscores(diffs, dof, mask, corr=False):
+def compute_zscores(diffs, dof, mask):
     indices = np.where(np.any(mask, axis=1))
     first_idx, last_idx = indices[0][0], indices[0][-1]
     rss = (np.minimum(diffs, 4.0) ** 2).sum(axis=1)
     zscores = chi2_cdf_approx(rss, dof)
-    if corr:
-        raise ValueError("Z_CORRECTION is not supported")
     zscores[:first_idx] = np.nan
     zscores[last_idx + 1 :] = np.nan
     return zscores

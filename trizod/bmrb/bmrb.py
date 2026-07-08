@@ -188,10 +188,6 @@ class SampleConditions:
                 )
         return (val + const0) * factor + const1
 
-    def get_pressure(self):
-        # TODO: implement
-        return
-
     def get_ionic_strength(
         self, return_default=True, assume_si=True, fix_outliers=True
     ):
@@ -562,16 +558,7 @@ class BmrbEntry:
                     "missing sample ID references in shift table, trying to retrive from list of experiment IDs"
                 )
                 sampleIDs = [self.experiment_dict[eID][3] for eID in experimentIDs]
-            # if len(set(sampleIDs)) != 1:
-            #    #logging.getLogger('trizod.bmrb').error(f'skipping shift table {stID}, sampleIDs could not be safely determined')
-            #    #print(self.id, sampleIDs)
-            #    #continue
-            #    # TODO: double-check that all experiments share the same experiment conditions
-            # sampleIDs = sampleIDs[0]
-            # try:
             sampleIDs = set(sampleIDs)
-            # except:
-            #    breakpoint()
             sample_missing = False
             for sID in sampleIDs:
                 if sID and sID not in self.samples:

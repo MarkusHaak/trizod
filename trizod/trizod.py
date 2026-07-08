@@ -290,10 +290,10 @@ def parse_args():
     scores_grp.add_argument(
         "--score-types",
         nargs="+",
-        choices=["zscores", "gscores", "corrected"],
+        choices=["zscores", "gscores"],
         default=["zscores", "gscores"],
-        help="Which type of scores are created: Observation count-independent zscores (zscores), "
-        "original CheZOD zscores (corrected) or geometric mean of observation probabilities (gscores).",
+        help="Which type of scores are created: observation-count-independent zscores (zscores) "
+        "or geometric mean of observation probabilities (gscores).",
     )
     scores_grp.add_argument(
         "--offset-correction",

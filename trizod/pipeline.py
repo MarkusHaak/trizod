@@ -494,13 +494,7 @@ def compute_scores(
         )
         scores = []
         for score_type in score_types:
-            if score_type == "corrected":
-                scores.append(
-                    scoring.compute_zscores(
-                        triplet_diffs, triplet_dof, cmp_mask, corr=True
-                    )
-                )
-            elif score_type == "zscores":
+            if score_type == "zscores":
                 scores.append(
                     scoring.compute_zscores(triplet_diffs, triplet_dof, cmp_mask)
                 )
