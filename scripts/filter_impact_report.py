@@ -40,17 +40,12 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
 logging.getLogger("trizod.scoring").setLevel(logging.CRITICAL)
 
-# Make bmrb_entries available globally (required by fill_row_data)
-import trizod.trizod as _trizod_mod
-
-
 def build_dataframe(input_dir, cache_dir, tier="unfiltered"):
     """Load entries and build the peptide DataFrame with unfiltered settings."""
     bmrb_files = find_bmrb_files(input_dir)
     defaults = filter_defaults.loc[tier]
 
     global_entries, failed = load_bmrb_entries(bmrb_files, cache_dir=cache_dir)
-    _trizod_mod.bmrb_entries = global_entries
 
     if failed:
         logging.warning(f"Failed loading {len(failed)} of {len(bmrb_files)} files")

@@ -42,10 +42,11 @@ def test_script_import_surface():
     )
 
 
-def test_bmrb_entries_global_is_settable():
-    # filter_impact_report.py does `_trizod_mod.bmrb_entries = global_entries`
-    # before the pandarallel workers (fill_row_data) read it.
-    sentinel = {"sentinel": 1}
-    trizod_mod.bmrb_entries = sentinel
-    assert trizod_mod.bmrb_entries is sentinel
-    del trizod_mod.bmrb_entries
+def test_pipeline_takes_explicit_entries_not_a_global():
+    # Phase 2 removed the hidden module global: entries are passed explicitly
+    # via a `bmrb_entries` parameter, and main() no longer declares the global.
+    import inspect
+
+    assert "bmrb_entries" in inspect.signature(trizod_mod.fill_row_data).parameters
+    assert "bmrb_entries" in inspect.signature(trizod_mod.compute_scores_row).parameters
+    assert "global bmrb_entries" not in inspect.getsource(trizod_mod.main)

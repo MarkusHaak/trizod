@@ -407,6 +407,7 @@ def fill_row_data(
     fix_outliers=True,
     include_shifts=False,
     no_shift_averaging=False,
+    bmrb_entries=None,
 ):
     entry = bmrb_entries.loc[row["entryID"], "entry"]  # row['entry']
     peptide_shifts = entry.get_peptide_shifts()
@@ -569,6 +570,7 @@ def create_peptide_dataframe(
         fix_outliers=fix_outliers,
         include_shifts=include_shifts,
         no_shift_averaging=no_shift_averaging,
+        bmrb_entries=bmrb_entries,
     )
     df = df.astype(
         dict.fromkeys(
@@ -595,6 +597,7 @@ def compute_scores_row(
     reject_shift_type_only=False,
     cache_dir=None,
     rereference_mode="both",
+    bmrb_entries=None,
 ):
     if score_types is None:
         score_types = ["zscores"]
@@ -772,7 +775,6 @@ def main():
 
     logging.getLogger("trizod").info("Loading BMRB files.")
     bmrb_files = find_bmrb_files(args.input_dir, args.BMRB_file_pattern)
-    global bmrb_entries
     bmrb_entries, failed = load_bmrb_entries(bmrb_files, cache_dir=args.cache_dir)
     print()
     if failed:
@@ -821,6 +823,7 @@ def main():
         reject_shift_type_only=args.reject_shift_type_only,
         cache_dir=args.cache_dir,
         rereference_mode=args.rereference_mode,
+        bmrb_entries=bmrb_entries,
     )
     if args.progress:
         print()  # prevents overwriting last line of progress bars
