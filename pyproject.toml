@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trizod"
-version = "0.0.1"
+version = "0.2.0"
 description = "Modern disorder scores for BMRB data"
 readme = "README.md"
-license = "AGPL-3.0-only"
+license = "MIT"
 requires-python = ">=3.9"
 authors = [
     { name = "Markus Haak", email = "markus.haak@tum.de" },
@@ -15,7 +15,7 @@ authors = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Intended Audience :: Science/Research",
@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/MarkusHaak/trizod"
+Repository = "https://github.com/tsenoner/trizod"
 
 [project.scripts]
 trizod = "trizod.trizod:main"

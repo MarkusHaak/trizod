@@ -1,6 +1,6 @@
 {
   "title": "TriZOD — Re-referenced BMRB chemical shift dataset for protein disorder",
-  "description": "TriZOD scores BMRB NMR chemical-shift entries for protein disorder using POTENCI random-coil predictions, LACS re-referencing, and CheZOD-style Z/G-scores. This deposit contains the machine-learning-ready dataset: four nested stringency tiers (unfiltered/tolerant/moderate/strict) of per-residue Z/G-score labels, redundancy-reduced training sets (mmseqs2 cluster representatives, leakage-free against the CheZOD117 and TriZOD-348 test sets), the frozen test sets, and the re-referenced backbone-shift NMR-STAR files. Produced by the finalized 2026-05 TriZOD pipeline.",
+  "description": "TriZOD scores BMRB NMR chemical-shift entries for protein disorder using POTENCI random-coil predictions, LACS re-referencing, and CheZOD-style Z/G-scores. This deposit contains the machine-learning-ready dataset: four nested stringency tiers (unfiltered/tolerant/moderate/strict) of per-residue Z/G-score labels, redundancy-reduced training sets (mmseqs2 cluster representatives, leakage-free against the CheZOD117 and TriZOD-344 test sets), the frozen test sets, and the re-referenced backbone-shift NMR-STAR files. Produced by the finalized 2026-05 TriZOD pipeline.",
   "version": "0.2.0-dataset",
   "creators": [
     { "name": "Senoner, Tobias", "affiliation": "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany" },
