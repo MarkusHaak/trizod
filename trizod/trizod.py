@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-import argparse
 import logging
-import sys
 import time
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -26,7 +23,6 @@ from trizod.pipeline import (
     prefilter_dataframe,
     print_filter_losses,
 )
-from trizod.utils import ArgHelpFormatter
 
 
 class Found(Exception):
@@ -102,300 +98,6 @@ filter_defaults = pd.DataFrame(
     },
     index=["unfiltered", "tolerant", "moderate", "strict"],
 )
-
-
-def parse_args():
-    init_parser = argparse.ArgumentParser(description="", add_help=False)
-
-    io_grp = init_parser.add_argument_group("Input/Output Options")
-    io_grp.add_argument(
-        "--input-dir",
-        "-d",
-        default=".",
-        help="Directory that is searched recursively for BMRB .str files.",
-    )
-    io_grp.add_argument(
-        "--output-prefix",
-        default="./trizod_dataset",
-        help="Prefix (and path) of the created output file.",
-    )
-    io_grp.add_argument(
-        "--output-format",
-        choices=["json", "csv"],
-        default="csv",
-        help="Output file format.",
-    )
-    io_grp.add_argument(
-        "--cache-dir",
-        default="./tmp",
-        help="Create and use cache files in the given directory to acelerate repeated execution.",
-    )
-    io_grp.add_argument(
-        "--BMRB-file-pattern",
-        default=r"bmr(\d+)_3\.str",
-        help="regular expression pattern for BMRB files.",
-    )
-    io_grp.add_argument(
-        "--include-shifts",
-        action="store_true",
-        help="Add raw backbone atom shift data to the output.",
-    )
-    io_grp.add_argument(
-        "--no-shift-averaging",
-        action="store_true",
-        help="Do not average over Proton groups for HA and HB shifts.",
-    )
-    io_grp.add_argument(
-        "--emit-str",
-        type=Path,
-        default=None,
-        help=(
-            "Directory to write re-referenced NMR-STAR (.str) files into. "
-            "One file per scored entry: <dir>/bmr<id>_rereferenced.str. "
-            "Off by default."
-        ),
-    )
-
-    filter_defaults_grp = init_parser.add_argument_group("Filter Default Settings")
-    filter_defaults_grp.add_argument(
-        "--filter-defaults",
-        choices=list(filter_defaults.index),
-        default="tolerant",
-        help="Sets defaults for all filter options, from unfiltered to strict.",
-    )
-    args_init, remaining_argv = init_parser.parse_known_args()
-
-    parser = argparse.ArgumentParser(
-        parents=[init_parser],
-        description=__doc__,
-        formatter_class=ArgHelpFormatter,  # formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    filter_grp = parser.add_argument_group("Filtering Options")
-    filter_grp.add_argument(
-        "--temperature-range",
-        nargs=2,
-        type=float,
-        default=filter_defaults.loc[args_init.filter_defaults, "temperature-range"],
-        help="Minimum and maximum temperature in Kelvin.",
-    )
-    filter_grp.add_argument(
-        "--ionic-strength-range",
-        nargs=2,
-        type=float,
-        default=filter_defaults.loc[args_init.filter_defaults, "ionic-strength-range"],
-        help="Minimum and maximum ionic strength in Mol.",
-    )
-    filter_grp.add_argument(
-        "--pH-range",
-        nargs=2,
-        type=float,
-        default=filter_defaults.loc[args_init.filter_defaults, "pH-range"],
-        help="Minimum and maximum pH.",
-    )
-    filter_grp.add_argument(
-        "--unit-assumptions",
-        action=argparse.BooleanOptionalAction,
-        default=filter_defaults.loc[args_init.filter_defaults, "unit-assumptions"],
-        help="Assume units for Temp., Ionic str. and pH if they are not given and exclude entries instead.",
-    )
-    filter_grp.add_argument(
-        "--unit-corrections",
-        action=argparse.BooleanOptionalAction,
-        default=filter_defaults.loc[args_init.filter_defaults, "unit-corrections"],
-        help="Correct values for Temp., Ionic str. and pH if units are most likely wrong.",
-    )
-    filter_grp.add_argument(
-        "--default-conditions",
-        action=argparse.BooleanOptionalAction,
-        default=filter_defaults.loc[args_init.filter_defaults, "default-conditions"],
-        help="Assume standard conditions if pH (7), ionic strength (0.1 M) or temperature (298 K) are missing and exclude entries instead.",
-    )
-    filter_grp.add_argument(
-        "--peptide-length-range",
-        nargs="+",
-        type=int,
-        default=filter_defaults.loc[args_init.filter_defaults, "peptide-length-range"],
-        help="Minimum (and optionally maximum) peptide sequence length.",
-    )
-    filter_grp.add_argument(
-        "--min-backbone-shift-types",
-        type=int,
-        default=filter_defaults.loc[
-            args_init.filter_defaults, "min-backbone-shift-types"
-        ],
-        help="Minimum number of different backbone shift types (max 7).",
-    )
-    filter_grp.add_argument(
-        "--min-backbone-shift-positions",
-        type=int,
-        default=filter_defaults.loc[
-            args_init.filter_defaults, "min-backbone-shift-positions"
-        ],
-        help="Minimum number of positions with at least one backbone shift.",
-    )
-    filter_grp.add_argument(
-        "--min-backbone-shift-fraction",
-        type=float,
-        default=filter_defaults.loc[
-            args_init.filter_defaults, "min-backbone-shift-fraction"
-        ],
-        help="Minimum fraction of positions with at least one backbone shift.",
-    )
-    filter_grp.add_argument(
-        "--max-noncanonical-fraction",
-        type=float,
-        default=filter_defaults.loc[
-            args_init.filter_defaults, "max-noncanonical-fraction"
-        ],
-        help="Maximum fraction of non-canonical amino acids (X count as arbitrary canonical) in the amino acid sequence.",
-    )
-    filter_grp.add_argument(
-        "--max-x-fraction",
-        type=float,
-        default=filter_defaults.loc[args_init.filter_defaults, "max-x-fraction"],
-        help="Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence.",
-    )
-    filter_grp.add_argument(
-        "--keywords-blacklist",
-        nargs="*",
-        default=filter_defaults.loc[args_init.filter_defaults, "keywords-blacklist"],
-        help="Exclude entries with any of these keywords mentioned anywhere in the BMRB file, case ignored.",
-    )
-    filter_grp.add_argument(
-        "--chemical-denaturants",
-        nargs="*",
-        default=filter_defaults.loc[args_init.filter_defaults, "chemical-denaturants"],
-        help="Exclude entries with any of these chemicals as substrings of sample components, case ignored.",
-    )
-    filter_grp.add_argument(
-        "--exp-method-whitelist",
-        nargs="*",
-        default=filter_defaults.loc[args_init.filter_defaults, "exp-method-whitelist"],
-        help="Include only entries with any of these keywords as substring of the experiment subtype, case ignored.",
-    )
-    filter_grp.add_argument(
-        "--exp-method-blacklist",
-        nargs="*",
-        default=filter_defaults.loc[args_init.filter_defaults, "exp-method-blacklist"],
-        help="Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.",
-    )
-    filter_grp.add_argument(
-        "--exclude-paramagnetic",
-        action=argparse.BooleanOptionalAction,
-        default=filter_defaults.loc[args_init.filter_defaults, "exclude-paramagnetic"],
-        help="Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata.",
-    )
-
-    scores_grp = parser.add_argument_group("Scoring Options")
-    scores_grp.add_argument(
-        "--score-types",
-        nargs="+",
-        choices=["zscores", "gscores"],
-        default=["zscores", "gscores"],
-        help="Which type of scores are created: observation-count-independent zscores (zscores) "
-        "or geometric mean of observation probabilities (gscores).",
-    )
-    scores_grp.add_argument(
-        "--offset-correction",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Compute correction offsets for random coil chemical shifts",
-    )
-    scores_grp.add_argument(
-        "--rereference-mode",
-        choices=["none", "lacs", "potenci-only", "both"],
-        default="both",
-        help=(
-            "Chemical shift re-referencing strategy. "
-            "'none': no correction (raw shifts). "
-            "'lacs': LACS pre-correction only. "
-            "'potenci-only': legacy POTENCI/AIC offset detection only. "
-            "'both' (default): LACS pre-correction followed by POTENCI/AIC residual."
-        ),
-    )
-    scores_grp.add_argument(
-        "--max-offset",
-        type=float,
-        default=filter_defaults.loc[args_init.filter_defaults, "max-offset"],
-        help="Maximum valid offset correction for any random coil chemical shift type.",
-    )
-    scores_grp.add_argument(
-        "--reject-shift-type-only",
-        action=argparse.BooleanOptionalAction,
-        default=filter_defaults.loc[
-            args_init.filter_defaults, "reject-shift-type-only"
-        ],
-        help="Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry.",
-    )
-    scores_grp.add_argument(
-        "--precision",
-        type=int,
-        default=4,
-        help="Number of decimal digits that are output to human readable files.",
-    )
-
-    other_grp = parser.add_argument_group("Other Options")
-    other_grp.add_argument(
-        "--processes",
-        default=8,
-        type=int,
-        help="Number of processes to spawn in multiprocessing.",
-    )
-    other_grp.add_argument(
-        "--progress",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Show progress bars.",
-    )
-
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args(sys.argv[1:])
-    # args = argparse.Namespace(**vars(args_init), **vars(args))
-
-    args.input_dir = Path(args.input_dir)
-    if not args.input_dir.exists():
-        logging.getLogger("trizod").error(
-            f"Input directory {args.input_dir} does not exist."
-        )
-        exit(1)
-    if not args.input_dir.is_dir():
-        logging.getLogger("trizod").error(f"Path {args.input_dir} is not a directory.")
-        exit(1)
-    args.input_dir = args.input_dir.resolve()
-
-    args.output_prefix = Path(args.output_prefix).resolve()
-    if not args.output_prefix.parent.exists():
-        logging.getLogger("trizod").error(
-            f"Output directory {args.output_prefix.parent} does not exist."
-        )
-        exit(1)
-
-    if len(args.peptide_length_range) == 1:
-        args.peptide_length_range.append(np.inf)
-
-    args.cache_dir = Path(args.cache_dir).resolve()
-    subdirs = [
-        args.cache_dir,
-        args.cache_dir / "wSCS",
-        args.cache_dir / "bmrb_entries",
-        args.cache_dir / "potenci",
-    ]
-    if not all(d.exists() for d in subdirs):
-        if not args.cache_dir.exists():
-            logging.getLogger("trizod").debug(
-                f"Directory {args.cache_dir} does not exist and is created."
-            )
-        for d in subdirs:
-            d.mkdir(parents=True, exist_ok=True)
-    elif not args.cache_dir.is_dir():
-        logging.getLogger("trizod").error(f"Path {args.cache_dir} is not a directory.")
-        exit(1)
-
-    if args.emit_str is not None:
-        args.emit_str = Path(args.emit_str).resolve()
-        args.emit_str.mkdir(parents=True, exist_ok=True)
-
-    return args
 
 
 def fill_row_data(
@@ -759,8 +461,7 @@ def output_dataset(
         raise ValueError(f"Unknown output format: {output_format}")
 
 
-def main():
-    args = parse_args()
+def run_scoring_pipeline(args):
     if args.processes is None:
         pandarallel.initialize(verbose=0, progress_bar=args.progress)
     else:
@@ -925,4 +626,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from trizod.cli.main import app
+
+    app()

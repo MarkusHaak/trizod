@@ -43,10 +43,13 @@ def test_script_import_surface():
 
 
 def test_pipeline_takes_explicit_entries_not_a_global():
-    # Phase 2 removed the hidden module global: entries are passed explicitly
-    # via a `bmrb_entries` parameter, and main() no longer declares the global.
+    # Phase 2 removed the hidden module global: entries are passed explicitly via
+    # a `bmrb_entries` parameter, and run_scoring_pipeline no longer declares the
+    # global (Phase 4 renamed main() -> run_scoring_pipeline).
     import inspect
 
     assert "bmrb_entries" in inspect.signature(trizod_mod.fill_row_data).parameters
     assert "bmrb_entries" in inspect.signature(trizod_mod.compute_scores_row).parameters
-    assert "global bmrb_entries" not in inspect.getsource(trizod_mod.main)
+    assert "global bmrb_entries" not in inspect.getsource(
+        trizod_mod.run_scoring_pipeline
+    )

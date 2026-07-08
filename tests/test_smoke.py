@@ -35,7 +35,11 @@ class TestCLI:
             text=True,
         )
         assert "--rereference-mode" in result.stdout
-        assert "{none,lacs,potenci-only,both}" in result.stdout
+        # Typer/Click renders enum choices as [none|lacs|potenci-only|both]
+        # (argparse used {none,lacs,potenci-only,both}); assert each token so the
+        # check is robust to the exact rendering.
+        for choice in ("none", "lacs", "potenci-only", "both"):
+            assert choice in result.stdout
 
 
 @requires_bmrb_data
