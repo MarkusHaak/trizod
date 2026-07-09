@@ -151,15 +151,15 @@ cluster_repr  member  best_repr  member_quality  best_repr_quality  quality_diff
 
 ```bash
 # 1. Recreate the TriZOD test set from the current snapshot (seeded).
-uv run python docs/260520/scripts/build_test_set.py
+uv run python -m trizod.dataset.testset
 
 # 2. Cleanly re-cluster (paths are derived from script location).
-uv run python docs/260520/scripts/run_mmseqs_pipeline.py
+uv run python -m trizod.dataset.redundancy
 
 # 3. Add quality-best override columns + FASTA.
-uv run python docs/260520/scripts/cluster_best_repr.py
+uv run python -m trizod.dataset.representatives
 ```
 
-Or run the whole release end to end: `docs/260520/scripts/run_all.sh`.
+Or run the whole release end to end: `scripts/build_dataset.sh`.
 
 All artefacts land in `docs/260520/data/mmseqs/`.

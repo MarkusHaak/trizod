@@ -18,10 +18,10 @@ Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
 
 Usage
 -----
-    uv run python docs/260520/scripts/package_release.py [--version VER]
-        [--include-str] [--out DIR]
+    uv run python -m trizod.dataset.package_release [--version VER]
+        [--include-str] [--out DIR] [--work-dir DIR] [--root DIR]
 
-The output directory is under docs/260520/data/ (gitignored). Nothing is
+The output directory defaults under the work dir (gitignored). Nothing is
 uploaded; this only stages files locally for a manual Zenodo deposit.
 """
 
@@ -33,13 +33,8 @@ import json
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-RELEASE = ROOT / "data" / "release"
-MMSEQS = ROOT / "docs" / "260520" / "data" / "mmseqs"
-CHEZOD117 = ROOT / "data" / "2024-05-09" / "CheZOD117_test_set.fasta"
-TRIZOD_TEST = ROOT / "docs" / "260520" / "data" / "testset" / "TriZOD_test_set.fasta"
-BUNDLE_README = ROOT / "docs" / "260520" / "bundle-README.md"
-DEFAULT_OUT = ROOT / "docs" / "260520" / "data" / "release_bundle"
+from trizod.dataset.paths import resolve_paths
+from trizod.io.fasta import count_fasta, read_fasta
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 DEFAULT_VERSION = "2026-05"
@@ -53,10 +48,6 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def count_fasta(path: Path) -> int:
-    return sum(1 for ln in path.open() if ln.startswith(">"))
-
-
 def count_jsonl(path: Path) -> int:
     return sum(1 for ln in path.open() if ln.strip())
 
@@ -64,23 +55,6 @@ def count_jsonl(path: Path) -> int:
 def copy_in(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
-
-
-def read_fasta(path: Path) -> dict[str, str]:
-    recs: dict[str, str] = {}
-    cur: str | None = None
-    buf: list[str] = []
-    for line in path.open():
-        if line.startswith(">"):
-            if cur is not None:
-                recs[cur] = "".join(buf)
-            cur = line[1:].split()[0]
-            buf = []
-        else:
-            buf.append(line.strip())
-    if cur is not None:
-        recs[cur] = "".join(buf)
-    return recs
 
 
 def assert_no_leakage(bundle: Path) -> None:
@@ -141,10 +115,25 @@ def main() -> None:
         action="store_true",
         help="also bundle the ~1.4 GB re-referenced .str files",
     )
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/docs/260520/data)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
     args = ap.parse_args()
 
-    bundle = args.out / f"trizod-dataset-{args.version}"
+    paths = resolve_paths(args.work_dir, args.root)
+    out = args.out or paths.release_bundle
+
+    bundle = out / f"trizod-dataset-{args.version}"
     if bundle.exists():
         shutil.rmtree(bundle)
     bundle.mkdir(parents=True)
@@ -152,16 +141,17 @@ def main() -> None:
     planned: list[tuple[Path, str]] = []  # (source, relative path in bundle)
 
     # Compact dataset README -> README.md
-    if not BUNDLE_README.exists():
-        raise SystemExit(f"bundle README not found: {BUNDLE_README}")
-    planned.append((BUNDLE_README, "README.md"))
+    if not paths.bundle_readme.exists():
+        raise SystemExit(f"bundle README not found: {paths.bundle_readme}")
+    planned.append((paths.bundle_readme, "README.md"))
 
+    trizod_test = paths.testset / "TriZOD_test_set.fasta"
     for tier in TIERS:
-        best = MMSEQS / f"train_{tier}_best.fasta"
-        reps = MMSEQS / f"train_{tier}.fasta"
-        clu_best = MMSEQS / f"train_{tier}_clu_best.tsv"
-        clu = MMSEQS / f"train_{tier}_clu.tsv"
-        scores = RELEASE / tier / "scores.json"
+        best = paths.mmseqs / f"train_{tier}_best.fasta"
+        reps = paths.mmseqs / f"train_{tier}.fasta"
+        clu_best = paths.mmseqs / f"train_{tier}_clu_best.tsv"
+        clu = paths.mmseqs / f"train_{tier}_clu.tsv"
+        scores = paths.release / tier / "scores.json"
         for src, rel in [
             (best, f"train/{tier}/train_{tier}_best.fasta"),
             (reps, f"train/{tier}/train_{tier}.fasta"),
@@ -173,11 +163,11 @@ def main() -> None:
                 raise SystemExit(f"missing required input: {src}")
             planned.append((src, rel))
         if args.include_str:
-            str_dir = RELEASE / tier / "str"
+            str_dir = paths.release / tier / "str"
             for sf in sorted(str_dir.glob("*.str")):
                 planned.append((sf, f"str/{tier}/{sf.name}"))
 
-    for src in [CHEZOD117, TRIZOD_TEST]:
+    for src in [paths.chezod117, trizod_test]:
         if not src.exists():
             raise SystemExit(f"missing test set: {src}")
         planned.append((src, f"test/{src.name}"))

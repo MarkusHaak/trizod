@@ -29,25 +29,28 @@ Steps
    representative per sequence.  Carry the ranked list along so an
    external pipeline (mmseqs cluster representative override) can pick
    the best member of a similarity cluster too.
-5. Write to ``docs/260520/data/final_dataset/<tier>/``:
+5. Write to ``<work-dir>/final_dataset/<tier>/``:
        <tier>.fasta            — deduplicated sequences, one per cluster
        <tier>_all_ranked.tsv   — every entry kept, with quality_score,
                                   cluster_repr flag, and metadata
        <tier>_summary.json     — counts (kept, dropped, dedup ratio)
+
+Usage
+-----
+    uv run python -m trizod.dataset.build [--work-dir DIR] [--root DIR]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import pickle
 from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[3]
-RELEASE = ROOT / "data" / "release"
-PKL_DIR = ROOT / "tmp" / "bmrb_entries"
-OUT = ROOT / "docs" / "260520" / "data" / "final_dataset"
+from trizod.dataset.composition import detect_bound
+from trizod.dataset.paths import resolve_paths
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 TIER_RANK = {"strict": 4, "moderate": 3, "tolerant": 2, "unfiltered": 1}
@@ -56,54 +59,10 @@ ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 MIN_SEQ_LEN = 20
 
 
-def detect_bound(entry) -> dict:
-    """Classify a BmrbEntry's molecular composition."""
-    entities = list(entry.entities.values())
-    has_non_polymer = any(e.type == "non-polymer" for e in entities)
-    has_nucleic = any(
-        e.type == "polymer"
-        and (e.polymer_type or "") in ("polydeoxyribonucleotide", "polyribonucleotide")
-        for e in entities
-    )
-    has_metal = any(
-        (e.type or "").lower().startswith("metal") for e in entities
-    )
-    # n_entities: number of distinct entities in the entry (homo-oligomers
-    # show up as a single Entity that is referenced multiple times in an
-    # assembly).
-    n_entities = len(entity_ids_in_pkl := [e.id for e in entities])
-    assert len(set(entity_ids_in_pkl)) == n_entities, "non-unique entity IDs"
-
-    # Check assemblies for multi-entity composition.  Some entries have
-    # one Entity record but multiple assemblies/entity_assemblies if it's
-    # a homo-oligomer; we treat that as single-molecule.
-    multi_protein_assembly = False
-    for asm in entry.assemblies.values():
-        distinct_entity_ids_in_asm = {e[1] for e in asm.entities if e[1]}
-        if len(distinct_entity_ids_in_asm) > 1:
-            multi_protein_assembly = True
-            break
-
-    bound = (
-        has_non_polymer
-        or has_nucleic
-        or has_metal
-        or multi_protein_assembly
-    )
-    return {
-        "n_entities": n_entities,
-        "has_non_polymer": has_non_polymer,
-        "has_nucleic": has_nucleic,
-        "has_metal": has_metal,
-        "multi_protein_assembly": multi_protein_assembly,
-        "is_bound": bound,
-    }
-
-
-def build_composition_cache():
+def build_composition_cache(pkl_dir: Path) -> dict:
     """Load every BMRB pkl once and return entryID -> composition dict."""
     cache: dict[str, dict] = {}
-    pkls = list(PKL_DIR.glob("*.pkl"))
+    pkls = list(pkl_dir.glob("*.pkl"))
     print(f"Loading composition info from {len(pkls)} BMRB pkl files...")
     for i, pkl_path in enumerate(pkls):
         eid = pkl_path.stem
@@ -118,33 +77,35 @@ def build_composition_cache():
     return cache
 
 
-def load_tier_scores(tier: str) -> pd.DataFrame:
+def load_tier_scores(tier: str, release: Path) -> pd.DataFrame:
     rows = []
-    with open(RELEASE / tier / "scores.json") as f:
+    with open(release / tier / "scores.json") as f:
         for line in f:
             if not line.strip():
                 continue
             r = json.loads(line)
             offs_pot = [abs(r.get(f"off_{a}") or 0.0) for a in ATOMS]
             offs_lac = [abs(r.get(f"lacs_off_{a}") or 0.0) for a in ATOMS]
-            rows.append({
-                "ID": r["ID"],
-                "entryID": r["entryID"],
-                "stID": r["stID"],
-                "entity_assemID": r["entity_assemID"],
-                "entityID": r["entityID"],
-                "seq": r["seq"] or "",
-                "len": len(r["seq"] or ""),
-                "n_bb_pos": r["bbshift_positions_post"] or 0,
-                "n_bb_types": r["bbshift_types_post"] or 0,
-                "total_bbshifts": r["total_bbshifts"] or 0,
-                "max_potenci_off": max(offs_pot) if offs_pot else 0.0,
-                "max_lacs_off": max(offs_lac) if offs_lac else 0.0,
-                "entity_name": r.get("entity_name") or "",
-                "ionic_strength": r.get("ionic_strength"),
-                "pH": r.get("pH"),
-                "temperature": r.get("temperature"),
-            })
+            rows.append(
+                {
+                    "ID": r["ID"],
+                    "entryID": r["entryID"],
+                    "stID": r["stID"],
+                    "entity_assemID": r["entity_assemID"],
+                    "entityID": r["entityID"],
+                    "seq": r["seq"] or "",
+                    "len": len(r["seq"] or ""),
+                    "n_bb_pos": r["bbshift_positions_post"] or 0,
+                    "n_bb_types": r["bbshift_types_post"] or 0,
+                    "total_bbshifts": r["total_bbshifts"] or 0,
+                    "max_potenci_off": max(offs_pot) if offs_pot else 0.0,
+                    "max_lacs_off": max(offs_lac) if offs_lac else 0.0,
+                    "entity_name": r.get("entity_name") or "",
+                    "ionic_strength": r.get("ionic_strength"),
+                    "pH": r.get("pH"),
+                    "temperature": r.get("temperature"),
+                }
+            )
     df = pd.DataFrame(rows)
     df["tier"] = tier
     df["tier_rank"] = TIER_RANK[tier]
@@ -168,16 +129,36 @@ def compute_quality(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    OUT.mkdir(parents=True, exist_ok=True)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/docs/260520/data)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
+    args = ap.parse_args()
+    paths = resolve_paths(args.work_dir, args.root)
+    out = paths.final_dataset
 
-    comp = build_composition_cache()
+    out.mkdir(parents=True, exist_ok=True)
+
+    comp = build_composition_cache(paths.pkl_dir)
     print(f"Composition cache built: {len(comp)} entries")
 
     comp_df = pd.DataFrame(
-        [{"entryID": eid, **(c if "is_bound" in c else {"is_bound": True})} for eid, c in comp.items()]
+        [
+            {"entryID": eid, **(c if "is_bound" in c else {"is_bound": True})}
+            for eid, c in comp.items()
+        ]
     )
-    comp_df.to_csv(OUT / "_composition_cache.csv", index=False)
-    print(f"Wrote {OUT / '_composition_cache.csv'} (n={len(comp_df)})")
+    comp_df.to_csv(out / "_composition_cache.csv", index=False)
+    print(f"Wrote {out / '_composition_cache.csv'} (n={len(comp_df)})")
 
     n_bound_global = int(comp_df["is_bound"].sum())
     n_total_global = len(comp_df)
@@ -195,7 +176,7 @@ def main():
     all_rows = []
     raw_counts = {}
     for tier in TIERS:
-        df_t = load_tier_scores(tier)
+        df_t = load_tier_scores(tier, paths.release)
         raw_counts[tier] = len(df_t)
         all_rows.append(df_t)
     all_df = pd.concat(all_rows, ignore_index=True)
@@ -204,7 +185,7 @@ def main():
     all_df = compute_quality(all_df)
 
     universal_keep = (all_df["len"] >= MIN_SEQ_LEN) & (~all_df["is_bound"])
-    n_dropped_short_global = int(((all_df["len"] < MIN_SEQ_LEN)).sum())
+    n_dropped_short_global = int((all_df["len"] < MIN_SEQ_LEN).sum())
     n_dropped_bound_global = int(
         ((all_df["len"] >= MIN_SEQ_LEN) & all_df["is_bound"]).sum()
     )
@@ -219,15 +200,12 @@ def main():
     # Per-sequence representative: the highest-quality ID across all
     # tiers carries the canonical name used in every per-tier FASTA so
     # that mmseqs clusterupdate sees a consistent identifier set.
-    kept_all = kept_all.sort_values(
-        ["seq", "quality_score"], ascending=[True, False]
-    )
+    kept_all = kept_all.sort_values(["seq", "quality_score"], ascending=[True, False])
     kept_all["seq_rank_global"] = kept_all.groupby("seq").cumcount() + 1
     kept_all["is_global_seq_repr"] = kept_all["seq_rank_global"] == 1
-    global_repr = (
-        kept_all.loc[kept_all["is_global_seq_repr"], ["seq", "ID", "tier"]]
-        .rename(columns={"ID": "global_repr_ID", "tier": "global_repr_tier"})
-    )
+    global_repr = kept_all.loc[
+        kept_all["is_global_seq_repr"], ["seq", "ID", "tier"]
+    ].rename(columns={"ID": "global_repr_ID", "tier": "global_repr_tier"})
     kept_all = kept_all.merge(global_repr, on="seq", how="left")
 
     overall_summary = {
@@ -256,13 +234,11 @@ def main():
             ).sum()
         )
 
-        df_t = df_t.sort_values(
-            ["seq", "quality_score"], ascending=[True, False]
-        )
+        df_t = df_t.sort_values(["seq", "quality_score"], ascending=[True, False])
         df_t["seq_rank_tier"] = df_t.groupby("seq").cumcount() + 1
         df_t["is_seq_repr_tier"] = df_t["seq_rank_tier"] == 1
 
-        tier_dir = OUT / tier
+        tier_dir = out / tier
         tier_dir.mkdir(parents=True, exist_ok=True)
 
         keep_cols = [
@@ -275,8 +251,10 @@ def main():
             "is_bound", "has_non_polymer", "has_nucleic",
             "multi_protein_assembly", "n_entities", "entity_name",
             "ionic_strength", "pH", "temperature", "seq",
-        ]
-        df_t[keep_cols].to_csv(tier_dir / f"{tier}_all_ranked.tsv", sep="\t", index=False)
+        ]  # fmt: skip
+        df_t[keep_cols].to_csv(
+            tier_dir / f"{tier}_all_ranked.tsv", sep="\t", index=False
+        )
 
         # FASTA: one record per sequence.  Header = global_repr_ID
         # (stable across tiers) but the row carrying it is the
@@ -321,9 +299,9 @@ def main():
             f"  wrote {fasta_path.name} and {tier}_all_ranked.tsv"
         )
 
-    with open(OUT / "final_dataset_summary.json", "w") as fh:
+    with open(out / "final_dataset_summary.json", "w") as fh:
         json.dump(overall_summary, fh, indent=2)
-    print(f"\nWrote {OUT / 'final_dataset_summary.json'}")
+    print(f"\nWrote {out / 'final_dataset_summary.json'}")
 
 
 if __name__ == "__main__":

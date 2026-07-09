@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Override mmseqs cluster representatives with the best quality member.
 
-After ``run_mmseqs_pipeline.py`` finishes, mmseqs assigns the cluster
+After ``trizod.dataset.redundancy`` finishes, mmseqs assigns the cluster
 representative based on its internal similarity-graph reasoning.  The
 clusterupdate ordering already biases the choice towards strict-tier
 entries (as the original TriZOD report does), but within a tier the
@@ -12,7 +12,7 @@ This script reads:
                                           (cluster_repr, member).
   * ``final_dataset/<tier>/<tier>_all_ranked.tsv`` — per-entry quality
                                           scores written by
-                                          build_final_dataset.py.
+                                          ``trizod.dataset.build``.
 
 …and writes for every tier:
   * ``train_<tier>_clu_best.tsv``      — same as input plus columns:
@@ -24,51 +24,78 @@ This script reads:
   * ``cluster_repr_overrides_<tier>.tsv`` — only the clusters where the
         score-best representative differs from mmseqs' pick (useful for
         understanding what changed).
+
+Usage
+-----
+    uv run python -m trizod.dataset.representatives [--work-dir DIR] [--root DIR]
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[3]
-MMSEQS = ROOT / "docs" / "260520" / "data" / "mmseqs"
-FINAL = ROOT / "docs" / "260520" / "data" / "final_dataset"
+from trizod.dataset.paths import resolve_paths
+
 TIERS = ["strict", "moderate", "tolerant", "unfiltered"]
 
 
-def load_ranked(tier: str) -> pd.DataFrame:
-    p = FINAL / tier / f"{tier}_all_ranked.tsv"
+def load_ranked(tier: str, final: Path) -> pd.DataFrame:
+    p = final / tier / f"{tier}_all_ranked.tsv"
     return pd.read_csv(p, sep="\t")
 
 
-def load_clusters(tier: str) -> pd.DataFrame:
-    p = MMSEQS / f"train_{tier}_clu.tsv"
+def load_clusters(tier: str, mmseqs: Path) -> pd.DataFrame:
+    p = mmseqs / f"train_{tier}_clu.tsv"
     return pd.read_csv(p, sep="\t", header=None, names=["cluster_repr", "member"])
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/docs/260520/data)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
+    args = ap.parse_args()
+    paths = resolve_paths(args.work_dir, args.root)
+    mmseqs = paths.mmseqs
+    final = paths.final_dataset
+
     for tier in TIERS:
         print(f"=== {tier} ===")
-        clu = load_clusters(tier)
-        ranked = load_ranked(tier)
+        clu = load_clusters(tier, mmseqs)
+        ranked = load_ranked(tier, final)
 
         # We keyed FASTAs by global_repr_ID; mmseqs uses that as both
         # cluster_repr and member labels.  Map to the row's quality
         # score via global_repr_ID.
         quality = (
             ranked.loc[ranked["is_seq_repr_tier"]]
-            .drop_duplicates(subset=["global_repr_ID"], keep="first")
-            [["global_repr_ID", "ID", "tier", "quality_score", "seq",
-              "n_bb_pos", "n_bb_types", "max_potenci_off", "max_lacs_off"]]
-            .rename(columns={
-                "global_repr_ID": "member",
-                "ID": "member_ID",
-                "tier": "member_tier",
-                "quality_score": "member_quality",
-            })
-        )
+            .drop_duplicates(subset=["global_repr_ID"], keep="first")[
+                [
+                    "global_repr_ID", "ID", "tier", "quality_score", "seq",
+                    "n_bb_pos", "n_bb_types", "max_potenci_off", "max_lacs_off",
+                ]
+            ]
+            .rename(
+                columns={
+                    "global_repr_ID": "member",
+                    "ID": "member_ID",
+                    "tier": "member_tier",
+                    "quality_score": "member_quality",
+                }
+            )
+        )  # fmt: skip
 
         merged = clu.merge(quality, on="member", how="left")
         if merged["member_quality"].isna().any():
@@ -92,7 +119,8 @@ def main():
         # quality_diff only meaningful on the mmseqs cluster_repr row
         mmseqs_repr_rows = merged[merged["member"] == merged["cluster_repr"]].copy()
         mmseqs_repr_rows["overrides_to"] = mmseqs_repr_rows.apply(
-            lambda r: None if r["member"] == r["best_repr"] else r["best_repr"], axis=1,
+            lambda r: None if r["member"] == r["best_repr"] else r["best_repr"],
+            axis=1,
         )
 
         # Save augmented clusters
@@ -101,15 +129,15 @@ def main():
             "member_quality", "best_repr_quality", "quality_diff_vs_mmseqs",
             "member_tier", "member_ID", "n_bb_pos", "n_bb_types",
             "max_potenci_off", "max_lacs_off",
-        ]
+        ]  # fmt: skip
         merged[merged_cols].to_csv(
-            MMSEQS / f"train_{tier}_clu_best.tsv", sep="\t", index=False
+            mmseqs / f"train_{tier}_clu_best.tsv", sep="\t", index=False
         )
 
         # Save best-representative FASTA
         # Build a lookup member -> sequence (one of the rows in `quality`)
         seq_by_member = quality.set_index("member")["seq"].to_dict()
-        out_fa = MMSEQS / f"train_{tier}_best.fasta"
+        out_fa = mmseqs / f"train_{tier}_best.fasta"
         with out_fa.open("w") as fh:
             for cluster_repr, row in best.set_index("cluster_repr").iterrows():
                 m = row["member"]
@@ -124,17 +152,21 @@ def main():
 
         # Save overrides (cases where best != mmseqs)
         overrides = mmseqs_repr_rows[mmseqs_repr_rows["overrides_to"].notna()][
-            ["cluster_repr", "best_repr", "member_quality",
-             "best_repr_quality", "quality_diff_vs_mmseqs", "member_tier"]
-        ].rename(columns={
-            "cluster_repr": "mmseqs_repr",
-            "best_repr": "score_best_repr",
-            "member_quality": "mmseqs_repr_quality",
-            "best_repr_quality": "score_best_quality",
-            "member_tier": "mmseqs_repr_tier",
-        })
+            [
+                "cluster_repr", "best_repr", "member_quality",
+                "best_repr_quality", "quality_diff_vs_mmseqs", "member_tier",
+            ]
+        ].rename(
+            columns={
+                "cluster_repr": "mmseqs_repr",
+                "best_repr": "score_best_repr",
+                "member_quality": "mmseqs_repr_quality",
+                "best_repr_quality": "score_best_quality",
+                "member_tier": "mmseqs_repr_tier",
+            }
+        )  # fmt: skip
         overrides.to_csv(
-            MMSEQS / f"cluster_repr_overrides_{tier}.tsv", sep="\t", index=False
+            mmseqs / f"cluster_repr_overrides_{tier}.tsv", sep="\t", index=False
         )
         n_clu = best["cluster_repr"].nunique()
         n_overrides = len(overrides)
@@ -144,7 +176,9 @@ def main():
             f"({(n_overrides / n_clu):.1%})"
         )
         if n_overrides:
-            top = overrides.sort_values("quality_diff_vs_mmseqs", ascending=False).head(3)
+            top = overrides.sort_values("quality_diff_vs_mmseqs", ascending=False).head(
+                3
+            )
             print("  top quality_diff overrides:")
             for _, r in top.iterrows():
                 print(

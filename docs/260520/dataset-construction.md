@@ -6,7 +6,7 @@ A single end-to-end reference for how the TriZOD disorder dataset
 visualises this pipeline; its caption text lives in
 [`figure-caption.md`](figure-caption.md).
 
-Reproduce everything with `docs/260520/scripts/run_all.sh`.
+Reproduce everything with `scripts/build_dataset.sh`.
 
 ## 0. Inputs
 
@@ -124,7 +124,7 @@ held-out set) with no train/test leakage — the basis for the UdonPred benchmar
 ## Scripts (run order)
 
 ```bash
-docs/260520/scripts/run_all.sh         # the whole release end to end
+scripts/build_dataset.sh         # the whole release end to end
 # = build_final_dataset → build_test_set → run_mmseqs_pipeline
 #   → cluster_best_repr → package_release
 ```

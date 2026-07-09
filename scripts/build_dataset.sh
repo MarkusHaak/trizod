@@ -6,20 +6,25 @@
 #                Produces data/release/<tier>/scores.json. SKIPPED if those
 #                already exist (pass --rescore to force).
 #   1. build   — bound/multi-molecule removal + length<20 drop + exact-seq dedup
-#                (docs/260520/data/final_dataset/<tier>/<tier>.fasta)
-#   2. mmseqs  — two-stage test-set leakage removal (stage-1 cluster-membership
+#                (trizod.dataset.build -> <work-dir>/final_dataset/<tier>/<tier>.fasta)
+#   2. testset — recreate the seeded TriZOD test set (trizod.dataset.testset)
+#   3. mmseqs  — two-stage test-set leakage removal (stage-1 cluster-membership
 #                + stage-2 easy-search) then cluster @50/80 + clusterupdate
-#   3. best    — quality-best cluster-representative override
-#   4. package — stage the release bundle + MANIFEST + leakage gate
+#                (trizod.dataset.redundancy)
+#   4. best    — quality-best cluster-representative override
+#                (trizod.dataset.representatives)
+#   5. package — stage the release bundle + MANIFEST + leakage gate
+#                (trizod.dataset.package_release)
 #
 # Usage:
-#   docs/260520/scripts/run_all.sh [VERSION] [--rescore]
+#   scripts/build_dataset.sh [VERSION] [--rescore]
 #   VERSION defaults to 2026-06.
 #
-# Requirements: uv, mmseqs in PATH. Run from the repository root.
+# Requirements: uv, mmseqs in PATH. Run from anywhere (paths auto-resolve to the
+# repo root; artefacts land under docs/260520/data by default).
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="2026-06"
@@ -32,7 +37,6 @@ for arg in "$@"; do
   esac
 done
 
-SCRIPTS="docs/260520/scripts"
 TIERS=(unfiltered tolerant moderate strict)
 
 command -v uv     >/dev/null || { echo "uv not found in PATH" >&2; exit 1; }
@@ -60,20 +64,20 @@ else
   echo "== Step 0: scoring SKIPPED (data/release/<tier>/scores.json present; --rescore to force) =="
 fi
 
-# ---- Steps 1-4: deterministic, re-runnable ----
-echo "== Step 1: build_final_dataset (bound removal + dedup) =="
-uv run python "$SCRIPTS/build_final_dataset.py"
+# ---- Steps 1-5: deterministic, re-runnable ----
+echo "== Step 1: build (bound removal + dedup) =="
+uv run python -m trizod.dataset.build
 
-echo "== Step 2: build_test_set (recreate TriZOD test set, seeded) =="
-uv run python "$SCRIPTS/build_test_set.py"
+echo "== Step 2: testset (recreate TriZOD test set, seeded) =="
+uv run python -m trizod.dataset.testset
 
-echo "== Step 3: run_mmseqs_pipeline (two-stage leakage removal + clustering) =="
-uv run python "$SCRIPTS/run_mmseqs_pipeline.py"
+echo "== Step 3: redundancy (two-stage leakage removal + clustering) =="
+uv run python -m trizod.dataset.redundancy
 
-echo "== Step 4: cluster_best_repr (quality-best override) =="
-uv run python "$SCRIPTS/cluster_best_repr.py"
+echo "== Step 4: representatives (quality-best override) =="
+uv run python -m trizod.dataset.representatives
 
 echo "== Step 5: package_release --version $VERSION (with leakage gate) =="
-uv run python "$SCRIPTS/package_release.py" --version "$VERSION"
+uv run python -m trizod.dataset.package_release --version "$VERSION"
 
 echo "== Done. Bundle: docs/260520/data/release_bundle/trizod-dataset-$VERSION =="

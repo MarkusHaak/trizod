@@ -83,7 +83,7 @@ corresponding score records by `ID`.
 
 The TriZOD test set is reconstructed from the current snapshot by
 `build_test_set.py` (seeded). Reproduce the whole release with
-`docs/260520/scripts/run_all.sh` (chains `build_final_dataset` →
+`scripts/build_dataset.sh` (chains `trizod.dataset.build` →
 `build_test_set` → `run_mmseqs_pipeline` → `cluster_best_repr` →
 `package_release`).
 

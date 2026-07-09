@@ -67,13 +67,13 @@ docs/260520/
 
 ```bash
 # 1. (one-off, ~5 min)   build the deduplicated per-tier FASTAs
-uv run python docs/260520/scripts/build_final_dataset.py
+uv run python -m trizod.dataset.build
 
 # 2. (~30 s) run the mmseqs redundancy-reduction recipe from the paper
-uv run python docs/260520/scripts/run_mmseqs_pipeline.py
+uv run python -m trizod.dataset.redundancy
 
 # 3. (~1 s)  attach quality-score-based "best member" annotation
-uv run python docs/260520/scripts/cluster_best_repr.py
+uv run python -m trizod.dataset.representatives
 
 # Plots
 uv run python docs/260520/scripts/plot_lacs_effect.py

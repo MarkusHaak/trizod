@@ -15,131 +15,98 @@ original 2024 draw was unseeded and could not be regenerated):
 
 CheZOD117 (the external published benchmark) is NOT rebuilt here — only the
 in-distribution TriZOD test set is. The result is written to
-docs/260520/data/testset/ and consumed by run_mmseqs_pipeline.py as the
+``<work-dir>/testset/`` and consumed by ``trizod.dataset.redundancy`` as the
 TriZOD-test leakage target.
 
-Outputs (docs/260520/data/testset/):
+Outputs (``<work-dir>/testset/``):
   TriZOD_test_set.fasta      one record per 50/80 representative
   TriZOD_test_set_clu.tsv    50/80 cluster membership (representative, member)
   build_test_set_summary.json
+
+Usage
+-----
+    uv run python -m trizod.dataset.testset [--work-dir DIR] [--root DIR]
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import random
 import shutil
-import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-STRICT = ROOT / "docs" / "260520" / "data" / "final_dataset" / "strict" / "strict.fasta"
-CHEZOD117 = ROOT / "data" / "2024-05-09" / "CheZOD117_test_set.fasta"
-CHEZOD1325_TXT = ROOT / "data" / "chezod" / "protein_nmr_1325" / "allseqs1325.txt"
-OUT = ROOT / "docs" / "260520" / "data" / "testset"
-TMP = OUT / "_tmp"
+from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
+from trizod.dataset.paths import resolve_paths
+from trizod.io.fasta import read_fasta, write_fasta
 
 SEED = 42
 SAMPLE_FRACTION = 0.25
 CHEZOD_PREFIX = "CHEZOD__"
 
-COMMON = [
-    "--alignment-mode",
-    "3",
-    "--cov-mode",
-    "0",
-    "-s",
-    "7.5",
-    "--comp-bias-corr",
-    "0",
-    "--mask",
-    "0",
-]
 
-
-def run(cmd: list[str], log: Path, append: bool = False) -> None:
-    print("  $", " ".join(str(c) for c in cmd))
-    mode = "ab" if append else "wb"
-    with open(log, mode) as h:
-        subprocess.run(cmd, check=True, stdout=h, stderr=subprocess.STDOUT)
-
-
-def read_fasta(path: Path) -> dict[str, str]:
-    recs: dict[str, str] = {}
-    cur: str | None = None
-    buf: list[str] = []
-    for line in path.open():
-        if line.startswith(">"):
-            if cur is not None:
-                recs[cur] = "".join(buf)
-            cur = line[1:].split()[0]
-            buf = []
-        else:
-            buf.append(line.strip())
-    if cur is not None:
-        recs[cur] = "".join(buf)
-    return recs
-
-
-def chezod1325_records() -> dict[str, str]:
+def chezod1325_records(path: Path) -> dict[str, str]:
     """Parse allseqs1325.txt ('<BMRB_ID> <sequence>' per line) into id->seq."""
     recs: dict[str, str] = {}
-    for line in CHEZOD1325_TXT.open():
+    for line in path.open():
         parts = line.split()
         if len(parts) >= 2:
             recs[parts[0]] = parts[1]
     return recs
 
 
-def write_fasta(recs: dict[str, str], path: Path, prefix: str = "") -> None:
-    with path.open("w") as fh:
-        for rid, seq in recs.items():
-            fh.write(f">{prefix}{rid}\n{seq}\n")
-
-
-def cluster_tsv_groups(tsv: Path) -> dict[str, list[str]]:
-    groups: dict[str, list[str]] = {}
-    with tsv.open() as f:
-        for line in f:
-            if line.strip():
-                rep, mem = line.rstrip("\n").split("\t")[:2]
-                groups.setdefault(rep, []).append(mem)
-    return groups
-
-
 def main() -> None:
-    if TMP.exists():
-        shutil.rmtree(TMP)
-    OUT.mkdir(parents=True, exist_ok=True)
-    TMP.mkdir(parents=True, exist_ok=True)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/docs/260520/data)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
+    args = ap.parse_args()
+    paths = resolve_paths(args.work_dir, args.root)
+    strict_fasta = paths.final_dataset / "strict" / "strict.fasta"
+    out = paths.testset
+    tmp = out / "_tmp"
 
-    strict = read_fasta(STRICT)
-    chezod = read_fasta(CHEZOD117)
-    chezod.update(chezod1325_records())
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    out.mkdir(parents=True, exist_ok=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+
+    strict = read_fasta(strict_fasta)
+    chezod = read_fasta(paths.chezod117)
+    chezod.update(chezod1325_records(paths.chezod1325_txt))
     print(f"strict unique seqs: {len(strict)}; CheZOD seqs (117+1325): {len(chezod)}")
 
     # ---- Step 1: cluster strict + CheZOD @30/80 ----
-    step1_in = TMP / "strict_plus_chezod.fasta"
+    step1_in = tmp / "strict_plus_chezod.fasta"
     with step1_in.open("w") as fh:
         for rid, seq in strict.items():
             fh.write(f">{rid}\n{seq}\n")
         for rid, seq in chezod.items():
             fh.write(f">{CHEZOD_PREFIX}{rid}\n{seq}\n")
-    pref1 = TMP / "c30"
+    pref1 = tmp / "c30"
     run(
         [
             "mmseqs",
             "easy-cluster",
             str(step1_in),
             str(pref1),
-            str(TMP / "w30"),
+            str(tmp / "w30"),
             "--min-seq-id",
             "0.3",
             "-c",
             "0.8",
             *COMMON,
         ],
-        OUT / "build_test_set.log",
+        out / "build_test_set.log",
     )
     groups30 = cluster_tsv_groups(Path(str(pref1) + "_cluster.tsv"))
 
@@ -170,32 +137,32 @@ def main() -> None:
     )
 
     # ---- Step 4: recluster sampled members @50/80 -> test reps ----
-    step4_in = TMP / "sampled_members.fasta"
+    step4_in = tmp / "sampled_members.fasta"
     write_fasta({m: strict[m] for m in sampled_members}, step4_in)
-    pref2 = TMP / "c50"
+    pref2 = tmp / "c50"
     run(
         [
             "mmseqs",
             "easy-cluster",
             str(step4_in),
             str(pref2),
-            str(TMP / "w50"),
+            str(tmp / "w50"),
             "--min-seq-id",
             "0.5",
             "-c",
             "0.8",
             *COMMON,
         ],
-        OUT / "build_test_set.log",
+        out / "build_test_set.log",
         append=True,
     )
     rep_fasta = Path(str(pref2) + "_rep_seq.fasta")
     clu_tsv = Path(str(pref2) + "_cluster.tsv")
 
     test_recs = read_fasta(rep_fasta)
-    out_fasta = OUT / "TriZOD_test_set.fasta"
+    out_fasta = out / "TriZOD_test_set.fasta"
     write_fasta(test_recs, out_fasta)
-    shutil.copy2(clu_tsv, OUT / "TriZOD_test_set_clu.tsv")
+    shutil.copy2(clu_tsv, out / "TriZOD_test_set_clu.tsv")
 
     n_members = sum(1 for ln in clu_tsv.open() if ln.strip())
     summary = {
@@ -211,13 +178,13 @@ def main() -> None:
         "test_set_size": len(test_recs),
         "test_set_clu_members": n_members,
     }
-    (OUT / "build_test_set_summary.json").write_text(json.dumps(summary, indent=2))
+    (out / "build_test_set_summary.json").write_text(json.dumps(summary, indent=2))
 
     print(
         f"\nTriZOD test set: {len(test_recs)} representatives "
         f"({n_members} members) -> {out_fasta}"
     )
-    print(f"Summary: {OUT / 'build_test_set_summary.json'}")
+    print(f"Summary: {out / 'build_test_set_summary.json'}")
 
 
 if __name__ == "__main__":

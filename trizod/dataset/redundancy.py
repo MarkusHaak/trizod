@@ -27,47 +27,28 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      order, so the most-stringent member becomes the cluster
      representative for every cluster.
 
-Outputs go to docs/260520/data/mmseqs/.
+Outputs go to ``<work-dir>/mmseqs/``.
+
+Usage
+-----
+    uv run python -m trizod.dataset.redundancy [--work-dir DIR] [--root DIR]
 """
 
 from __future__ import annotations
 
+import argparse
 import shutil
-import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-FINAL = ROOT / "docs" / "260520" / "data" / "final_dataset"
-OUT = ROOT / "docs" / "260520" / "data" / "mmseqs"
-TMP = OUT / "_tmp"
+from trizod.dataset.mmseqs import COMMON, run
+from trizod.dataset.paths import resolve_paths
+from trizod.io.fasta import count_fasta, fasta_ids
 
-# CheZOD117 is the fixed external benchmark; the TriZOD test set is rebuilt
-# from the current snapshot by build_test_set.py (run it first).
-CHEZOD = ROOT / "data" / "2024-05-09" / "CheZOD117_test_set.fasta"
-TRIZOD_TEST = ROOT / "docs" / "260520" / "data" / "testset" / "TriZOD_test_set.fasta"
 TIERS = ["strict", "moderate", "tolerant", "unfiltered"]
-
-# Default mmseqs option block from the report.
-COMMON = [
-    "--alignment-mode",
-    "3",
-    "--cov-mode",
-    "0",
-    "-s",
-    "7.5",
-    "--comp-bias-corr",
-    "0",
-    "--mask",
-    "0",
-]
 
 # Header prefix used to tag test sequences when they are co-clustered with the
 # training superset in stage-1, so they never collide with a training header.
 TEST_PREFIX = "TESTSET__"
-
-
-def count_fasta(fa: Path) -> int:
-    return sum(1 for ln in open(fa) if ln.startswith(">"))
 
 
 def count_unique_first_column(tsv: Path) -> int:
@@ -77,17 +58,6 @@ def count_unique_first_column(tsv: Path) -> int:
             if line.strip():
                 seen.add(line.split("\t", 1)[0])
     return len(seen)
-
-
-def run(cmd: list[str], log: Path, append: bool = False) -> None:
-    print("  $", " ".join(str(c) for c in cmd))
-    mode = "ab" if append else "wb"
-    with open(log, mode) as h:
-        subprocess.run(cmd, check=True, stdout=h, stderr=subprocess.STDOUT)
-
-
-def fasta_ids(fa: Path) -> list[str]:
-    return [ln[1:].split()[0] for ln in open(fa) if ln.startswith(">")]
 
 
 def filter_fasta_by_ids(fa_in: Path, remove_ids: set[str], fa_out: Path) -> int:
@@ -133,7 +103,7 @@ def build_combined_testset(sources: list[Path], out: Path) -> dict[str, str]:
 
 
 def stage1_cluster_member_removal(
-    super_fa: Path, combined_test: Path, tmp: Path, log: Path
+    super_fa: Path, combined_test: Path, tmp: Path, out: Path, log: Path
 ) -> set[str]:
     """Stage-1 "remove all cluster members".
 
@@ -144,7 +114,7 @@ def stage1_cluster_member_removal(
     and so a cluster's test-contact is detectable from the membership alone.
     """
     test_ids = set(fasta_ids(combined_test))
-    stage1_in = OUT / "stage1_cluster_input.fasta"
+    stage1_in = out / "stage1_cluster_input.fasta"
     with open(stage1_in, "w") as o:
         for line in open(super_fa):  # training superset, own headers
             o.write(line)
@@ -194,26 +164,47 @@ def stage1_cluster_member_removal(
 
 
 def main():
-    OUT.mkdir(parents=True, exist_ok=True)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/docs/260520/data)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
+    args = ap.parse_args()
+    paths = resolve_paths(args.work_dir, args.root)
+    final = paths.final_dataset
+    out = paths.mmseqs
+    tmp = out / "_tmp"
+    chezod = paths.chezod117
+    trizod_test = paths.testset / "TriZOD_test_set.fasta"
+
+    out.mkdir(parents=True, exist_ok=True)
     # mmseqs refuses to overwrite existing DB outputs, so start from a clean
     # scratch dir on every run (makes the script idempotent / re-runnable).
-    if TMP.exists():
-        shutil.rmtree(TMP)
-    TMP.mkdir(parents=True, exist_ok=True)
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True, exist_ok=True)
 
     if not shutil.which("mmseqs"):
         raise SystemExit("mmseqs binary not found in PATH")
 
     print("Inputs:")
-    print(f"  CheZOD117:    {CHEZOD}  ({count_fasta(CHEZOD)} sequences)")
-    print(f"  TriZOD test:  {TRIZOD_TEST}  ({count_fasta(TRIZOD_TEST)} sequences)")
+    print(f"  CheZOD117:    {chezod}  ({count_fasta(chezod)} sequences)")
+    print(f"  TriZOD test:  {trizod_test}  ({count_fasta(trizod_test)} sequences)")
     for tier in TIERS:
-        fa = FINAL / tier / f"{tier}.fasta"
+        fa = final / tier / f"{tier}.fasta"
         print(f"  {tier:>10}: {fa}  ({count_fasta(fa)} sequences)")
     print()
 
-    combined = OUT / "combined_testset.fasta"
-    test_map = build_combined_testset([CHEZOD, TRIZOD_TEST], combined)
+    combined = out / "combined_testset.fasta"
+    test_map = build_combined_testset([chezod, trizod_test], combined)
     print(f"Combined test set: {combined} ({len(test_map)} sequences)\n")
 
     # ---- Step A0: stage-1 cluster-membership removal (vs test sets) ----
@@ -221,18 +212,18 @@ def main():
     # ID leaked here is leaked in every (nested) tier, so we apply the same
     # set to all tiers below.
     print("=== Step A0: stage-1 'remove all cluster members' @ 30/80 ===")
-    unfiltered_fa = FINAL / "unfiltered" / "unfiltered.fasta"
+    unfiltered_fa = final / "unfiltered" / "unfiltered.fasta"
     leaked = stage1_cluster_member_removal(
-        unfiltered_fa, combined, TMP, OUT / "stage1_cluster.log"
+        unfiltered_fa, combined, tmp, out, out / "stage1_cluster.log"
     )
     print()
 
     # ---------------- Step A: stage-2 easy-search vs test sets ----------
     for tier in TIERS:
-        fa = FINAL / tier / f"{tier}.fasta"
-        hits = OUT / f"{tier}_testset_hits.tsv"
-        out_fa = OUT / f"{tier}_no_testset.fasta"
-        log = OUT / f"{tier}_easy_search.log"
+        fa = final / tier / f"{tier}.fasta"
+        hits = out / f"{tier}_testset_hits.tsv"
+        out_fa = out / f"{tier}_no_testset.fasta"
+        log = out / f"{tier}_easy_search.log"
 
         print(f"=== Step A ({tier}): stage-2 easy-search vs test sets ===")
         run(
@@ -242,7 +233,7 @@ def main():
                 str(fa),
                 str(combined),
                 str(hits),
-                str(TMP),
+                str(tmp),
                 "--min-seq-id",
                 "0.3",
                 "-c",
@@ -268,10 +259,10 @@ def main():
 
     # ---------------- Step B: cluster strict @ 50/80 ----------------
     print("=== Step B: cluster strict residual @ 50% / 80% ===")
-    strict_fa = OUT / "strict_no_testset.fasta"
-    strict_db = TMP / "strict_db"
-    strict_clu = TMP / "strict_clu"
-    log = OUT / "strict_cluster.log"
+    strict_fa = out / "strict_no_testset.fasta"
+    strict_db = tmp / "strict_db"
+    strict_clu = tmp / "strict_clu"
+    log = out / "strict_cluster.log"
     run(["mmseqs", "createdb", str(strict_fa), str(strict_db)], log)
     run(
         [
@@ -279,7 +270,7 @@ def main():
             "cluster",
             str(strict_db),
             str(strict_clu),
-            str(TMP / "strict_clu_workdir"),
+            str(tmp / "strict_clu_workdir"),
             "--min-seq-id",
             "0.5",
             "-c",
@@ -296,7 +287,7 @@ def main():
             str(strict_db),
             str(strict_db),
             str(strict_clu),
-            str(OUT / "train_strict_clu.tsv"),
+            str(out / "train_strict_clu.tsv"),
         ],
         log,
         append=True,
@@ -307,7 +298,7 @@ def main():
             "result2repseq",
             str(strict_db),
             str(strict_clu),
-            str(TMP / "strict_repseq"),
+            str(tmp / "strict_repseq"),
         ],
         log,
         append=True,
@@ -318,27 +309,27 @@ def main():
             "result2flat",
             str(strict_db),
             str(strict_db),
-            str(TMP / "strict_repseq"),
-            str(OUT / "train_strict.fasta"),
+            str(tmp / "strict_repseq"),
+            str(out / "train_strict.fasta"),
             "--use-fasta-header",
         ],
         log,
         append=True,
     )
-    print(f"  clusters: {count_unique_first_column(OUT / 'train_strict_clu.tsv')}")
-    print(f"  reps:     {count_fasta(OUT / 'train_strict.fasta')}\n")
+    print(f"  clusters: {count_unique_first_column(out / 'train_strict_clu.tsv')}")
+    print(f"  reps:     {count_fasta(out / 'train_strict.fasta')}\n")
 
     # ---------------- Step C: clusterupdate ----------------
     prev_db = strict_db
     prev_clu = strict_clu
     for tier in ("moderate", "tolerant", "unfiltered"):
         print(f"=== Step C ({tier}): mmseqs clusterupdate @ 50% / 80% ===")
-        fa = OUT / f"{tier}_no_testset.fasta"
-        new_db = TMP / f"{tier}_db"
-        new_clu = TMP / f"{tier}_clu"
-        merged_db = TMP / f"{tier}_newdb"
-        workdir = TMP / f"{tier}_workdir"
-        log = OUT / f"{tier}_clusterupdate.log"
+        fa = out / f"{tier}_no_testset.fasta"
+        new_db = tmp / f"{tier}_db"
+        new_clu = tmp / f"{tier}_clu"
+        merged_db = tmp / f"{tier}_newdb"
+        workdir = tmp / f"{tier}_workdir"
+        log = out / f"{tier}_clusterupdate.log"
 
         run(["mmseqs", "createdb", str(fa), str(new_db)], log)
         run(
@@ -367,7 +358,7 @@ def main():
                 str(merged_db),
                 str(merged_db),
                 str(new_clu),
-                str(OUT / f"train_{tier}_clu.tsv"),
+                str(out / f"train_{tier}_clu.tsv"),
             ],
             log,
             append=True,
@@ -378,7 +369,7 @@ def main():
                 "result2repseq",
                 str(merged_db),
                 str(new_clu),
-                str(TMP / f"{tier}_repseq"),
+                str(tmp / f"{tier}_repseq"),
             ],
             log,
             append=True,
@@ -389,15 +380,15 @@ def main():
                 "result2flat",
                 str(merged_db),
                 str(merged_db),
-                str(TMP / f"{tier}_repseq"),
-                str(OUT / f"train_{tier}.fasta"),
+                str(tmp / f"{tier}_repseq"),
+                str(out / f"train_{tier}.fasta"),
                 "--use-fasta-header",
             ],
             log,
             append=True,
         )
-        print(f"  clusters: {count_unique_first_column(OUT / f'train_{tier}_clu.tsv')}")
-        print(f"  reps:     {count_fasta(OUT / f'train_{tier}.fasta')}\n")
+        print(f"  clusters: {count_unique_first_column(out / f'train_{tier}_clu.tsv')}")
+        print(f"  reps:     {count_fasta(out / f'train_{tier}.fasta')}\n")
         prev_db = merged_db
         prev_clu = new_clu
 
@@ -405,10 +396,10 @@ def main():
     print("=== Pipeline complete ===")
     print(f"{'tier':<12}{'input':>8}{'after_test':>12}{'clusters':>10}{'reps':>8}")
     for tier in TIERS:
-        in_fa = FINAL / tier / f"{tier}.fasta"
-        nt = OUT / f"{tier}_no_testset.fasta"
-        ct = OUT / f"train_{tier}_clu.tsv"
-        rt = OUT / f"train_{tier}.fasta"
+        in_fa = final / tier / f"{tier}.fasta"
+        nt = out / f"{tier}_no_testset.fasta"
+        ct = out / f"train_{tier}_clu.tsv"
+        rt = out / f"train_{tier}.fasta"
         print(
             f"{tier:<12}"
             f"{count_fasta(in_fa):>8}"
@@ -416,7 +407,7 @@ def main():
             f"{count_unique_first_column(ct):>10}"
             f"{count_fasta(rt):>8}"
         )
-    print(f"\nAll artefacts under {OUT}")
+    print(f"\nAll artefacts under {out}")
 
 
 if __name__ == "__main__":

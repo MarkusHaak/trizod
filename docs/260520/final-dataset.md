@@ -110,7 +110,7 @@ Useful filters:
 ## Reproducing
 
 ```bash
-uv run python docs/260520/scripts/build_final_dataset.py
+uv run python -m trizod.dataset.build
 ```
 
 Outputs go to `docs/260520/data/final_dataset/{<tier>,_composition_cache.csv,final_dataset_summary.json}`.
