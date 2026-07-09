@@ -22,9 +22,9 @@ Membership / split (defaults):
 
 * ``SET=train`` -- the canonical quality-best, redundancy-reduced, CheZOD/
   TriZOD-test-leakage-free **tolerant** training set
-  (``docs/260520/data/mmseqs/train_tolerant_best.fasta``, 5,684 seqs).
+  (``<work-dir>/mmseqs/train_tolerant_best.fasta``, 5,684 seqs).
 * ``SET=test``  -- the seeded **TriZOD test set**
-  (``docs/260520/data/testset/TriZOD_test_set.fasta``, 344 seqs).
+  (``<work-dir>/testset/TriZOD_test_set.fasta``, 344 seqs).
 * ``SET=val``   -- optional. With ``--val-fraction F`` (e.g. 0.15), a uniform
   random subset of the training records (seeded by ``--seed``, default 42) is
   relabelled ``SET=val``; the rest stay ``SET=train``. The val set is carved
@@ -43,8 +43,8 @@ G-scores lie in [0, 1]; it aborts otherwise.
 
 Usage
 -----
-    uv run python docs/260623/scripts/build_deploy_fasta.py
-        [--tier tolerant] [--out PATH]
+    uv run python -m trizod.dataset.deploy_fasta
+        [--tier tolerant] [--out PATH] [--work-dir DIR] [--root DIR]
         [--train-fasta PATH] [--test-fasta PATH] [--scores PATH]
 """
 
@@ -55,21 +55,10 @@ import json
 import random
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
-MMSEQS = ROOT / "docs" / "260520" / "data" / "mmseqs"
-TESTSET = ROOT / "docs" / "260520" / "data" / "testset"
-RELEASE = ROOT / "data" / "release"
+from trizod.dataset.paths import resolve_paths
+from trizod.io.fasta import fasta_ids
 
 SENTINEL = "999.0"  # masked / no-score per-residue value (matches reference)
-
-
-def read_fasta_ids(path: Path) -> list[str]:
-    """Return record IDs (first whitespace-delimited token of each header)."""
-    ids: list[str] = []
-    for line in path.open():
-        if line.startswith(">"):
-            ids.append(line[1:].split()[0])
-    return ids
 
 
 def load_scores(path: Path) -> dict[str, dict]:
@@ -115,17 +104,25 @@ def main() -> None:
         help="release tier whose scores.json supplies the G-score labels",
     )
     ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/docs/260520/data)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
+    ap.add_argument(
         "--train-fasta",
         type=Path,
         default=None,
         help="training FASTA whose headers list the train IDs "
-        "(default: train_<tier>_best.fasta)",
+        "(default: <work-dir>/mmseqs/train_<tier>_best.fasta)",
     )
-    ap.add_argument(
-        "--test-fasta",
-        type=Path,
-        default=TESTSET / "TriZOD_test_set.fasta",
-    )
+    ap.add_argument("--test-fasta", type=Path, default=None)
     ap.add_argument("--scores", type=Path, default=None)
     ap.add_argument(
         "--val-fraction",
@@ -140,11 +137,7 @@ def main() -> None:
         default=42,
         help="RNG seed for the train->val draw (reproducible)",
     )
-    ap.add_argument(
-        "--out",
-        type=Path,
-        default=ROOT / "docs" / "260623" / "data" / "deploy" / "disorder_trizod.fasta",
-    )
+    ap.add_argument("--out", type=Path, default=None)
     ap.add_argument(
         "--min-valid",
         type=int,
@@ -153,18 +146,21 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    train_fasta = args.train_fasta or (MMSEQS / f"train_{args.tier}_best.fasta")
-    scores_path = args.scores or (RELEASE / args.tier / "scores.json")
+    paths = resolve_paths(args.work_dir, args.root)
+    train_fasta = args.train_fasta or (paths.mmseqs / f"train_{args.tier}_best.fasta")
+    test_fasta = args.test_fasta or (paths.testset / "TriZOD_test_set.fasta")
+    scores_path = args.scores or (paths.release / args.tier / "scores.json")
+    out = args.out or paths.deploy_out
 
-    for p in (train_fasta, args.test_fasta, scores_path):
+    for p in (train_fasta, test_fasta, scores_path):
         if not p.exists():
             raise SystemExit(f"missing required input: {p}")
 
     if not 0.0 <= args.val_fraction < 1.0:
         raise SystemExit(f"--val-fraction must be in [0, 1): {args.val_fraction}")
 
-    train_ids = read_fasta_ids(train_fasta)
-    test_ids = read_fasta_ids(args.test_fasta)
+    train_ids = fasta_ids(train_fasta)
+    test_ids = fasta_ids(test_fasta)
 
     # split disjointness (a record cannot be both train and test)
     overlap = set(train_ids) & set(test_ids)
@@ -230,15 +226,15 @@ def main() -> None:
             f"{len(out_of_range)} G-scores outside [0,1], e.g. {out_of_range[:5]}"
         )
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text("\n".join(lines) + "\n")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n")
 
     summary = {
         "tier": args.tier,
-        "train_fasta": str(train_fasta.relative_to(ROOT)),
-        "test_fasta": str(args.test_fasta.relative_to(ROOT)),
-        "scores": str(scores_path.relative_to(ROOT)),
-        "out": str(args.out),
+        "train_fasta": str(train_fasta.relative_to(paths.root)),
+        "test_fasta": str(test_fasta.relative_to(paths.root)),
+        "scores": str(scores_path.relative_to(paths.root)),
+        "out": str(out),
         "val_fraction": args.val_fraction,
         "seed": args.seed if n_val > 0 else None,
         "n_train": n_by_set["train"],
@@ -251,9 +247,9 @@ def main() -> None:
         "records_below_min_valid": len(few_valid),
         "min_valid_threshold": args.min_valid,
     }
-    args.out.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2))
+    out.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2))
 
-    print(f"Wrote {summary['n_total']} records -> {args.out}")
+    print(f"Wrote {summary['n_total']} records -> {out}")
     print(f"  train (SET=train): {summary['n_train']}")
     if n_val > 0:
         print(
@@ -270,7 +266,7 @@ def main() -> None:
             f"  NOTE: {len(few_valid)} records have < {args.min_valid} scored "
             f"residues, e.g. {few_valid[:5]}"
         )
-    print(f"  summary -> {args.out.with_suffix('.summary.json')}")
+    print(f"  summary -> {out.with_suffix('.summary.json')}")
 
 
 if __name__ == "__main__":

@@ -8,14 +8,16 @@ disorder predictor.
 
 ## Script
 
-`scripts/build_deploy_fasta.py` — self-validating builder.
+`trizod.dataset.deploy_fasta` — self-validating builder (promoted from
+`docs/260623/scripts/build_deploy_fasta.py` into the package in restructure
+Phase 5).
 
 ```bash
 # train + test (tolerant tier, default)
-uv run python docs/260623/scripts/build_deploy_fasta.py
+uv run python -m trizod.dataset.deploy_fasta
 
 # train + val + test (15% of train randomly held out as val, seeded)
-uv run python docs/260623/scripts/build_deploy_fasta.py \
+uv run python -m trizod.dataset.deploy_fasta \
     --val-fraction 0.15 \
     --out docs/260623/data/deploy/disorder_trizod_with_val.fasta
 ```
