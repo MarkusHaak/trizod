@@ -66,8 +66,23 @@ def main():
     }
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "reproduce_summary.json").write_text(json.dumps(summary, indent=2))
+    # A faithful reproduction can legitimately yield zero genuine discrepancies,
+    # so fall back to the known field schema rather than indexing po_genuine[0].
+    genuine_fields = (
+        list(po_genuine[0].keys())
+        if po_genuine
+        else [
+            "bmrb_id",
+            "pearson",
+            "mae",
+            "mean_shift_tz_minus_cz",
+            "max_potenci_off",
+            "seq_match",
+            "n",
+        ]
+    )
     with (OUT / "reproduce_genuine.csv").open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(po_genuine[0].keys()))
+        w = csv.DictWriter(f, fieldnames=genuine_fields)
         w.writeheader()
         w.writerows(po_genuine)
 

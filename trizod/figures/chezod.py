@@ -143,6 +143,19 @@ def summarize(chezod, trizod, label):
                 }
             )
     maes = np.array(maes)
+    if maes.size == 0:
+        # No CheZOD entry matched a TriZOD record with >=5 comparable residues
+        # (empty / mismatched scores.json): return a zeroed summary instead of
+        # dividing by len(maes) == 0 or calling np.percentile on an empty array.
+        return {
+            "label": label,
+            "n": 0,
+            "categories": cats,
+            "mae_median": None,
+            "mae_q3": None,
+            "mae_p95": None,
+            "consistent_frac": None,
+        }, []
     return {
         "label": label,
         "n": int(len(maes)),

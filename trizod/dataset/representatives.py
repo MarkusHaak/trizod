@@ -173,7 +173,7 @@ def main(argv=None):
         print(
             f"  clusters: {n_clu}, "
             f"overrides (best != mmseqs pick): {n_overrides} "
-            f"({(n_overrides / n_clu):.1%})"
+            f"({(n_overrides / n_clu if n_clu else 0):.1%})"
         )
         if n_overrides:
             top = overrides.sort_values("quality_diff_vs_mmseqs", ascending=False).head(

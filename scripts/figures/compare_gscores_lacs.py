@@ -29,6 +29,7 @@ import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS
+from trizod.figures.style import TIERS, classify_tier, load_tier_sets
 from trizod.lacs import compute_lacs_offsets
 from trizod.scoring.scoring import (
     compare_to_predicted,
@@ -47,14 +48,6 @@ logger = logging.getLogger(__name__)
 # Column indices in bbshifts_arr matching BACKBONE_ATOMS
 _LACS_ATOMS = ["C", "CA", "CB", "HA", "H", "N"]  # skip HB (index 6)
 _ATOM_COL = {atom: i for i, atom in enumerate(BACKBONE_ATOMS)}
-
-_TIER_ORDER = ["strict", "moderate", "tolerant", "unfiltered"]
-_TIER_COLORS = {
-    "strict": "#2ca02c",
-    "moderate": "#1f77b4",
-    "tolerant": "#ff7f0e",
-    "unfiltered": "#d62728",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -173,41 +166,6 @@ def get_potenci(seq, temperature, pH, ion, cache_dir):
 
 
 # ---------------------------------------------------------------------------
-# Tier classification from pipeline output
-# ---------------------------------------------------------------------------
-
-
-def load_tier_sets(baseline_dir):
-    """Load entry ID sets per tier from data/baseline/ NDJSON files.
-
-    Returns dict mapping tier name → set of entry IDs (str).
-    Tiers are nested: strict ⊂ moderate ⊂ tolerant ⊂ unfiltered.
-    """
-    import json
-
-    tier_sets = {}
-    for tier in _TIER_ORDER:
-        json_path = baseline_dir / f"{tier}.json"
-        if json_path.exists():
-            ids = set()
-            with open(json_path) as f:
-                for line in f:
-                    ids.add(json.loads(line)["entryID"])
-            tier_sets[tier] = ids
-        else:
-            tier_sets[tier] = set()
-    return tier_sets
-
-
-def classify_tier(entry_id, tier_sets):
-    """Classify entry into the most stringent tier it belongs to."""
-    for tier in _TIER_ORDER:
-        if entry_id in tier_sets.get(tier, set()):
-            return tier
-    return "unfiltered"
-
-
-# ---------------------------------------------------------------------------
 # Entry processing
 # ---------------------------------------------------------------------------
 
@@ -299,7 +257,7 @@ def make_gscore_plot(df, output_path):
     # Left: boxplot of G-score difference per tier
     box_data = []
     box_labels = []
-    for tier in _TIER_ORDER:
+    for tier in TIERS:
         subset = df.loc[df["tier"] == tier, "diff"]
         if len(subset) == 0:
             continue
@@ -534,7 +492,7 @@ def main():
     tier_sets = load_tier_sets(args.baseline_dir)
     df["tier"] = df["entry_id"].apply(lambda eid: classify_tier(eid, tier_sets))
 
-    for tier in _TIER_ORDER:
+    for tier in TIERS:
         n = (df["tier"] == tier).sum()
         n_entries = df.loc[df["tier"] == tier, "entry_id"].nunique()
         print(f"  {tier}: {n:,} residues from {n_entries} entries")

@@ -229,11 +229,19 @@ def main(argv=None) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n")
 
+    def _rel(p: Path) -> str:
+        # Repo-relative for readability, but fall back to the absolute path when
+        # p is outside the repo (e.g. --work-dir elsewhere) so building the
+        # summary never raises ValueError after the FASTA is already written.
+        return (
+            str(p.relative_to(paths.root)) if p.is_relative_to(paths.root) else str(p)
+        )
+
     summary = {
         "tier": args.tier,
-        "train_fasta": str(train_fasta.relative_to(paths.root)),
-        "test_fasta": str(test_fasta.relative_to(paths.root)),
-        "scores": str(scores_path.relative_to(paths.root)),
+        "train_fasta": _rel(train_fasta),
+        "test_fasta": _rel(test_fasta),
+        "scores": _rel(scores_path),
         "out": str(out),
         "val_fraction": args.val_fraction,
         "seed": args.seed if n_val > 0 else None,
