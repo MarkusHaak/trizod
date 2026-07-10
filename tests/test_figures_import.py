@@ -4,8 +4,12 @@ Guards against import-time breakage (bad relocations, broken imports) in the
 manuscript figure generators, which otherwise have no test coverage because
 they need large gitignored inputs (release scores, comparison pickle) to run.
 Importing is cheap and catches the most common regression from the Phase 6
-figure consolidation.
+figure consolidation. matplotlib is an optional (``[figures]``) dependency, so
+the plotting generators are guarded with ``importorskip`` — the lightweight
+``style``/``chezod`` helpers are always exercised.
 """
+
+import pytest
 
 
 def test_style_helpers_import():
@@ -35,6 +39,7 @@ def test_style_helpers_import():
 
 
 def test_fig2_lacs_generators_import():
+    pytest.importorskip("matplotlib")  # figures extra; skip if not installed
     from trizod.figures.fig2_lacs import plot_lacs_effect
     from trizod.figures.fig2_lacs_case_study import build_case_study_figure
 
