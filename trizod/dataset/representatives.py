@@ -102,9 +102,12 @@ def main(argv=None):
             n_miss = int(merged["member_quality"].isna().sum())
             print(f"  WARNING: {n_miss} cluster members not in ranked table")
 
-        # Pick best member per cluster
+        # Pick best member per cluster. `member` is a deterministic final
+        # tiebreak so equal-quality members resolve reproducibly (pandas' sort
+        # is not stable) instead of by chance.
         merged = merged.sort_values(
-            ["cluster_repr", "member_quality"], ascending=[True, False]
+            ["cluster_repr", "member_quality", "member"],
+            ascending=[True, False, True],
         )
         best = merged.drop_duplicates(subset=["cluster_repr"], keep="first")
         rename = best.set_index("cluster_repr")["member"].to_dict()

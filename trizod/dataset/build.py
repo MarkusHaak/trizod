@@ -201,7 +201,11 @@ def main(argv=None):
     # Per-sequence representative: the highest-quality ID across all
     # tiers carries the canonical name used in every per-tier FASTA so
     # that mmseqs clusterupdate sees a consistent identifier set.
-    kept_all = kept_all.sort_values(["seq", "quality_score"], ascending=[True, False])
+    # ID is a deterministic final tiebreak so ties on quality_score resolve
+    # reproducibly (pandas' sort is not stable) rather than by chance.
+    kept_all = kept_all.sort_values(
+        ["seq", "quality_score", "ID"], ascending=[True, False, True]
+    )
     kept_all["seq_rank_global"] = kept_all.groupby("seq").cumcount() + 1
     kept_all["is_global_seq_repr"] = kept_all["seq_rank_global"] == 1
     global_repr = kept_all.loc[
@@ -235,7 +239,9 @@ def main(argv=None):
             ).sum()
         )
 
-        df_t = df_t.sort_values(["seq", "quality_score"], ascending=[True, False])
+        df_t = df_t.sort_values(
+            ["seq", "quality_score", "ID"], ascending=[True, False, True]
+        )
         df_t["seq_rank_tier"] = df_t.groupby("seq").cumcount() + 1
         df_t["is_seq_repr_tier"] = df_t["seq_rank_tier"] == 1
 
