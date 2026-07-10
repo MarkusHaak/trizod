@@ -128,7 +128,7 @@ def compute_quality(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--work-dir",
@@ -142,7 +142,7 @@ def main():
         default=None,
         help="repository root (default: auto-detected)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     paths = resolve_paths(args.work_dir, args.root)
     out = paths.final_dataset
 

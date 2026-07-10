@@ -52,7 +52,7 @@ def load_clusters(tier: str, mmseqs: Path) -> pd.DataFrame:
     return pd.read_csv(p, sep="\t", header=None, names=["cluster_repr", "member"])
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--work-dir",
@@ -66,7 +66,7 @@ def main():
         default=None,
         help="repository root (default: auto-detected)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     paths = resolve_paths(args.work_dir, args.root)
     mmseqs = paths.mmseqs
     final = paths.final_dataset

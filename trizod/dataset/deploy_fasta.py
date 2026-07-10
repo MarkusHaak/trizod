@@ -96,7 +96,7 @@ def format_target(gscores: list) -> tuple[str, str]:
     return ";".join(target_vals), "".join(mask_chars)
 
 
-def main() -> None:
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--tier",
@@ -144,7 +144,7 @@ def main() -> None:
         default=3,
         help="warn about records with fewer than this many scored residues",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     paths = resolve_paths(args.work_dir, args.root)
     train_fasta = args.train_fasta or (paths.mmseqs / f"train_{args.tier}_best.fasta")

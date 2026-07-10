@@ -55,7 +55,7 @@ def chezod1325_records(path: Path) -> dict[str, str]:
     return recs
 
 
-def main() -> None:
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--work-dir",
@@ -69,7 +69,7 @@ def main() -> None:
         default=None,
         help="repository root (default: auto-detected)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     paths = resolve_paths(args.work_dir, args.root)
     strict_fasta = paths.final_dataset / "strict" / "strict.fasta"
     out = paths.testset

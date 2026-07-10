@@ -107,7 +107,7 @@ def record_entry(rel: str, abs_path: Path) -> dict:
     return {rel: entry}
 
 
-def main() -> None:
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--version", default=DEFAULT_VERSION)
     ap.add_argument(
@@ -128,7 +128,7 @@ def main() -> None:
         default=None,
         help="repository root (default: auto-detected)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     paths = resolve_paths(args.work_dir, args.root)
     out = args.out or paths.release_bundle

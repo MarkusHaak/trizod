@@ -66,18 +66,18 @@ fi
 
 # ---- Steps 1-5: deterministic, re-runnable ----
 echo "== Step 1: build (bound removal + dedup) =="
-uv run python -m trizod.dataset.build
+uv run trizod dataset build
 
-echo "== Step 2: testset (recreate TriZOD test set, seeded) =="
-uv run python -m trizod.dataset.testset
+echo "== Step 2: test-set (recreate TriZOD test set, seeded) =="
+uv run trizod dataset test-set
 
 echo "== Step 3: redundancy (two-stage leakage removal + clustering) =="
-uv run python -m trizod.dataset.redundancy
+uv run trizod dataset redundancy
 
 echo "== Step 4: representatives (quality-best override) =="
-uv run python -m trizod.dataset.representatives
+uv run trizod dataset representatives
 
-echo "== Step 5: package_release --version $VERSION (with leakage gate) =="
-uv run python -m trizod.dataset.package_release --version "$VERSION"
+echo "== Step 5: package --version $VERSION (with leakage gate) =="
+uv run trizod dataset package --version "$VERSION"
 
 echo "== Done. Bundle: docs/260520/data/release_bundle/trizod-dataset-$VERSION =="

@@ -53,8 +53,9 @@ class ScoreType(str, Enum):
     gscores = "gscores"
 
 
-@app.command()
+@app.callback(invoke_without_command=True)
 def score(
+    ctx: typer.Context,
     input_dir: str = typer.Option(
         ".",
         "--input-dir",
@@ -225,7 +226,13 @@ def score(
     ),
     debug: bool = typer.Option(False, "--debug", help="Enable debug logging."),
 ):
-    """Score BMRB entries for per-residue disorder (Z-scores / G-scores)."""
+    """Score BMRB entries for per-residue disorder (Z-scores / G-scores).
+
+    Runs when trizod is invoked with no subcommand (bare ``trizod <flags>``);
+    ``trizod dataset ...`` subcommands are handled separately.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
     tier = filter_defaults.loc[filter_defaults_tier.value]
 
     def resolve(value, key):
@@ -332,3 +339,106 @@ def _validate_and_prepare_paths(args):
     if args.emit_str is not None:
         args.emit_str = Path(args.emit_str).resolve()
         args.emit_str.mkdir(parents=True, exist_ok=True)
+
+
+# --------------------------------------------------------------------------- #
+# `trizod dataset ...` — the dataset-build chain. Thin wrappers that forward to
+# the argparse `main(argv)` of each trizod.dataset module, so every option stays
+# defined in exactly one place (the module).
+# --------------------------------------------------------------------------- #
+
+dataset_app = typer.Typer(
+    rich_markup_mode=None,
+    help="Build the redundancy-reduced, leakage-free TriZOD dataset.",
+)
+app.add_typer(dataset_app, name="dataset")
+
+
+def _wd_argv(work_dir, root):
+    argv = []
+    if work_dir is not None:
+        argv += ["--work-dir", work_dir]
+    if root is not None:
+        argv += ["--root", root]
+    return argv
+
+
+@dataset_app.command("build")
+def _dataset_build(
+    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
+    root: Optional[str] = typer.Option(None, "--root"),
+):
+    """Bound-removal + exact-seq dedup + quality ranking (-> final_dataset/)."""
+    from trizod.dataset import build
+
+    build.main(_wd_argv(work_dir, root))
+
+
+@dataset_app.command("test-set")
+def _dataset_testset(
+    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
+    root: Optional[str] = typer.Option(None, "--root"),
+):
+    """Recreate the seeded, CheZOD-free TriZOD test set (-> testset/)."""
+    from trizod.dataset import testset
+
+    testset.main(_wd_argv(work_dir, root))
+
+
+@dataset_app.command("redundancy")
+def _dataset_redundancy(
+    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
+    root: Optional[str] = typer.Option(None, "--root"),
+):
+    """Two-stage test-set leakage removal + mmseqs clustering (-> mmseqs/)."""
+    from trizod.dataset import redundancy
+
+    redundancy.main(_wd_argv(work_dir, root))
+
+
+@dataset_app.command("representatives")
+def _dataset_representatives(
+    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
+    root: Optional[str] = typer.Option(None, "--root"),
+):
+    """Override mmseqs cluster reps with the quality-best cluster member."""
+    from trizod.dataset import representatives
+
+    representatives.main(_wd_argv(work_dir, root))
+
+
+@dataset_app.command("package")
+def _dataset_package(
+    version: str = typer.Option("2026-05", "--version"),
+    include_str: bool = typer.Option(False, "--include-str"),
+    out: Optional[str] = typer.Option(None, "--out"),
+    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
+    root: Optional[str] = typer.Option(None, "--root"),
+):
+    """Assemble the Zenodo release bundle + MANIFEST + leakage gate."""
+    from trizod.dataset import package_release
+
+    argv = ["--version", version]
+    if include_str:
+        argv += ["--include-str"]
+    if out is not None:
+        argv += ["--out", out]
+    package_release.main(argv + _wd_argv(work_dir, root))
+
+
+@dataset_app.command("deploy")
+def _dataset_deploy(
+    tier: str = typer.Option("tolerant", "--tier"),
+    val_fraction: float = typer.Option(0.0, "--val-fraction"),
+    seed: int = typer.Option(42, "--seed"),
+    out: Optional[str] = typer.Option(None, "--out"),
+    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
+    root: Optional[str] = typer.Option(None, "--root"),
+):
+    """Build the UdonPred-handoff deployment FASTA (per-residue G-score labels)."""
+    from trizod.dataset import deploy_fasta
+
+    argv = ["--tier", tier, "--val-fraction", str(val_fraction), "--seed", str(seed)]
+    if out is not None:
+        argv += ["--out", out]
+    deploy_fasta.main(argv + _wd_argv(work_dir, root))
