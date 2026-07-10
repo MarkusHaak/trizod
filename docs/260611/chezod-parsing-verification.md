@@ -32,9 +32,9 @@ Tamiola σ), and 271 entries reproduce bit-exact. So `potenci-only` reproduces t
 
 Scripts:
 ```
-uv run python docs/260611/scripts/verify_chezod_parsing.py        # coverage
+uv run python scripts/validation/verify_chezod_parsing.py         # coverage
 uv run python docs/260611/scripts/investigate_chezod_mismatches.py # terminal trimming
-uv run python docs/260611/scripts/reproduce_chezod.py             # CheZOD reproduction (potenci-only)
+uv run python scripts/validation/reproduce_chezod.py              # CheZOD reproduction (potenci-only)
 ```
 Regenerate the potenci-only scores (LACS recorded but NOT applied) per the header
 of `reproduce_chezod.py`.

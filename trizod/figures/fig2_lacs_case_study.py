@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reid #2 - alpha-synuclein + top-3 G-score flippers case study.
+"""Manuscript Figure 2 case-study panel: alpha-synuclein + top G-score flippers.
 
 Produces a 4-panel figure showing per-residue G-score before vs after
 re-referencing for:
@@ -8,18 +8,13 @@ re-referencing for:
   Panel B/C/D: the three entries (excluding 17665) with the largest mean
            |delta-G| across the dataset, in the tolerant tier.
 
-Note on --max-scan: defaults to 200 to keep wall-clock under ~5 min for
-the talk's headline figure. Scaling to the full tolerant tier (~1800
-entries) is cleaner but takes ~20-40 min and isn't required to make the
-"this isn't cherry-picked" point.
+Public API: :func:`build_case_study_figure`. Run as a script (``python -m
+trizod.figures.fig2_lacs_case_study``) to regenerate standalone.
 
-Usage:
-    uv run python scripts/case_study_gscore_flips.py \
-        --baseline-tolerant data/baseline/tolerant.json \
-        --bmrb-cache tmp/bmrb_entries \
-        --potenci-cache tmp \
-        --output docs/260505/figures/gscore_flips.png \
-        --max-scan 200
+Note on --max-scan: defaults to 200 to keep wall-clock under ~5 min for
+the headline figure. Scaling to the full tolerant tier (~1800 entries) is
+cleaner but takes ~20-40 min and isn't required to make the
+"this isn't cherry-picked" point.
 """
 
 import argparse
@@ -32,16 +27,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import trizod.bmrb.bmrb as bmrb  # noqa: E402
-import trizod.potenci.potenci as potenci  # noqa: E402
-from trizod.scoring.scoring import (  # noqa: E402
+import trizod.bmrb.bmrb as bmrb
+import trizod.potenci.potenci as potenci
+from trizod.cache import load_potenci_cache, save_potenci_cache
+from trizod.scoring.scoring import (
     compute_gscores,
     convert_to_triplet_data,
     get_offset_corrected_shifts,
 )
-from trizod.trizod import load_potenci_cache, save_potenci_cache  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger("case_study")
@@ -68,9 +61,7 @@ def score_entry(entry, cache_dir, mode):
         predshiftdct = load_potenci_cache(cache_dir, seq, temp, pH, ion)
         if predshiftdct is None:
             try:
-                predshiftdct = potenci.get_pred_shifts(
-                    seq, temp, pH, ion, pH != 7.0
-                )
+                predshiftdct = potenci.get_pred_shifts(seq, temp, pH, ion, pH != 7.0)
             except Exception:
                 return None, None
             save_potenci_cache(cache_dir, seq, temp, pH, ion, predshiftdct)
@@ -157,12 +148,12 @@ def render(panels, out_path):
             ax.set_axis_off()
             continue
         for tr in traces:
-            kwargs = dict(
-                color=tr.get("color", "#1f77b4"),
-                lw=tr.get("lw", 1.3),
-                alpha=tr.get("alpha", 0.9),
-                label=tr["label"],
-            )
+            kwargs = {
+                "color": tr.get("color", "#1f77b4"),
+                "lw": tr.get("lw", 1.3),
+                "alpha": tr.get("alpha", 0.9),
+                "label": tr["label"],
+            }
             if "dashes" in tr:
                 kwargs["dashes"] = tr["dashes"]
             else:
@@ -194,11 +185,11 @@ def render(panels, out_path):
 # diagnostic trace coincides with the scaffolding, the markers + bold color
 # punch through unambiguously.
 _MODE_STYLE = {
-    "none":         dict(color="#9e9e9e", ls="-",        lw=5.5, alpha=0.30),
-    "both":         dict(color="#ff5252", ls="-",        lw=5.5, alpha=0.30),
-    "lacs":         dict(color="#1565c0", dashes=(5, 2), lw=1.8, alpha=1.0),
-    "potenci-only": dict(color="#2e7d32", dashes=(1, 2), lw=1.8, alpha=1.0),
-    "truth":        dict(color="#000000", ls=":",        lw=1.6, alpha=1.0),
+    "none": {"color": "#9e9e9e", "ls": "-", "lw": 5.5, "alpha": 0.30},
+    "both": {"color": "#ff5252", "ls": "-", "lw": 5.5, "alpha": 0.30},
+    "lacs": {"color": "#1565c0", "dashes": (5, 2), "lw": 1.8, "alpha": 1.0},
+    "potenci-only": {"color": "#2e7d32", "dashes": (1, 2), "lw": 1.8, "alpha": 1.0},
+    "truth": {"color": "#000000", "ls": ":", "lw": 1.6, "alpha": 1.0},
 }
 
 
@@ -213,36 +204,33 @@ def name_for(entry):
     return "?"
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument(
-        "--baseline-tolerant", type=Path, default=Path("data/baseline/tolerant.json")
-    )
-    parser.add_argument("--bmrb-cache", type=Path, default=Path("tmp/bmrb_entries"))
-    parser.add_argument("--potenci-cache", type=Path, default=Path("tmp"))
-    parser.add_argument(
-        "--output", type=Path, default=Path("docs/260505/figures/gscore_flips.png")
-    )
-    parser.add_argument(
-        "--max-scan",
-        type=int,
-        default=200,
-        help="Scan only the first N tolerant-tier entries when ranking flippers (0 = scan all)",
-    )
-    args = parser.parse_args()
+def build_case_study_figure(
+    output,
+    baseline_tolerant=Path("data/baseline/tolerant.json"),
+    bmrb_cache=Path("tmp/bmrb_entries"),
+    potenci_cache=Path("tmp"),
+    max_scan=200,
+):
+    """Build the alpha-synuclein + top-flipper case-study figure at `output`.
+
+    Parameters mirror the CLI flags; `max_scan` bounds the flipper ranking
+    scan (0 = scan the full tolerant tier).
+    """
+    output = Path(output)
+    baseline_tolerant = Path(baseline_tolerant)
+    bmrb_cache = Path(bmrb_cache)
+    potenci_cache = Path(potenci_cache)
 
     # Ensure POTENCI cache subdirectory exists before any save_potenci_cache
     # call (the main pipeline creates it at startup; standalone scripts must
     # create it themselves to avoid FileNotFoundError on first cache miss).
-    (args.potenci_cache / "potenci").mkdir(parents=True, exist_ok=True)
+    (potenci_cache / "potenci").mkdir(parents=True, exist_ok=True)
 
     panels = []
 
     # Panel A: alpha-synuclein 17665 + 6968 ground-truth
-    pkl_17665 = args.bmrb_cache / "17665.pkl"
-    pkl_6968 = args.bmrb_cache / "6968.pkl"
+    pkl_17665 = bmrb_cache / "17665.pkl"
+    pkl_6968 = bmrb_cache / "6968.pkl"
     if not pkl_17665.exists() or not pkl_6968.exists():
         # Re-parse fresh from .str (post-Step8) when pickles are absent
         bmrb_dir = Path("data/bmrb_entries")
@@ -254,11 +242,11 @@ def main():
         with pkl_6968.open("rb") as f:
             entry_6968 = pickle.load(f)
 
-    g_raw, seq_17665 = score_entry(entry_17665, args.potenci_cache, "none")
-    g_lacs, _ = score_entry(entry_17665, args.potenci_cache, "lacs")
-    g_pot, _ = score_entry(entry_17665, args.potenci_cache, "potenci-only")
-    g_both, _ = score_entry(entry_17665, args.potenci_cache, "both")
-    g_truth, seq_6968 = score_entry(entry_6968, args.potenci_cache, "both")
+    g_raw, seq_17665 = score_entry(entry_17665, potenci_cache, "none")
+    g_lacs, _ = score_entry(entry_17665, potenci_cache, "lacs")
+    g_pot, _ = score_entry(entry_17665, potenci_cache, "potenci-only")
+    g_both, _ = score_entry(entry_17665, potenci_cache, "both")
+    g_truth, seq_6968 = score_entry(entry_6968, potenci_cache, "both")
 
     if g_raw is None or g_both is None:
         print("ERROR: could not score 17665", file=sys.stderr)
@@ -281,11 +269,23 @@ def main():
             # visible when they coincide with one of the extremes. Truth
             # last so it sits on top of everything.
             "traces": [
-                {"label": "17665 raw",            "gscores": g_raw,           **_MODE_STYLE["none"]},
-                {"label": "17665 both (default)", "gscores": g_both,          **_MODE_STYLE["both"]},
-                {"label": "17665 LACS only",      "gscores": g_lacs,          **_MODE_STYLE["lacs"]},
-                {"label": "17665 POTENCI only",   "gscores": g_pot,           **_MODE_STYLE["potenci-only"]},
-                {"label": "6968 ground truth",    "gscores": g_truth_aligned, **_MODE_STYLE["truth"]},
+                {"label": "17665 raw", "gscores": g_raw, **_MODE_STYLE["none"]},
+                {
+                    "label": "17665 both (default)",
+                    "gscores": g_both,
+                    **_MODE_STYLE["both"],
+                },
+                {"label": "17665 LACS only", "gscores": g_lacs, **_MODE_STYLE["lacs"]},
+                {
+                    "label": "17665 POTENCI only",
+                    "gscores": g_pot,
+                    **_MODE_STYLE["potenci-only"],
+                },
+                {
+                    "label": "6968 ground truth",
+                    "gscores": g_truth_aligned,
+                    **_MODE_STYLE["truth"],
+                },
             ],
         }
     )
@@ -296,25 +296,25 @@ def main():
     # POTENCI/AIC's AIC gate rejects it (|ΔG_pot|=0.000). Demonstrates the
     # complementary regime — LACS as a safety net for sub-AIC-threshold
     # systematic offsets.
-    if args.baseline_tolerant.exists():
+    if baseline_tolerant.exists():
         top_ids = find_top_flippers(
-            args.baseline_tolerant,
-            args.bmrb_cache,
-            args.potenci_cache,
+            baseline_tolerant,
+            bmrb_cache,
+            potenci_cache,
             exclude_ids={"17665"},
             k=2,
-            max_scan=args.max_scan,
+            max_scan=max_scan,
         )
         top_ids.append("34865")
     else:
         print(
-            f"WARNING: {args.baseline_tolerant} missing - skipping top flippers",
+            f"WARNING: {baseline_tolerant} missing - skipping top flippers",
             file=sys.stderr,
         )
         top_ids = []
 
     for eid in top_ids:
-        pkl = args.bmrb_cache / f"{eid}.pkl"
+        pkl = bmrb_cache / f"{eid}.pkl"
         if pkl.exists():
             with pkl.open("rb") as f:
                 entry = pickle.load(f)
@@ -323,10 +323,10 @@ def main():
                 entry = bmrb.BmrbEntry(eid, Path("data/bmrb_entries") / f"bmr{eid}")
             except Exception:
                 continue
-        g_raw, seq = score_entry(entry, args.potenci_cache, "none")
-        g_lacs_e, _ = score_entry(entry, args.potenci_cache, "lacs")
-        g_pot_e, _ = score_entry(entry, args.potenci_cache, "potenci-only")
-        g_both_e, _ = score_entry(entry, args.potenci_cache, "both")
+        g_raw, seq = score_entry(entry, potenci_cache, "none")
+        g_lacs_e, _ = score_entry(entry, potenci_cache, "lacs")
+        g_pot_e, _ = score_entry(entry, potenci_cache, "potenci-only")
+        g_both_e, _ = score_entry(entry, potenci_cache, "both")
         if g_raw is None or g_both_e is None:
             continue
         residues = np.arange(1, len(seq) + 1)
@@ -338,18 +338,53 @@ def main():
                 # Draw order matches Panel A: solid extremes first, dashed
                 # diagnostics on top so overlapping pairs stay legible.
                 "traces": [
-                    {"label": "raw",          "gscores": g_raw,    **_MODE_STYLE["none"]},
-                    {"label": "both",         "gscores": g_both_e, **_MODE_STYLE["both"]},
-                    {"label": "LACS only",    "gscores": g_lacs_e, **_MODE_STYLE["lacs"]},
-                    {"label": "POTENCI only", "gscores": g_pot_e,  **_MODE_STYLE["potenci-only"]},
+                    {"label": "raw", "gscores": g_raw, **_MODE_STYLE["none"]},
+                    {"label": "both", "gscores": g_both_e, **_MODE_STYLE["both"]},
+                    {"label": "LACS only", "gscores": g_lacs_e, **_MODE_STYLE["lacs"]},
+                    {
+                        "label": "POTENCI only",
+                        "gscores": g_pot_e,
+                        **_MODE_STYLE["potenci-only"],
+                    },
                 ],
             }
         )
 
     while len(panels) < 4:
-        panels.append({"title": "(no flipper)", "residues": np.arange(1, 2), "traces": []})
+        panels.append(
+            {"title": "(no flipper)", "residues": np.arange(1, 2), "traces": []}
+        )
 
-    render(panels, args.output)
+    render(panels, output)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--baseline-tolerant", type=Path, default=Path("data/baseline/tolerant.json")
+    )
+    parser.add_argument("--bmrb-cache", type=Path, default=Path("tmp/bmrb_entries"))
+    parser.add_argument("--potenci-cache", type=Path, default=Path("tmp"))
+    parser.add_argument(
+        "--output", type=Path, default=Path("docs/260505/figures/gscore_flips.png")
+    )
+    parser.add_argument(
+        "--max-scan",
+        type=int,
+        default=200,
+        help="Scan only the first N tolerant-tier entries when ranking flippers (0 = scan all)",
+    )
+    args = parser.parse_args()
+
+    build_case_study_figure(
+        output=args.output,
+        baseline_tolerant=args.baseline_tolerant,
+        bmrb_cache=args.bmrb_cache,
+        potenci_cache=args.potenci_cache,
+        max_scan=args.max_scan,
+    )
 
 
 if __name__ == "__main__":

@@ -1,26 +1,18 @@
-#!/usr/bin/env python3
-"""Reproduce CheZOD1325 Z-scores with TriZOD's CheZOD-equivalent pipeline.
+"""CheZOD1325 reproduction helpers (Fig 3 + leakage target).
 
-KEY POINT: CheZOD never used LACS. TriZOD's `--rereference-mode potenci-only`
-IS the CheZOD-equivalent method (POTENCI random-coil + AIC offset correction +
-CheZOD Z-score, per Nielsen 2016). LACS is a TriZOD-only improvement and must be
-EXCLUDED when reproducing CheZOD. This script compares CheZOD's published
-Z-scores against TriZOD potenci-only (the reproduction) and, for contrast,
-against the LACS "both" release.
+CheZOD never used LACS. TriZOD's ``--rereference-mode potenci-only`` IS the
+CheZOD-equivalent method (POTENCI random-coil + AIC offset correction + CheZOD
+Z-score, per Nielsen 2016); LACS is a TriZOD-only improvement and must be
+EXCLUDED when reproducing CheZOD.
 
-Regenerate the potenci-only scores first (LACS recorded but NOT applied):
-    # subset dir of CheZOD BMRB entries already built at tmp/chezod_subset/
-    uv run python -m trizod.trizod --input-dir tmp/chezod_subset \
-        --filter-defaults unfiltered --rereference-mode potenci-only \
-        --output-prefix docs/260611/data/chezod_verification/trizod_potenci_only \
-        --output-format json --no-progress --processes 8 --cache-dir tmp
-
-Outputs (gitignored): reproduce_summary.json, reproduce_genuine.csv.
+These helpers load CheZOD's published Z-scores and a TriZOD ``scores.json``,
+align them per entry by the best sequence-match offset, and classify the
+agreement. The CLI that drives them into a summary report lives at
+``scripts/validation/reproduce_chezod.py``.
 """
 
 from __future__ import annotations
 
-import csv
 import json
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -28,27 +20,26 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import pearsonr
 
-ROOT = Path(__file__).resolve().parents[3]
-CHEZOD = ROOT / "data" / "chezod" / "protein_nmr_1325"
-PO = (
-    ROOT
-    / "docs"
-    / "260611"
-    / "data"
-    / "chezod_verification"
-    / "trizod_potenci_only.json"
-)
-BOTH = ROOT / "data" / "release" / "unfiltered" / "scores.json"
-OUT = ROOT / "docs" / "260611" / "data" / "chezod_verification"
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
-NA = 999.0
+NA = 999.0  # CheZOD sentinel for terminal / no-data residues
 
 
-def load_chezod():
+def load_chezod(chezod_dir):
+    """Load CheZOD1325 published sequences + Z-scores from ``chezod_dir``.
+
+    Reads ``allseqs1325.txt`` (``<id> <seq>``) line-aligned with
+    ``allscores1325newest.txt`` (comma-separated Z, 999 = NA). Returns
+    ``{entry_id: {"seq": str, "z": [float|None]}}``.
+    """
+    chezod_dir = Path(chezod_dir)
     out = {}
     for sl, scl in zip(
-        [x.rstrip() for x in (CHEZOD / "allseqs1325.txt").open() if x.strip()],
-        [x.rstrip() for x in (CHEZOD / "allscores1325newest.txt").open() if x.strip()],
+        [x.rstrip() for x in (chezod_dir / "allseqs1325.txt").open() if x.strip()],
+        [
+            x.rstrip()
+            for x in (chezod_dir / "allscores1325newest.txt").open()
+            if x.strip()
+        ],
     ):
         p = sl.split(None, 1)
         if len(p) < 2 or not p[0].isdigit():
@@ -61,8 +52,13 @@ def load_chezod():
 
 
 def load_trizod(path):
+    """Load a TriZOD ``scores.json`` (JSONL) keyed by entry ID.
+
+    Returns ``{entry_id: [{"seq", "z", "off"}, ...]}`` where ``off`` is the max
+    absolute per-atom POTENCI offset for the record.
+    """
     by = {}
-    for line in path.open():
+    for line in Path(path).open():
         if not line.strip():
             continue
         r = json.loads(line)
@@ -74,6 +70,7 @@ def load_trizod(path):
 
 
 def best(cz, recs):
+    """Return (record, offset) whose sequence best matches the CheZOD sequence."""
     bn, bo, br = -1, 0, None
     for r in recs:
         i, j, n = max(
@@ -88,6 +85,7 @@ def best(cz, recs):
 
 
 def stats(cz, recs):
+    """Per-entry concordance stats between CheZOD and the best TriZOD record."""
     rec, off = best(cz, recs)
     a, b = [], []
     for k, cv in enumerate(cz["z"]):
@@ -109,6 +107,7 @@ def stats(cz, recs):
 
 
 def classify(p, m):
+    """Bucket an (pearson, mae) pair into agree / offset_shift / low_variance / genuine."""
     if p >= 0.9 and m <= 1.0:
         return "agree"
     if p >= 0.9 and m > 1.0:
@@ -119,6 +118,7 @@ def classify(p, m):
 
 
 def summarize(chezod, trizod, label):
+    """Aggregate per-entry concordance into a summary dict + sorted genuine list."""
     cats, maes, genuine = {}, [], []
     for eid, cz in chezod.items():
         recs = trizod.get(eid)
@@ -160,51 +160,3 @@ def summarize(chezod, trizod, label):
             3,
         ),
     }, sorted(genuine, key=lambda x: -x["mae"])
-
-
-def main():
-    chezod = load_chezod()
-    po = load_trizod(PO)
-    both = load_trizod(BOTH)
-
-    po_sum, po_genuine = summarize(chezod, po, "potenci-only (CheZOD reproduction)")
-    both_sum, _ = summarize(chezod, both, "both (LACS applied — TriZOD dataset)")
-
-    off_driven = sum(
-        1
-        for g in po_genuine
-        if abs(g["mean_shift_tz_minus_cz"]) > 0.8 or g["max_potenci_off"] >= 2.0
-    )
-    summary = {
-        "potenci_only_reproduction": po_sum,
-        "lacs_both_for_contrast": both_sum,
-        "n_genuine_potenci_only": len(po_genuine),
-        "genuine_offset_correction_driven": off_driven,
-        "genuine": po_genuine,
-    }
-    (OUT / "reproduce_summary.json").write_text(json.dumps(summary, indent=2))
-    with (OUT / "reproduce_genuine.csv").open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(po_genuine[0].keys()))
-        w.writeheader()
-        w.writerows(po_genuine)
-
-    print("=== CheZOD reproduction via TriZOD potenci-only (LACS excluded) ===")
-    for k, v in po_sum.items():
-        print(f"  {k}: {v}")
-    print("\n=== Contrast: LACS 'both' mode (the TriZOD dataset) ===")
-    for k in ("n", "categories", "mae_median", "consistent_frac"):
-        print(f"  {k}: {both_sum[k]}")
-    print(
-        f"\nGenuine (potenci-only): {len(po_genuine)}; "
-        f"offset-correction-driven (|mean shift|>0.8 or POTENCI off>=2 ppm): {off_driven}"
-    )
-    for g in po_genuine[:12]:
-        print(
-            f"  bmr{g['bmrb_id']}: r={g['pearson']} mae={g['mae']} "
-            f"shift={g['mean_shift_tz_minus_cz']:+.2f} potenci_off={g['max_potenci_off']}"
-        )
-    print(f"\nWrote {OUT / 'reproduce_summary.json'} and reproduce_genuine.csv")
-
-
-if __name__ == "__main__":
-    main()

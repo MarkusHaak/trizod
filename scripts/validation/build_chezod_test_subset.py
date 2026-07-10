@@ -13,7 +13,7 @@ allscores1325newest.txt}; docs/260611/data/chezod_verification/repro_baseline.js
 (TriZOD potenci-only scores for the CheZOD subset).
 Output (committed): tests/reference/chezod_zscores_subset.json.
 
-Run: uv run python docs/260611/scripts/build_chezod_test_subset.py
+Run: uv run python scripts/validation/build_chezod_test_subset.py
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 CHEZOD = ROOT / "data" / "chezod" / "protein_nmr_1325"
 BASELINE = (
     ROOT / "docs" / "260611" / "data" / "chezod_verification" / "repro_baseline.json"

@@ -5,7 +5,7 @@ Reports the legacy bit-equal verdict (per-residue max|diff| <= atol, the
 assert_allclose(atol=0.1) criterion from the 2023 test_chezod_equality.py) plus
 bit-exact counts and median MAE, after sequence-offset alignment.
 
-Usage: uv run python docs/260611/scripts/chezod_faithful_measure.py <scores.json> [label]
+Usage: uv run python scripts/validation/chezod_faithful_measure.py <scores.json> [label]
 """
 
 from __future__ import annotations
@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 import sys
 from difflib import SequenceMatcher
+from pathlib import Path
 
 import numpy as np
 
-ROOT = "/Users/tsenoner/Documents/projects/trizod-suit/trizod"
+ROOT = str(Path(__file__).resolve().parents[2])
 CHEZOD = f"{ROOT}/data/chezod/protein_nmr_1325"
 NA = 999.0
 

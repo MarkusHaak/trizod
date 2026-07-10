@@ -34,12 +34,9 @@ docs/260520/
 ├── max-offset-analysis.md         max-offset filter empirical study
 ├── final-dataset.md               bound-complex filter & sequence dedup
 ├── mmseqs-pipeline.md             clustering recipe + output stats
-├── scripts/                       all analysis & build scripts
-│   ├── plot_lacs_effect.py
-│   ├── analyze_max_offset.py
-│   ├── build_final_dataset.py
-│   ├── run_mmseqs_pipeline.py
-│   └── cluster_best_repr.py
+│   (scripts promoted into the package — see "Reproducing the work":
+│    dataset build → trizod.dataset.*; figures → trizod.figures.fig2_lacs
+│    + scripts/figures/analyze_max_offset.py)
 ├── figures/                       PNGs referenced by the markdown
 │   ├── lacs_effect_gscores.png
 │   ├── lacs_effect_affected_entries.png
@@ -76,8 +73,8 @@ uv run python -m trizod.dataset.redundancy
 uv run python -m trizod.dataset.representatives
 
 # Plots
-uv run python docs/260520/scripts/plot_lacs_effect.py
-uv run python docs/260520/scripts/analyze_max_offset.py
+uv run python -m trizod.figures.fig2_lacs
+uv run python scripts/figures/analyze_max_offset.py
 ```
 
 Inputs each script consumes are documented at the top of the script.
