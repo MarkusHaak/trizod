@@ -368,7 +368,9 @@ def main():
     parser.add_argument("--bmrb-cache", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument("--potenci-cache", type=Path, default=Path("tmp"))
     parser.add_argument(
-        "--output", type=Path, default=Path("docs/260505/figures/gscore_flips.png")
+        "--output",
+        type=Path,
+        default=Path("docs/archive/260505/figures/gscore_flips.png"),
     )
     parser.add_argument(
         "--max-scan",

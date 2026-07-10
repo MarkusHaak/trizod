@@ -455,12 +455,12 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("docs/260422/gscores_lacs_comparison.png"),
+        default=Path("docs/archive/260422/gscores_lacs_comparison.png"),
     )
     parser.add_argument(
         "--output-violin",
         type=Path,
-        default=Path("docs/260422/lacs_offset_violin.png"),
+        default=Path("docs/archive/260422/lacs_offset_violin.png"),
     )
     parser.add_argument("--max-entries", type=int, default=0)
     args = parser.parse_args()

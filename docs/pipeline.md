@@ -122,6 +122,27 @@ filter were disabled).
 
 This is the core computation, applied per entry via `compute_scores_row()`:
 
+### Re-referencing (`--rereference-mode`)
+
+NMR chemical shifts can carry systematic **referencing errors** (a constant
+per-atom offset from a mis-set spectral reference). TriZOD corrects these before
+scoring; the strategy is chosen with `--rereference-mode`:
+
+- **`none`** — raw shifts, no correction.
+- **`lacs`** — LACS pre-correction only (`trizod/lacs/lacs.py`). LACS detects
+  offsets by regressing observed secondary shifts against the **Wishart (1995)
+  random-coil** reference, independent of POTENCI, and works on structured and
+  disordered residues alike. It is applied to the observed backbone shifts
+  **before** the POTENCI comparison below.
+- **`potenci-only`** — the POTENCI/AIC offset correction of §4c only (this is the
+  CheZOD-equivalent method; see [lacs.md](lacs.md) and the CheZOD reproduction).
+- **`both`** (default) — LACS pre-correction, then the POTENCI/AIC offset
+  correction of §4c on the residual. LACS handles the bulk referencing error;
+  the POTENCI/AIC step mops up residual per-atom biases POTENCI still sees.
+
+See [lacs.md](lacs.md) for the LACS algorithm and its differences from the
+original MATLAB implementation.
+
 ### 4a. POTENCI Random Coil Prediction
 
 `potenci.get_pred_shifts()` predicts what chemical shifts would be expected for a
@@ -152,11 +173,14 @@ deviations, normalising each atom type so they contribute proportionally
 normalisation, N would dominate). The output is still a 2D array, not a single
 value per residue.
 
-### 4c. Offset Correction
+### 4c. POTENCI/AIC Offset Correction
 
 `scoring.get_offset_corrected_shifts()` detects and corrects systematic biases
 between observed and POTENCI-predicted shifts. This addresses referencing
-errors or consistent prediction biases for individual atom types.
+errors or consistent prediction biases for individual atom types. Under the
+default `--rereference-mode both`, it operates on the LACS-precorrected shifts
+and so captures only the residual offset; under `potenci-only` it is the sole
+correction.
 
 The procedure:
 

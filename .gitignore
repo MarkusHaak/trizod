@@ -32,13 +32,18 @@ tools/
 # single-folder convenience but is never tracked by this public repo.
 /publication/
 
-# Internal docs
-docs/_planning/
-docs/260415/
+# Internal docs — archived under docs/archive/ (mostly ignored; only the
+# expert-review record + LACS validation report are tracked). The `dir/*` +
+# `!dir/file` idiom is required: a file cannot be re-included if its parent
+# directory itself is excluded.
+docs/archive/_planning/*
+!docs/archive/_planning/suggested_improvements.md
+docs/archive/260415/*
+!docs/archive/260415/lacs-validation-report.md
 docs/pipeline-overview.md
 
-# Per-pair CSP review (regenerable via scripts/csp_per_pair_grid.py)
-docs/260505/csp_pairs/
+# Per-pair CSP review (regenerable via the binding CSP grid script)
+docs/archive/260505/csp_pairs/
 
 # Generated dataset artefacts (large; regenerable via docs/260520/scripts/, released via Zenodo)
 docs/260520/data/
