@@ -26,9 +26,18 @@ authors:
     given-names: Reid
     affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
 repository-code: "https://github.com/tsenoner/trizod"
+url: "https://doi.org/10.5281/zenodo.21309963"
+doi: 10.5281/zenodo.21309963
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21309963
+    description: "Concept DOI — all versions of the TriZOD dataset on Zenodo"
+  - type: doi
+    value: 10.5281/zenodo.21309964
+    description: "TriZOD dataset v0.2.0"
 license: MIT
-version: "0.2.0-dataset"
-date-released: "2026-05-05"
+version: "0.2.0"
+date-released: "2026-07-11"
 keywords:
   - NMR
   - BMRB
