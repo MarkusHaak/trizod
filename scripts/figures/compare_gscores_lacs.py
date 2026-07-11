@@ -11,26 +11,25 @@ Produces:
 3. Violin: distribution of LACS offsets per atom type
 
 Usage:
-    uv run python scripts/compare_gscores_lacs.py --compute
-    uv run python scripts/compare_gscores_lacs.py --plot-only
-    uv run python scripts/compare_gscores_lacs.py --compute --max-entries 10
+    uv run python scripts/figures/compare_gscores_lacs.py --compute
+    uv run python scripts/figures/compare_gscores_lacs.py --plot-only
+    uv run python scripts/figures/compare_gscores_lacs.py --compute --max-entries 10
 """
 
 import argparse
 import logging
 import pickle
-import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
+from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS
+from trizod.figures.style import TIERS, classify_tier, load_tier_sets
 from trizod.lacs import compute_lacs_offsets
 from trizod.scoring.scoring import (
     compare_to_predicted,
@@ -42,7 +41,6 @@ from trizod.scoring.scoring import (
     convert_to_triplet_data,
     get_outlier_mask,
 )
-from trizod.trizod import load_potenci_cache, save_potenci_cache
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -50,14 +48,6 @@ logger = logging.getLogger(__name__)
 # Column indices in bbshifts_arr matching BACKBONE_ATOMS
 _LACS_ATOMS = ["C", "CA", "CB", "HA", "H", "N"]  # skip HB (index 6)
 _ATOM_COL = {atom: i for i, atom in enumerate(BACKBONE_ATOMS)}
-
-_TIER_ORDER = ["strict", "moderate", "tolerant", "unfiltered"]
-_TIER_COLORS = {
-    "strict": "#2ca02c",
-    "moderate": "#1f77b4",
-    "tolerant": "#ff7f0e",
-    "unfiltered": "#d62728",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +81,11 @@ def score_from_arrays(bbshifts_arr, bbshifts_mask, predshiftdct):
         *convert_to_triplet_data(abs_weighted_diffs_initial, cmp_mask), cmp_mask
     )
     outlier_mask_initial = get_outlier_mask(
-        zscores_triplet_initial, zscores_initial,
-        abs_weighted_diffs_initial, cmp_mask, cdf_threshold=6.0,
+        zscores_triplet_initial,
+        zscores_initial,
+        abs_weighted_diffs_initial,
+        cmp_mask,
+        cdf_threshold=6.0,
     )
     new_offsets_initial = compute_offsets(
         weighted_diffs_initial, cmp_mask & ~outlier_mask_initial, min_AIC=6.0
@@ -114,12 +107,16 @@ def score_from_arrays(bbshifts_arr, bbshifts_mask, predshiftdct):
         mean_zscore_corrected = np.nanmean(zscores_triplet_corrected)
         if mean_zscore_initial >= mean_zscore_corrected:
             outlier_mask_corrected = get_outlier_mask(
-                zscores_triplet_corrected, zscores_corrected,
-                abs_weighted_diffs_corrected, cmp_mask, cdf_threshold=6.0,
+                zscores_triplet_corrected,
+                zscores_corrected,
+                abs_weighted_diffs_corrected,
+                cmp_mask,
+                cdf_threshold=6.0,
             )
             new_offsets_corrected = compute_offsets(
                 weighted_diffs_corrected,
-                cmp_mask & ~outlier_mask_corrected, min_AIC=6.0,
+                cmp_mask & ~outlier_mask_corrected,
+                min_AIC=6.0,
             )
             offsets_final = new_offsets_corrected
 
@@ -169,41 +166,6 @@ def get_potenci(seq, temperature, pH, ion, cache_dir):
 
 
 # ---------------------------------------------------------------------------
-# Tier classification from pipeline output
-# ---------------------------------------------------------------------------
-
-
-def load_tier_sets(baseline_dir):
-    """Load entry ID sets per tier from data/baseline/ NDJSON files.
-
-    Returns dict mapping tier name → set of entry IDs (str).
-    Tiers are nested: strict ⊂ moderate ⊂ tolerant ⊂ unfiltered.
-    """
-    import json
-
-    tier_sets = {}
-    for tier in _TIER_ORDER:
-        json_path = baseline_dir / f"{tier}.json"
-        if json_path.exists():
-            ids = set()
-            with open(json_path) as f:
-                for line in f:
-                    ids.add(json.loads(line)["entryID"])
-            tier_sets[tier] = ids
-        else:
-            tier_sets[tier] = set()
-    return tier_sets
-
-
-def classify_tier(entry_id, tier_sets):
-    """Classify entry into the most stringent tier it belongs to."""
-    for tier in _TIER_ORDER:
-        if entry_id in tier_sets.get(tier, set()):
-            return tier
-    return "unfiltered"
-
-
-# ---------------------------------------------------------------------------
 # Entry processing
 # ---------------------------------------------------------------------------
 
@@ -218,9 +180,12 @@ def process_entry(entry, cache_dir):
     gscore_pairs = []
     entry_lacs_offsets = None
 
-    for (_stID, _entity_assemID, entityID), (shifts, condID, _assemID, _sampleIDs) in (
-        peptide_shifts.items()
-    ):
+    for (_stID, _entity_assemID, entityID), (
+        shifts,
+        condID,
+        _assemID,
+        _sampleIDs,
+    ) in peptide_shifts.items():
         if condID not in entry.conditions or entityID not in entry.entities:
             continue
 
@@ -292,7 +257,7 @@ def make_gscore_plot(df, output_path):
     # Left: boxplot of G-score difference per tier
     box_data = []
     box_labels = []
-    for tier in _TIER_ORDER:
+    for tier in TIERS:
         subset = df.loc[df["tier"] == tier, "diff"]
         if len(subset) == 0:
             continue
@@ -300,8 +265,11 @@ def make_gscore_plot(df, output_path):
         box_labels.append(f"{tier}\n(n={len(subset):,})")
 
     bp = ax1.boxplot(
-        box_data, tick_labels=box_labels, patch_artist=True,
-        showfliers=False, widths=0.6,
+        box_data,
+        tick_labels=box_labels,
+        patch_artist=True,
+        showfliers=False,
+        widths=0.6,
         medianprops={"color": "black", "linewidth": 1.5},
     )
     for patch in bp["boxes"]:
@@ -311,8 +279,14 @@ def make_gscore_plot(df, output_path):
     ax1.set_ylabel("G-score difference (LACS − original)")
     ax1.set_title("Effect of LACS pre-correction by tier")
     ax1.text(
-        0.03, 0.97, stats, transform=ax1.transAxes, fontsize=8,
-        verticalalignment="top", fontfamily="monospace", bbox=text_bbox,
+        0.03,
+        0.97,
+        stats,
+        transform=ax1.transAxes,
+        fontsize=8,
+        verticalalignment="top",
+        fontfamily="monospace",
+        bbox=text_bbox,
     )
 
     # Right: hexbin density
@@ -321,8 +295,14 @@ def make_gscore_plot(df, output_path):
     from matplotlib.colors import LogNorm
 
     hb = ax2.hexbin(
-        x, y, gridsize=60, cmap="inferno_r", mincnt=1,
-        extent=(0, 1, 0, 1), linewidths=0.3, norm=LogNorm(),
+        x,
+        y,
+        gridsize=60,
+        cmap="inferno_r",
+        mincnt=1,
+        extent=(0, 1, 0, 1),
+        linewidths=0.3,
+        norm=LogNorm(),
     )
     ax2.plot([0, 1], [0, 1], "k--", lw=0.8, alpha=0.5)
     ax2.set_xlabel("G-score (original pipeline)")
@@ -333,8 +313,14 @@ def make_gscore_plot(df, output_path):
     ax2.set_title("Density")
     plt.colorbar(hb, ax=ax2, label="Count", shrink=0.8)
     ax2.text(
-        0.03, 0.97, stats, transform=ax2.transAxes, fontsize=8,
-        verticalalignment="top", fontfamily="monospace", bbox=text_bbox,
+        0.03,
+        0.97,
+        stats,
+        transform=ax2.transAxes,
+        fontsize=8,
+        verticalalignment="top",
+        fontfamily="monospace",
+        bbox=text_bbox,
     )
 
     fig.tight_layout()
@@ -376,8 +362,13 @@ def make_lacs_offset_violin(all_offsets, output_path):
 
     for i, vals in enumerate(plot_data):
         ax.text(
-            i, ax.get_ylim()[1] * 0.95, f"n={len(vals)}",
-            ha="center", va="top", fontsize=8, color="gray",
+            i,
+            ax.get_ylim()[1] * 0.95,
+            f"n={len(vals)}",
+            ha="center",
+            va="top",
+            fontsize=8,
+            color="gray",
         )
 
     fig.tight_layout()
@@ -397,25 +388,37 @@ def main():
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--compute", action="store_true", help="Compute and save results")
-    mode.add_argument("--plot-only", action="store_true", help="Plot from cached results")
+    mode.add_argument(
+        "--plot-only", action="store_true", help="Plot from cached results"
+    )
 
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp"))
     parser.add_argument(
-        "--subset-file", type=Path, default=Path("tests/quick_subset_ids.txt"),
+        "--subset-file",
+        type=Path,
+        default=Path("tests/quick_subset_ids.txt"),
     )
     parser.add_argument(
-        "--results-pkl", type=Path, default=Path("tmp/lacs_comparison_results.pkl"),
+        "--results-pkl",
+        type=Path,
+        default=Path("tmp/lacs_comparison_results.pkl"),
         help="Path to save/load computed results",
     )
     parser.add_argument(
-        "--baseline-dir", type=Path, default=Path("data/baseline"),
+        "--baseline-dir",
+        type=Path,
+        default=Path("data/baseline"),
         help="Directory with {tier}.json baseline files",
     )
     parser.add_argument(
-        "--output", type=Path, default=Path("docs/260422/gscores_lacs_comparison.png"),
+        "--output",
+        type=Path,
+        default=Path("docs/archive/260422/gscores_lacs_comparison.png"),
     )
     parser.add_argument(
-        "--output-violin", type=Path, default=Path("docs/260422/lacs_offset_violin.png"),
+        "--output-violin",
+        type=Path,
+        default=Path("docs/archive/260422/lacs_offset_violin.png"),
     )
     parser.add_argument("--max-entries", type=int, default=0)
     args = parser.parse_args()
@@ -481,13 +484,15 @@ def main():
         return
 
     # Build DataFrame and assign tiers from pipeline data
-    df = pd.DataFrame(all_pairs, columns=["entry_id", "gscore_orig", "gscore_lacs", "max_lacs_offset"])
+    df = pd.DataFrame(
+        all_pairs, columns=["entry_id", "gscore_orig", "gscore_lacs", "max_lacs_offset"]
+    )
     df["diff"] = df["gscore_lacs"] - df["gscore_orig"]
 
     tier_sets = load_tier_sets(args.baseline_dir)
     df["tier"] = df["entry_id"].apply(lambda eid: classify_tier(eid, tier_sets))
 
-    for tier in _TIER_ORDER:
+    for tier in TIERS:
         n = (df["tier"] == tier).sum()
         n_entries = df.loc[df["tier"] == tier, "entry_id"].nunique()
         print(f"  {tier}: {n:,} residues from {n_entries} entries")

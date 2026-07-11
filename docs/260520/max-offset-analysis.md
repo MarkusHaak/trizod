@@ -107,7 +107,7 @@ re-release of the strict tier.
 ## Reproducing
 
 ```bash
-uv run python docs/260520/scripts/analyze_max_offset.py
+uv run python scripts/figures/analyze_max_offset.py
 ```
 
 Outputs:

@@ -18,8 +18,6 @@ from typing import Optional
 import numpy as np
 import typer
 
-from trizod.trizod import filter_defaults, run_scoring_pipeline
-
 app = typer.Typer(
     rich_markup_mode=None,
     add_completion=False,
@@ -233,6 +231,10 @@ def score(
     """
     if ctx.invoked_subcommand is not None:
         return
+    # Lazy import: keeps `trizod --help` and `trizod dataset ...` from pulling in
+    # the scoring stack (pandarallel, potenci, scoring) that they never use.
+    from trizod.trizod import filter_defaults, run_scoring_pipeline
+
     tier = filter_defaults.loc[filter_defaults_tier.value]
 
     def resolve(value, key):
@@ -321,20 +323,15 @@ def _validate_and_prepare_paths(args):
         args.peptide_length_range.append(np.inf)
 
     args.cache_dir = Path(args.cache_dir).resolve()
-    subdirs = [
+    if not args.cache_dir.exists():
+        _LOG.debug(f"Directory {args.cache_dir} does not exist and is created.")
+    for d in (
         args.cache_dir,
         args.cache_dir / "wSCS",
         args.cache_dir / "bmrb_entries",
         args.cache_dir / "potenci",
-    ]
-    if not all(d.exists() for d in subdirs):
-        if not args.cache_dir.exists():
-            _LOG.debug(f"Directory {args.cache_dir} does not exist and is created.")
-        for d in subdirs:
-            d.mkdir(parents=True, exist_ok=True)
-    elif not args.cache_dir.is_dir():
-        _LOG.error(f"Path {args.cache_dir} is not a directory.")
-        raise typer.Exit(1)
+    ):
+        d.mkdir(parents=True, exist_ok=True)
 
     if args.emit_str is not None:
         args.emit_str = Path(args.emit_str).resolve()

@@ -40,7 +40,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-from trizod.dataset.mmseqs import COMMON, run
+from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, fasta_ids
 
@@ -141,13 +141,7 @@ def stage1_cluster_member_removal(
     # easy-cluster writes <prefix>_cluster.tsv with columns (representative,
     # member); every member (incl. the representative itself) appears once.
     clu_tsv = Path(str(prefix) + "_cluster.tsv")
-    members_by_repr: dict[str, list[str]] = {}
-    with open(clu_tsv) as f:
-        for line in f:
-            if not line.strip():
-                continue
-            rep, mem = line.rstrip("\n").split("\t")[:2]
-            members_by_repr.setdefault(rep, []).append(mem)
+    members_by_repr = cluster_tsv_groups(clu_tsv)
 
     leaked: set[str] = set()
     n_test_clusters = 0

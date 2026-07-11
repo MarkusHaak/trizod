@@ -25,8 +25,9 @@ def detect_bound(entry) -> dict:
     # n_entities: number of distinct entities in the entry (homo-oligomers
     # show up as a single Entity that is referenced multiple times in an
     # assembly).
-    n_entities = len(entity_ids_in_pkl := [e.id for e in entities])
-    assert len(set(entity_ids_in_pkl)) == n_entities, "non-unique entity IDs"
+    n_entities = len(entities)
+    entity_ids = [e.id for e in entities]
+    assert len(set(entity_ids)) == n_entities, "non-unique entity IDs"
 
     # Check assemblies for multi-entity composition.  Some entries have
     # one Entity record but multiple assemblies/entity_assemblies if it's

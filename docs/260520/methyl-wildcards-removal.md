@@ -3,7 +3,7 @@
 ## Decision
 
 The Step-8 methyl-wildcard rewrite shipped in commit `0614bfa` and
-documented in `docs/260505/step8-methyl-wildcards.md` is **reverted**.
+documented in `docs/archive/260505/step8-methyl-wildcards.md` is **reverted**.
 
 The BMRB parser no longer renames Leu CD1/CD2 → CDx or Val CG1/CG2 → CGx
 when the deposited ambiguity code is non-stereospecific. The atom IDs

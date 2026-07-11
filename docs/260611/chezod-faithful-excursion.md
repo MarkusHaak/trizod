@@ -14,7 +14,7 @@ input/data, not the scoring math.**
   POTENCI/conditions, the recovered 2023 "bit-equal" TriZOD code (git), and the
   current knobs.
 - Experiment: re-score the 1320 CheZOD1325 entries (`tmp/chezod_subset`) in an
-  isolated cache, measure with `docs/260611/scripts/chezod_faithful_measure.py`
+  isolated cache, measure with `scripts/validation/chezod_faithful_measure.py`
   (legacy verdict = every residue within atol after sequence alignment).
 
 ## Baseline (current code, potenci-only)
@@ -79,4 +79,4 @@ worth changing in the release pipeline.
 
 Reproduce: re-score `tmp/chezod_subset` with `--rereference-mode potenci-only
 --filter-defaults unfiltered`, then
-`uv run python docs/260611/scripts/chezod_faithful_measure.py <scores.json>`.
+`uv run python scripts/validation/chezod_faithful_measure.py <scores.json>`.

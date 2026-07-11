@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 RELEASE = ROOT / "data" / "release"
 OUTDIR = ROOT / "docs" / "260520" / "figures"
 DATAOUT = ROOT / "docs" / "260520" / "data"
@@ -121,7 +121,8 @@ def main():
     fig.suptitle(
         "POTENCI residual offsets (per atom) after LACS pre-correction.  "
         "Vertical lines: 2 ppm (strict), 3 ppm (tolerant/moderate).",
-        fontsize=11, y=0.995,
+        fontsize=11,
+        y=0.995,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     p1 = OUTDIR / "max_offset_distribution.png"
@@ -145,20 +146,26 @@ def main():
 
         fractions = [(df["max_potenci_off"] <= t).mean() for t in thresholds]
         axA.plot(
-            thresholds, fractions, color=COLORS[tier], lw=1.7, label=tier,
+            thresholds,
+            fractions,
+            color=COLORS[tier],
+            lw=1.7,
+            label=tier,
         )
 
         for thr in (2.0, 3.0, 4.0, 5.0, np.inf):
             n_pass = len(df) if np.isinf(thr) else (df["max_potenci_off"] <= thr).sum()
-            summary_rows.append({
-                "tier": tier,
-                "current_threshold": cur_thr,
-                "candidate_threshold": thr,
-                "n_total": len(df),
-                "n_pass": n_pass,
-                "frac_pass": n_pass / len(df) if len(df) else 0.0,
-                "currently_pass": n_passing,
-            })
+            summary_rows.append(
+                {
+                    "tier": tier,
+                    "current_threshold": cur_thr,
+                    "candidate_threshold": thr,
+                    "n_total": len(df),
+                    "n_pass": n_pass,
+                    "frac_pass": n_pass / len(df) if len(df) else 0.0,
+                    "currently_pass": n_passing,
+                }
+            )
 
         # mark current threshold
         if np.isfinite(cur_thr):
@@ -179,7 +186,9 @@ def main():
     for cand in cand_set:
         bar_data[cand] = []
         for tier in TIERS:
-            row = pivot[(pivot["tier"] == tier) & (pivot["candidate_threshold"] == cand)].iloc[0]
+            row = pivot[
+                (pivot["tier"] == tier) & (pivot["candidate_threshold"] == cand)
+            ].iloc[0]
             bar_data[cand].append(row["n_pass"])
     x = np.arange(len(TIERS))
     width = 0.16
@@ -187,7 +196,8 @@ def main():
         label = "∞" if np.isinf(cand) else f"{cand:.0f} ppm"
         axB.bar(
             x + (i - (len(cand_set) - 1) / 2) * width,
-            bar_data[cand], width,
+            bar_data[cand],
+            width,
             label=f"max-offset = {label}",
         )
     axB.set_xticks(x)
@@ -229,7 +239,7 @@ def main():
             n_pass = (df["max_potenci_off"] <= cur).sum()
             print(
                 f"  {tier:>10}: current max-offset = {cur:.1f} ppm; "
-                f"{n_pass}/{n_total} pass ({n_pass/n_total:.1%}); "
+                f"{n_pass}/{n_total} pass ({n_pass / n_total:.1%}); "
                 f"median={df['max_potenci_off'].median():.3f}, "
                 f"p95={df['max_potenci_off'].quantile(0.95):.3f}, "
                 f"max={df['max_potenci_off'].max():.3f}"
@@ -238,7 +248,9 @@ def main():
         # against various thresholds
         for thr in (1.0, 2.0, 3.0, 5.0):
             n = (df["max_potenci_off"] > thr).sum()
-            print(f"      |max offset| > {thr:.1f} ppm: {n}/{n_total} ({n/n_total:.1%})")
+            print(
+                f"      |max offset| > {thr:.1f} ppm: {n}/{n_total} ({n / n_total:.1%})"
+            )
 
 
 if __name__ == "__main__":

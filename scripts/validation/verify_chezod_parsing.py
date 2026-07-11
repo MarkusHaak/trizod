@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 CHEZOD = ROOT / "data" / "chezod" / "protein_nmr_1325"
 SEQS = CHEZOD / "allseqs1325.txt"
 SCORES = CHEZOD / "allscores1325newest.txt"

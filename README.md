@@ -28,7 +28,7 @@ Four nested datasets of increasing filter stringency are provided: unfiltered, t
 
 ## Releases & re-referenced dataset
 
-The finalized 2026-05 pipeline emits per-entry re-referenced NMR-STAR (`.str`) files when run with `--emit-str <dir>`. Each emitted file contains the backbone shifts after LACS pre-correction plus an auxiliary saveframe recording the LACS offsets, POTENCI residual offsets, the re-referencing mode, and the pipeline version. See [docs/260505/str-emission.md](docs/260505/str-emission.md) for the file layout.
+The finalized 2026-05 pipeline emits per-entry re-referenced NMR-STAR (`.str`) files when run with `--emit-str <dir>`. Each emitted file contains the backbone shifts after LACS pre-correction plus an auxiliary saveframe recording the LACS offsets, POTENCI residual offsets, the re-referencing mode, and the pipeline version. See [docs/archive/260505/str-emission.md](docs/archive/260505/str-emission.md) for the file layout.
 
 The full re-referenced TriZOD dataset is published on Zenodo (concept DOI [10.5281/zenodo.21309963](https://doi.org/10.5281/zenodo.21309963); latest version v0.2.0), distributed as a single Parquet file. The repository ships [`.zenodo.json`](.zenodo.json) and [`CITATION.cff`](CITATION.cff) describing the deposit.
 

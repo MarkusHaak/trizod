@@ -16,7 +16,7 @@ finally consume**.
 ## Data
 
 Source: `tmp/lacs_comparison_results.pkl`, produced by
-`scripts/compare_gscores_lacs.py`. The cache covers **14,217 BMRB
+`scripts/figures/compare_gscores_lacs.py`. The cache covers **14,217 BMRB
 entries** (every entry where both pipelines successfully scored at
 least one residue), totalling **1,439,864 residue-level G-score
 pairs** (G-score_POTENCI-only, G-score_LACS+POTENCI).
@@ -110,8 +110,8 @@ Reading guide:
 ```bash
 # 1. (long: a few hours) generate the cached comparison if you don't
 #    have one already.  Reads BMRB pkls and runs both scoring branches.
-uv run python scripts/compare_gscores_lacs.py --compute
+uv run python scripts/figures/compare_gscores_lacs.py --compute
 
 # 2. plot
-uv run python docs/260520/scripts/plot_lacs_effect.py
+uv run python -m trizod.figures.fig2_lacs
 ```

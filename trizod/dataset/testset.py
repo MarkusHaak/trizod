@@ -129,7 +129,12 @@ def main(argv=None) -> None:
     rng = random.Random(SEED)
     free_reps = sorted(free_clusters)
     n_sample = round(len(free_reps) * SAMPLE_FRACTION)
-    sampled = set(rng.sample(free_reps, n_sample))
+    # Keep rng.sample's deterministic (seeded) list order. Wrapping it in a set
+    # would make iteration order depend on PYTHONHASHSEED, changing the FASTA
+    # written below and hence the order-sensitive mmseqs 50/80 representative
+    # pick — defeating the fixed-seed reproducibility this module promises.
+    # sampling is already without replacement, so no dedup is needed.
+    sampled = rng.sample(free_reps, n_sample)
     sampled_members = [m for rep in sampled for m in free_clusters[rep]]
     print(
         f"sampled {n_sample} / {len(free_reps)} CheZOD-free clusters "

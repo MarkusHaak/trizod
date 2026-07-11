@@ -9,7 +9,7 @@ atol=0.1 on every comparable residue — the tolerance at which the implementati
 was historically validated (commit a9df3ac, 2023).
 
 The reference subset lives in tests/reference/chezod_zscores_subset.json (built
-by docs/260611/scripts/build_chezod_test_subset.py from
+by scripts/validation/build_chezod_test_subset.py from
 data/chezod/protein_nmr_1325/allscores1325newest.txt). The test needs the BMRB
 entry files (data/bmrb_entries/) like the other pipeline tests.
 """

@@ -150,13 +150,10 @@ def main(argv=None):
 
     comp = build_composition_cache(paths.pkl_dir)
     print(f"Composition cache built: {len(comp)} entries")
+    if not comp:
+        raise SystemExit(f"no BMRB pkl files found in {paths.pkl_dir}")
 
-    comp_df = pd.DataFrame(
-        [
-            {"entryID": eid, **(c if "is_bound" in c else {"is_bound": True})}
-            for eid, c in comp.items()
-        ]
-    )
+    comp_df = pd.DataFrame([{"entryID": eid, **c} for eid, c in comp.items()])
     comp_df.to_csv(out / "_composition_cache.csv", index=False)
     print(f"Wrote {out / '_composition_cache.csv'} (n={len(comp_df)})")
 
@@ -181,7 +178,11 @@ def main(argv=None):
         all_rows.append(df_t)
     all_df = pd.concat(all_rows, ignore_index=True)
     all_df = all_df.merge(comp_df, on="entryID", how="left", suffixes=("", "_comp"))
-    all_df["is_bound"] = all_df["is_bound"].fillna(True)
+    # The left merge upcasts is_bound to object dtype whenever a scored entryID
+    # has no composition match (NaN introduced). ``~`` on an object column does
+    # Python bitwise invert (~True == -2, ~False == -1 — both truthy), which
+    # would silently defeat the bound-complex filter below. Coerce back to bool.
+    all_df["is_bound"] = all_df["is_bound"].fillna(True).astype(bool)
     all_df = compute_quality(all_df)
 
     universal_keep = (all_df["len"] >= MIN_SEQ_LEN) & (~all_df["is_bound"])
@@ -200,7 +201,11 @@ def main(argv=None):
     # Per-sequence representative: the highest-quality ID across all
     # tiers carries the canonical name used in every per-tier FASTA so
     # that mmseqs clusterupdate sees a consistent identifier set.
-    kept_all = kept_all.sort_values(["seq", "quality_score"], ascending=[True, False])
+    # ID is a deterministic final tiebreak so ties on quality_score resolve
+    # reproducibly (pandas' sort is not stable) rather than by chance.
+    kept_all = kept_all.sort_values(
+        ["seq", "quality_score", "ID"], ascending=[True, False, True]
+    )
     kept_all["seq_rank_global"] = kept_all.groupby("seq").cumcount() + 1
     kept_all["is_global_seq_repr"] = kept_all["seq_rank_global"] == 1
     global_repr = kept_all.loc[
@@ -234,7 +239,9 @@ def main(argv=None):
             ).sum()
         )
 
-        df_t = df_t.sort_values(["seq", "quality_score"], ascending=[True, False])
+        df_t = df_t.sort_values(
+            ["seq", "quality_score", "ID"], ascending=[True, False, True]
+        )
         df_t["seq_rank_tier"] = df_t.groupby("seq").cumcount() + 1
         df_t["is_seq_repr_tier"] = df_t["seq_rank_tier"] == 1
 

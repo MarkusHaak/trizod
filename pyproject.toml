@@ -21,7 +21,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-    "matplotlib>=3.9.4",
     "numpy>=2.0.2",
     "pandarallel>=1.6.5",
     "pandas>=2.3.3",
@@ -30,6 +29,13 @@ dependencies = [
     "tqdm>=4.67.3",
     "typer>=0.12,<0.24",
 ]
+
+# matplotlib is imported only by trizod/figures/ (manuscript figure generators);
+# neither the scoring pipeline, the CLI, nor the dataset build depend on it, so
+# it is an opt-in extra: `pip install trizod` stays lean for downstream ML use,
+# `pip install trizod[figures]` adds figure regeneration.
+[project.optional-dependencies]
+figures = ["matplotlib>=3.9.4"]
 
 [project.urls]
 Repository = "https://github.com/tsenoner/trizod"
@@ -71,4 +77,8 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 dev = [
     "pytest>=8.4.2",
     "ruff>=0.15.5",
+    # pulls in the figures extra so the figure-generator tests run under the
+    # standard `uv sync` / `uv run pytest` dev workflow (matplotlib is optional
+    # for consumers but required to exercise trizod/figures/).
+    "trizod[figures]",
 ]
