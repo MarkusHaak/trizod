@@ -6,7 +6,7 @@ Uses the cached residue-level comparison pickle produced by
 in ``data/interim/baseline/`` to classify each entry by stringency tier.
 
 Public API: :func:`plot_lacs_effect`. Run as a script (``python -m
-trizod.figures.fig2_lacs``) to regenerate into ``docs/260520/figures/``.
+trizod.figures.fig2_lacs``) to regenerate into ``docs/archive/260520/figures/``.
 
 Outputs:
   lacs_effect_gscores.png          — 4-panel summary
@@ -284,7 +284,7 @@ def main():
     plot_lacs_effect(
         pkl_path=root / "tmp" / "lacs_comparison_results.pkl",
         baseline_dir=root / "data" / "interim" / "baseline",
-        out_dir=root / "docs" / "260520" / "figures",
+        out_dir=root / "docs" / "archive" / "260520" / "figures",
         data_out_dir=root / "data" / "interim" / "build",
     )
 

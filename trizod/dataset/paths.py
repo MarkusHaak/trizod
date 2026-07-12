@@ -37,7 +37,7 @@ def resolve_paths(work_dir=None, root=None) -> SimpleNamespace:
         pkl_dir=layout.pkl_dir,
         chezod117=layout.ext_chezod117 / "CheZOD117_test_set.fasta",
         chezod1325_txt=layout.ext_chezod_1325 / "allseqs1325.txt",
-        bundle_readme=layout.root / "docs" / "260520" / "bundle-README.md",
+        bundle_readme=layout.root / "docs" / "dataset" / "bundle-README.md",
         # work-dir artifacts
         final_dataset=work_dir / "final_dataset",
         mmseqs=work_dir / "mmseqs",

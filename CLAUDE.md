@@ -105,7 +105,7 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `docs/filtering.md` — filter descriptions and default values per stringency level
 - `docs/dataset/` — dataset construction notes + datasheet (`dataset-construction.md`, `datasheet.md`)
 - `docs/archive/` — superseded / historical material
-- Date-stamped working snapshots: `docs/260520/`, `docs/260611/`, `docs/260623/`, `docs/260625/`
+- Historical working snapshots are archived under `docs/archive/` (dated `260415/` … `260625/`)
 
 ## Data
 - BMRB entries: `data/raw/bmrb_entries/` (not committed)

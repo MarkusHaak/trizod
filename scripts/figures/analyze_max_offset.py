@@ -17,7 +17,7 @@ been applied) and asks:
   4. Is the residual large enough to matter, or has LACS already
      handled the worst cases?
 
-Outputs (under docs/260520/):
+Outputs (under docs/archive/260520/):
   figures/max_offset_distribution.png — per-atom offset distributions
   figures/max_offset_filter_curve.png — entries removed vs threshold
   data/max_offset_summary.csv         — numeric summary
@@ -34,7 +34,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE = ROOT / "data" / "interim" / "scored"
-OUTDIR = ROOT / "docs" / "260520" / "figures"
+OUTDIR = ROOT / "docs" / "archive" / "260520" / "figures"
 DATAOUT = ROOT / "data" / "interim" / "build"
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
