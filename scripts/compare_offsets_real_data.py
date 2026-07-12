@@ -5,7 +5,7 @@ Compares LACS (our reimplementation), PANAV (from local JAR), BMRB LACS
 (pre-computed), and TriZOD's existing offset correction on real entries.
 
 Usage:
-    uv run python scripts/compare_offsets_real_data.py --output docs/260415/real-data-comparison.md
+    uv run python scripts/compare_offsets_real_data.py --output docs/archive/260415/real-data-comparison.md
 """
 
 import argparse

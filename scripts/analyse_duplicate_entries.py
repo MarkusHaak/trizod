@@ -7,7 +7,7 @@ with entity composition from cached entries to classify bound vs unbound.
 
 Usage:
     uv run python scripts/analyse_duplicate_entries.py --tier tolerant
-    uv run python scripts/analyse_duplicate_entries.py --tier moderate --output docs/260422/duplicate-entry-analysis.md
+    uv run python scripts/analyse_duplicate_entries.py --tier moderate --output docs/archive/260422/duplicate-entry-analysis.md
 """
 
 import argparse

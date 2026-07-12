@@ -7,7 +7,7 @@ Runs only the pre-filter stage — no scoring required.
 
 Usage:
     uv run python scripts/filter_impact_report.py --cache-dir tmp
-    uv run python scripts/filter_impact_report.py --cache-dir tmp --output docs/260415/filter-impact.md
+    uv run python scripts/filter_impact_report.py --cache-dir tmp --output docs/archive/260415/filter-impact.md
 """
 
 import argparse

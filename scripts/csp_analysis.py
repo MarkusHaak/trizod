@@ -14,8 +14,8 @@ Usage:
         --tier tolerant \\
         --baseline-dir data/interim/baseline \\
         --cache-dir tmp/bmrb_entries \\
-        --output-histogram docs/260505/figures/csp_histogram.png \\
-        --output-example docs/260505/figures/csp_interface_example.png \\
+        --output-histogram docs/archive/260505/figures/csp_histogram.png \\
+        --output-example docs/archive/260505/figures/csp_interface_example.png \\
         --example-single 16925 --example-bound 16931
 """
 
@@ -191,12 +191,12 @@ def main():
     parser.add_argument(
         "--output-histogram",
         type=Path,
-        default=Path("docs/260505/figures/csp_histogram.png"),
+        default=Path("docs/archive/260505/figures/csp_histogram.png"),
     )
     parser.add_argument(
         "--output-example",
         type=Path,
-        default=Path("docs/260505/figures/csp_interface_example.png"),
+        default=Path("docs/archive/260505/figures/csp_interface_example.png"),
     )
     parser.add_argument(
         "--example-single",

@@ -2,8 +2,8 @@
 """Generate one CSP plot per bound/unbound pair for review.
 
 Output:
-    docs/260505/csp_pairs/<single>_vs_<bound>.png   (one per pair)
-    docs/260505/csp_pairs/index.md                  (sortable index)
+    docs/archive/260505/csp_pairs/<single>_vs_<bound>.png   (one per pair)
+    docs/archive/260505/csp_pairs/index.md                  (sortable index)
 
 Used to (a) sanity-check the CSP analysis and (b) optionally pick a more
 compelling headline example than FKBP12 for slide 9 of the talk.
