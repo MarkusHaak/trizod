@@ -12,7 +12,7 @@ Outputs:
 Usage:
     uv run python scripts/csp_analysis.py \\
         --tier tolerant \\
-        --baseline-dir data/baseline \\
+        --baseline-dir data/interim/baseline \\
         --cache-dir tmp/bmrb_entries \\
         --output-histogram docs/260505/figures/csp_histogram.png \\
         --output-example docs/260505/figures/csp_interface_example.png \\
@@ -70,7 +70,7 @@ def shifts_for(entry_id, cache_dir, entity_id_filter=None):
         # Fall back to re-parsing from raw .str
         from trizod.bmrb.bmrb import BmrbEntry
 
-        raw_dir = Path("data/bmrb_entries") / f"bmr{entry_id}"
+        raw_dir = Path("data/raw/bmrb_entries") / f"bmr{entry_id}"
         if not raw_dir.exists():
             return None, None, None
         try:
@@ -153,8 +153,7 @@ def find_pairs(rows, cache_dir, max_temp_diff=10.0, max_ph_diff=1.0):
             )
             has_nucleic = any(
                 e.type == "polymer"
-                and e.polymer_type
-                in ("polydeoxyribonucleotide", "polyribonucleotide")
+                and e.polymer_type in ("polydeoxyribonucleotide", "polyribonucleotide")
                 for e in entry.entities.values()
             )
             if n_entities == 1:
@@ -185,7 +184,9 @@ def main():
         choices=["unfiltered", "tolerant", "moderate", "strict"],
         default="tolerant",
     )
-    parser.add_argument("--baseline-dir", type=Path, default=Path("data/baseline"))
+    parser.add_argument(
+        "--baseline-dir", type=Path, default=Path("data/interim/baseline")
+    )
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument(
         "--output-histogram",

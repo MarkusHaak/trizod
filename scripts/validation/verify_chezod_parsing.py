@@ -21,11 +21,11 @@ CheZOD reference Z-scores is a concordance analysis:
 
 Inputs
 ------
-* data/chezod/protein_nmr_1325/allseqs1325.txt        (<BMRB_ID> <seq>)
-* data/chezod/protein_nmr_1325/allscores1325newest.txt (line-aligned z, 999=NA)
-* data/release/unfiltered/scores.json                  (TriZOD scores, JSONL)
+* data/external/chezod/protein_nmr_1325/allseqs1325.txt        (<BMRB_ID> <seq>)
+* data/external/chezod/protein_nmr_1325/allscores1325newest.txt (line-aligned z, 999=NA)
+* data/interim/scored/unfiltered/scores.json                  (TriZOD scores, JSONL)
 
-Outputs (under docs/260611/data/chezod_verification/, gitignored)
+Outputs (under data/interim/chezod_verification/, gitignored)
 -----------------------------------------------------------------
 * per_entry.csv   — one row per CheZOD entry with match + concordance stats
 * summary.json    — aggregate counts and distributions
@@ -42,11 +42,11 @@ import numpy as np
 from scipy.stats import pearsonr, spearmanr
 
 ROOT = Path(__file__).resolve().parents[2]
-CHEZOD = ROOT / "data" / "chezod" / "protein_nmr_1325"
+CHEZOD = ROOT / "data" / "external" / "chezod" / "protein_nmr_1325"
 SEQS = CHEZOD / "allseqs1325.txt"
 SCORES = CHEZOD / "allscores1325newest.txt"
-TRIZOD_SCORES = ROOT / "data" / "release" / "unfiltered" / "scores.json"
-OUT = ROOT / "docs" / "260611" / "data" / "chezod_verification"
+TRIZOD_SCORES = ROOT / "data" / "interim" / "scored" / "unfiltered" / "scores.json"
+OUT = ROOT / "data" / "interim" / "chezod_verification"
 
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 NA = 999.0

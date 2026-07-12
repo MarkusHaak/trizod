@@ -40,6 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
 logging.getLogger("trizod.scoring").setLevel(logging.CRITICAL)
 
+
 def build_dataframe(input_dir, cache_dir, tier="unfiltered"):
     """Load entries and build the peptide DataFrame with unfiltered settings."""
     bmrb_files = find_bmrb_files(input_dir)
@@ -87,9 +88,15 @@ def analyse_tier(df, tier):
         chemical_denaturants=defaults["chemical-denaturants"],
         exclude_paramagnetic=defaults["exclude-paramagnetic"],
     )
-    df_filtered, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all = (
-        _result
-    )
+    (
+        df_filtered,
+        missing_vals,
+        sels_pre,
+        sels_kws,
+        sels_denat,
+        sels_paramag,
+        sels_all,
+    ) = _result
 
     # Collect all filter selections into one dict
     all_filters = {}
@@ -113,11 +120,13 @@ def analyse_tier(df, tier):
             if other_name != name:
                 others_pass &= other_sel
         unique = int((~sel & others_pass).sum())
-        results.append({
-            "filter": name,
-            "filtered": filtered,
-            "unique": unique,
-        })
+        results.append(
+            {
+                "filter": name,
+                "filtered": filtered,
+                "unique": unique,
+            }
+        )
 
     total = len(df_filtered)
     passing = int(df_filtered["pass_pre"].sum())
@@ -143,17 +152,14 @@ def format_markdown(all_results, total_entries):
         lines.append(f"## {tier.capitalize()} tier")
         lines.append("")
         lines.append(
-            f"Passing: **{passing}** / {total} "
-            f"(filtered: {filtered_total}, {pct:.1f}%)"
+            f"Passing: **{passing}** / {total} (filtered: {filtered_total}, {pct:.1f}%)"
         )
         lines.append("")
         lines.append("| Filter | Filtered | Unique |")
         lines.append("| ------ | -------: | -----: |")
         for r in results:
             if r["filtered"] > 0:
-                lines.append(
-                    f"| {r['filter']} | {r['filtered']} | {r['unique']} |"
-                )
+                lines.append(f"| {r['filter']} | {r['filtered']} | {r['unique']} |")
         lines.append("")
 
     return "\n".join(lines)
@@ -176,9 +182,7 @@ def format_terminal(all_results, total_entries):
         lines.append(f"{'-' * 45} {'-' * 10} {'-' * 8}")
         for r in results:
             if r["filtered"] > 0:
-                lines.append(
-                    f"{r['filter']:<45} {r['filtered']:>10} {r['unique']:>8}"
-                )
+                lines.append(f"{r['filter']:<45} {r['filtered']:>10} {r['unique']:>8}")
         lines.append("")
 
     return "\n".join(lines)
@@ -191,8 +195,8 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/bmrb_entries"),
-        help="Directory containing BMRB entry folders (default: data/bmrb_entries)",
+        default=Path("data/raw/bmrb_entries"),
+        help="Directory containing BMRB entry folders (default: data/raw/bmrb_entries)",
     )
     parser.add_argument(
         "--cache-dir",

@@ -10,8 +10,8 @@ was historically validated (commit a9df3ac, 2023).
 
 The reference subset lives in tests/reference/chezod_zscores_subset.json (built
 by scripts/validation/build_chezod_test_subset.py from
-data/chezod/protein_nmr_1325/allscores1325newest.txt). The test needs the BMRB
-entry files (data/bmrb_entries/) like the other pipeline tests.
+data/external/chezod/protein_nmr_1325/allscores1325newest.txt). The test needs the BMRB
+entry files (data/raw/bmrb_entries/) like the other pipeline tests.
 """
 
 import json

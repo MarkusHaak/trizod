@@ -5,7 +5,7 @@ The pipeline filter ``--max-offset`` rejects (or partially masks) entries
 whose per-atom POTENCI/AIC residual offset exceeds a threshold:
   unfiltered  ∞,  tolerant 3.0 ppm,  moderate 3.0 ppm,  strict 2.0 ppm.
 
-This script loads the released ``data/release/<tier>/scores.json`` files
+This script loads the released ``data/interim/scored/<tier>/scores.json`` files
 (written with --rereference-mode both, so LACS pre-correction has already
 been applied) and asks:
 
@@ -33,9 +33,9 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE = ROOT / "data" / "release"
+RELEASE = ROOT / "data" / "interim" / "scored"
 OUTDIR = ROOT / "docs" / "260520" / "figures"
-DATAOUT = ROOT / "docs" / "260520" / "data"
+DATAOUT = ROOT / "data" / "interim" / "build"
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 COLORS = {

@@ -13,7 +13,8 @@ dist/
 .pytest_cache/
 .claude/
 
-# Data (large, downloaded separately)
+# Data (large, downloaded/generated separately; regenerable, released via Zenodo).
+# Layout: data/{raw,external,interim,processed,release} — see data/README.md.
 /data/
 
 # Test subset (symlinks to data/)
@@ -45,11 +46,5 @@ docs/pipeline-overview.md
 # Per-pair CSP review (regenerable via the binding CSP grid script)
 docs/archive/260505/csp_pairs/
 
-# Generated dataset artefacts (large; regenerable via docs/260520/scripts/, released via Zenodo)
-docs/260520/data/
-
 # OS
 .DS_Store
-docs/260611/data/
-docs/260623/data/
-docs/260625/data/

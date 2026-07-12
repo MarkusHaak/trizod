@@ -42,7 +42,9 @@ def download_one(entry_id: str, lacs_dir: Path) -> tuple[str, bool]:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--lacs-dir", default="data/bmrb_lacs", help="Output directory")
+    parser.add_argument(
+        "--lacs-dir", default="data/external/bmrb_lacs", help="Output directory"
+    )
     parser.add_argument("--workers", type=int, default=16, help="Parallel downloads")
     args = parser.parse_args()
 

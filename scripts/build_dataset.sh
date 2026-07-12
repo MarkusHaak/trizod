@@ -3,7 +3,7 @@
 #
 # Order:
 #   0. score   — per-tier per-residue Z/G scores (heavy; ~17k BMRB entries).
-#                Produces data/release/<tier>/scores.json. SKIPPED if those
+#                Produces data/interim/scored/<tier>/scores.json. SKIPPED if those
 #                already exist (pass --rescore to force).
 #   1. build   — bound/multi-molecule removal + length<20 drop + exact-seq dedup
 #                (trizod.dataset.build -> <work-dir>/final_dataset/<tier>/<tier>.fasta)
@@ -21,7 +21,7 @@
 #   VERSION defaults to 2026-06.
 #
 # Requirements: uv, mmseqs in PATH. Run from anywhere (paths auto-resolve to the
-# repo root; artefacts land under docs/260520/data by default).
+# repo root; artefacts land under data/interim/build by default).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,22 +46,22 @@ echo "mmseqs: $(mmseqs version 2>/dev/null | head -1)"
 # ---- Step 0: scoring (guarded) ----
 need_score=0
 for t in "${TIERS[@]}"; do
-  [ -s "data/release/$t/scores.json" ] || need_score=1
+  [ -s "data/interim/scored/$t/scores.json" ] || need_score=1
 done
 if [ "$RESCORE" = 1 ] || [ "$need_score" = 1 ]; then
   echo "== Step 0: scoring per tier (--rereference-mode both) =="
   for t in "${TIERS[@]}"; do
-    mkdir -p "data/release/$t"
+    mkdir -p "data/interim/scored/$t"
     uv run trizod \
-      --input-dir data/bmrb_entries \
+      --input-dir data/raw/bmrb_entries \
       --filter-defaults "$t" \
       --rereference-mode both \
       --output-format json \
-      --output-prefix "data/release/$t/scores" \
+      --output-prefix "data/interim/scored/$t/scores" \
       --cache-dir tmp
   done
 else
-  echo "== Step 0: scoring SKIPPED (data/release/<tier>/scores.json present; --rescore to force) =="
+  echo "== Step 0: scoring SKIPPED (data/interim/scored/<tier>/scores.json present; --rescore to force) =="
 fi
 
 # ---- Steps 1-5: deterministic, re-runnable ----
@@ -80,4 +80,4 @@ uv run trizod dataset representatives
 echo "== Step 5: package --version $VERSION (with leakage gate) =="
 uv run trizod dataset package --version "$VERSION"
 
-echo "== Done. Bundle: docs/260520/data/release_bundle/trizod-dataset-$VERSION =="
+echo "== Done. Bundle: data/interim/build/release_bundle/trizod-dataset-$VERSION =="

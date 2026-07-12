@@ -34,7 +34,7 @@ Membership / split (defaults):
 
 Per-residue G-scores are tier-independent (the tier governs entry *inclusion*,
 not the scores), and every train+test ID resolves in
-``data/release/tolerant/scores.json`` (strict subset of tolerant), so a single
+``data/interim/scored/tolerant/scores.json`` (strict subset of tolerant), so a single
 tier's ``scores.json`` supplies the labels for both splits.
 
 The script is self-validating: it asserts every ID resolves, that
@@ -107,7 +107,7 @@ def main(argv=None) -> None:
         "--work-dir",
         type=Path,
         default=None,
-        help="dataset build dir (default: <root>/docs/260520/data)",
+        help="dataset build dir (default: <root>/data/interim/build)",
     )
     ap.add_argument(
         "--root",

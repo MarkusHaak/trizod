@@ -163,7 +163,7 @@ def main():
     parser.add_argument(
         "--bmrb-dir",
         type=str,
-        default="data/bmrb_entries",
+        default="data/raw/bmrb_entries",
         help="Directory with raw BMRB entries",
     )
     parser.add_argument(
@@ -175,7 +175,7 @@ def main():
     parser.add_argument(
         "--lacs-dir",
         type=str,
-        default="data/bmrb_lacs",
+        default="data/external/bmrb_lacs",
         help="Directory to cache downloaded LACS reports",
     )
     args = parser.parse_args()
@@ -343,7 +343,7 @@ def main():
             print(f"    {atom:>3}: {within:>5}/{len(bmrb_arr)} ({pct:.1f}%)")
 
     # Save raw data for further analysis
-    out_path = Path("data/lacs_comparison.npz")
+    out_path = Path("data/interim/lacs_comparison.npz")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     save_dict = {"entry_ids": np.array(entry_ids_compared)}
     for atom in atoms:

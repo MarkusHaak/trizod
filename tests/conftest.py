@@ -5,7 +5,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
-BMRB_DIR = DATA_DIR / "bmrb_entries"
+BMRB_DIR = DATA_DIR / "raw" / "bmrb_entries"
 SUBSET_DIR = TESTS_DIR / "bmrb_subset"
 SUBSET_IDS_FILE = TESTS_DIR / "quick_subset_ids.txt"
 
@@ -16,11 +16,18 @@ def has_bmrb_data():
 
 
 def ensure_subset_symlinks():
-    """Create symlinks for the test subset if they don't exist."""
+    """Create (or repair) symlinks for the test subset.
+
+    Rebuilds when the directory is empty or holds dangling links — e.g. after
+    the BMRB source dir has moved — instead of silently skipping.
+    """
     if not has_bmrb_data() or not SUBSET_IDS_FILE.exists():
         return
-    if SUBSET_DIR.is_dir() and any(SUBSET_DIR.iterdir()):
-        return  # already set up
+    existing = list(SUBSET_DIR.iterdir()) if SUBSET_DIR.is_dir() else []
+    if existing and all(p.exists() for p in existing):
+        return  # already set up and valid
+    for stale in existing:  # clear dangling/stale links before rebuilding
+        stale.unlink()
     SUBSET_DIR.mkdir(parents=True, exist_ok=True)
     ids = SUBSET_IDS_FILE.read_text().strip().split("\n")
     for bmrb_id in ids:
@@ -36,5 +43,5 @@ ensure_subset_symlinks()
 
 requires_bmrb_data = pytest.mark.skipif(
     not has_bmrb_data(),
-    reason="BMRB data not available (data/bmrb_entries/)",
+    reason="BMRB data not available (data/raw/bmrb_entries/)",
 )

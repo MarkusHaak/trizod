@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = str(Path(__file__).resolve().parents[2])
-CHEZOD = f"{ROOT}/data/chezod/protein_nmr_1325"
+CHEZOD = f"{ROOT}/data/external/chezod/protein_nmr_1325"
 NA = 999.0
 
 

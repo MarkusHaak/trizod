@@ -177,17 +177,17 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/bmrb_entries"),
+        default=Path("data/raw/bmrb_entries"),
     )
     parser.add_argument(
         "--panav-file",
         type=Path,
-        default=Path("data/panav_offsets.json"),
+        default=Path("data/external/panav_offsets.json"),
     )
     parser.add_argument(
         "--bmrb-lacs-dir",
         type=Path,
-        default=Path("data/bmrb_lacs"),
+        default=Path("data/external/bmrb_lacs"),
     )
     parser.add_argument(
         "--output",

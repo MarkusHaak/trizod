@@ -163,7 +163,7 @@ def main(argv=None):
         "--work-dir",
         type=Path,
         default=None,
-        help="dataset build dir (default: <root>/docs/260520/data)",
+        help="dataset build dir (default: <root>/data/interim/build)",
     )
     ap.add_argument(
         "--root",

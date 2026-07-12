@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyse duplicate/related BMRB entries sharing the same protein sequence.
 
-Uses pre-computed baseline JSONs (data/baseline/) which already contain
+Uses pre-computed baseline JSONs (data/interim/baseline/) which already contain
 per-tier filtered entries with sequence, conditions, and offsets. Enriches
 with entity composition from cached entries to classify bound vs unbound.
 
@@ -337,7 +337,7 @@ def main():
     parser.add_argument(
         "--baseline-dir",
         type=Path,
-        default=Path("data/baseline"),
+        default=Path("data/interim/baseline"),
     )
     parser.add_argument(
         "--cache-dir",
