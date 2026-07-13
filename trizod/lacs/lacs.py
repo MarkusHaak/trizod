@@ -94,10 +94,13 @@ _PRE_PRO = {
 }
 # fmt: on
 
-# Preceding-residue correction for 15N / 1HN (Ncorr in ordN.m).
-# Raw values with the systematic offset already subtracted
-# (N -= 1.486, HN -= 0.005 as in ordN.m lines 56-57).
-# Columns: H_corr, N_corr
+# Preceding-residue correction for 15N / 1HN. Columns: H_corr, N_corr.
+# WARNING: despite the name, these values do NOT match the ordN.m Ncorr table,
+# not even after the documented N -= 1.486 / HN -= 0.005 subtraction (e.g. Ala N
+# is +1.114 here vs -1.486 from ordN.m; Ile +1.314 vs +3.514). Their provenance
+# is unverified, and the N/HN path is not validated against BMRB (whose LACS
+# reports cover only CA/CB/HA/CO). Do NOT substitute ordN.m values without also
+# re-deriving systematic_corr in _compute_n_offset. See issue #17.
 # fmt: off
 _NCORR = {
     "A": (-0.095,  1.114),
@@ -185,8 +188,10 @@ def _robustfit(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e
             weights = new_weights
             break
         weights = new_weights
-        WX = X * weights[:, None]
-        beta, _, _, _ = np.linalg.lstsq(WX, weights * y, rcond=None)
+        # Weighted least squares: scale rows by sqrt(w) so lstsq minimizes
+        # sum(w * r^2) (as MATLAB robustfit does), not sum(w^2 * r^2).
+        sqrt_w = np.sqrt(weights)
+        beta, _, _, _ = np.linalg.lstsq(X * sqrt_w[:, None], sqrt_w * y, rcond=None)
 
     return beta[0], beta[1], weights  # intercept, slope, weights
 
