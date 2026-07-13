@@ -5,7 +5,7 @@ The pipeline filter ``--max-offset`` rejects (or partially masks) entries
 whose per-atom POTENCI/AIC residual offset exceeds a threshold:
   unfiltered  ∞,  tolerant 3.0 ppm,  moderate 3.0 ppm,  strict 2.0 ppm.
 
-This script loads the released ``data/release/<tier>/scores.json`` files
+This script loads the released ``data/interim/scored/<tier>/scores.json`` files
 (written with --rereference-mode both, so LACS pre-correction has already
 been applied) and asks:
 
@@ -17,7 +17,7 @@ been applied) and asks:
   4. Is the residual large enough to matter, or has LACS already
      handled the worst cases?
 
-Outputs (under docs/260520/):
+Outputs (under docs/archive/260520/):
   figures/max_offset_distribution.png — per-atom offset distributions
   figures/max_offset_filter_curve.png — entries removed vs threshold
   data/max_offset_summary.csv         — numeric summary
@@ -26,16 +26,16 @@ Outputs (under docs/260520/):
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-RELEASE = ROOT / "data" / "release"
-OUTDIR = ROOT / "docs" / "260520" / "figures"
-DATAOUT = ROOT / "docs" / "260520" / "data"
+from trizod import paths
+
+RELEASE = paths.INTERIM_SCORED
+OUTDIR = paths.ROOT / "docs" / "archive" / "260520" / "figures"
+DATAOUT = paths.INTERIM_BUILD
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 COLORS = {

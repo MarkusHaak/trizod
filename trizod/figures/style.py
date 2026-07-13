@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from trizod import paths
+
 # Stringency tiers, most-stringent first. The ordering is load-bearing:
 # the tiers are nested (strict ⊂ moderate ⊂ tolerant ⊂ unfiltered), so
 # ``classify_tier`` returns the FIRST (most stringent) tier an entry is in.
@@ -27,12 +29,12 @@ TEXT_BBOX = {"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.85}
 
 
 def repo_root() -> Path:
-    """Repository root, resolved from this file's location in the source tree.
+    """Repository root (delegates to :func:`trizod.paths.repo_root`).
 
-    Used to build default input/output paths when a figure module is run as a
-    standalone script from an editable install.
+    Kept as a local alias so figure modules run as standalone scripts can build
+    default input/output paths without importing :mod:`trizod.paths` directly.
     """
-    return Path(__file__).resolve().parents[2]
+    return paths.repo_root()
 
 
 def load_tier_sets(

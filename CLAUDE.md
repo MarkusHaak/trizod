@@ -96,7 +96,7 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `tests/test_str_writer.py` — re-referenced NMR-STAR emission
 - `tests/test_chezod_equality.py` — CheZOD reproduction regression
 - `tests/test_full_dataset_regression.py` — full-dataset regression (requires data/)
-- Pipeline/regression tests require BMRB data in `data/bmrb_entries/`
+- Pipeline/regression tests require BMRB data in `data/raw/bmrb_entries/`
 
 ## Documentation
 - `docs/pipeline.md` / `docs/pipeline-overview.md` — pipeline walkthrough + overview
@@ -105,14 +105,14 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `docs/filtering.md` — filter descriptions and default values per stringency level
 - `docs/dataset/` — dataset construction notes + datasheet (`dataset-construction.md`, `datasheet.md`)
 - `docs/archive/` — superseded / historical material
-- Date-stamped working snapshots: `docs/260520/`, `docs/260611/`, `docs/260623/`, `docs/260625/`
+- Historical working snapshots are archived under `docs/archive/` (dated `260415/` … `260625/`)
 
 ## Data
-- BMRB entries: `data/bmrb_entries/` (not committed)
-- Per-tier scored release: `data/release/<tier>/scores.json` (not committed) — consumed by `trizod dataset build` and the CheZOD validation scripts
-- CheZOD reference: `data/chezod/protein_nmr_1325/` (not committed)
-- Baselines: `data/baseline/` (not committed)
-- BMRB LACS reports: `data/bmrb_lacs/` (not committed)
-- PANAV offsets: `data/panav_offsets.json` (computed locally, not committed)
+- BMRB entries: `data/raw/bmrb_entries/` (not committed)
+- Per-tier scored release: `data/interim/scored/<tier>/scores.json` (not committed) — consumed by `trizod dataset build` and the CheZOD validation scripts
+- CheZOD reference: `data/external/chezod/protein_nmr_1325/` (not committed)
+- Baselines: `data/interim/baseline/` (not committed)
+- BMRB LACS reports: `data/external/bmrb_lacs/` (not committed)
+- PANAV offsets: `data/external/panav_offsets.json` (computed locally, not committed)
 - Test reference: `tests/reference/` (committed); test subset IDs: `tests/quick_subset_ids.txt` (committed)
 - External tools: `tools/panav.jar` (not committed, gitignored)

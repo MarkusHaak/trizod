@@ -8,8 +8,8 @@ positions), and (c) have enough comparable residues. Writes a small reference
 file with the CheZOD sequence + published Z-scores per entry so the test does
 not need the large gitignored allscores file.
 
-Inputs (gitignored): data/chezod/protein_nmr_1325/{allseqs1325.txt,
-allscores1325newest.txt}; docs/260611/data/chezod_verification/repro_baseline.json
+Inputs (gitignored): data/external/chezod/protein_nmr_1325/{allseqs1325.txt,
+allscores1325newest.txt}; data/interim/chezod_verification/repro_baseline.json
 (TriZOD potenci-only scores for the CheZOD subset).
 Output (committed): tests/reference/chezod_zscores_subset.json.
 
@@ -19,15 +19,13 @@ Run: uv run python scripts/validation/build_chezod_test_subset.py
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-CHEZOD = ROOT / "data" / "chezod" / "protein_nmr_1325"
-BASELINE = (
-    ROOT / "docs" / "260611" / "data" / "chezod_verification" / "repro_baseline.json"
-)
-BMRB = ROOT / "data" / "bmrb_entries"
-OUT = ROOT / "tests" / "reference" / "chezod_zscores_subset.json"
+from trizod import paths
+
+CHEZOD = paths.EXT_CHEZOD_1325
+BASELINE = paths.INTERIM_CHEZOD_VERIFICATION / "repro_baseline.json"
+BMRB = paths.RAW_BMRB
+OUT = paths.ROOT / "tests" / "reference" / "chezod_zscores_subset.json"
 
 NA = 999.0
 SELECT_TOL = 0.03  # margin below the test's atol=0.1

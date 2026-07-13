@@ -3,7 +3,7 @@
 
 Inputs
 ------
-* ``data/release/<tier>/scores.json`` — one JSON line per scored
+* ``data/interim/scored/<tier>/scores.json`` — one JSON line per scored
   (entryID, stID, entity_assemID, entityID) tuple.
 * ``tmp/bmrb_entries/<entryID>.pkl`` — pickled ``BmrbEntry`` objects from
   which we read assembly composition (used to flag bound complexes).
@@ -134,7 +134,7 @@ def main(argv=None):
         "--work-dir",
         type=Path,
         default=None,
-        help="dataset build dir (default: <root>/docs/260520/data)",
+        help="dataset build dir (default: <root>/data/interim/build)",
     )
     ap.add_argument(
         "--root",
@@ -173,7 +173,7 @@ def main(argv=None):
     all_rows = []
     raw_counts = {}
     for tier in TIERS:
-        df_t = load_tier_scores(tier, paths.release)
+        df_t = load_tier_scores(tier, paths.scored)
         raw_counts[tier] = len(df_t)
         all_rows.append(df_t)
     all_df = pd.concat(all_rows, ignore_index=True)

@@ -9,7 +9,7 @@ Following Reid Alderson's proposed approach (2026-04-01):
 
 Usage:
     uv run python scripts/benchmark_rereferencing.py
-    uv run python scripts/benchmark_rereferencing.py --output docs/260415/benchmark-rereferencing.md
+    uv run python scripts/benchmark_rereferencing.py --output docs/archive/260415/benchmark-rereferencing.md
 """
 
 import argparse

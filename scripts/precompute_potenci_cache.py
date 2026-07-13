@@ -2,7 +2,7 @@
 """Precompute POTENCI predictions and cache them for faster pipeline runs.
 
 Usage:
-    uv run python scripts/precompute_potenci_cache.py --input-dir data/bmrb_entries --cache-dir tmp
+    uv run python scripts/precompute_potenci_cache.py --input-dir data/raw/bmrb_entries --cache-dir tmp
     uv run python scripts/precompute_potenci_cache.py --input-dir tests/bmrb_subset --cache-dir tmp
 
 The cache is keyed by (seq, temperature, pH, ionic_strength) so it stays valid

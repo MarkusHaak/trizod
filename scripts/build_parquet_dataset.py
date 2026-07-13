@@ -116,12 +116,17 @@ def build(in_bundle: Path, out_path: Path) -> None:
     scores = read_jsonl(in_bundle / "scores" / "unfiltered" / "scores.json")
     print(f"loaded {len(scores)} scored chains (unfiltered = superset)")
 
-    reps = {t: read_fasta_ids(in_bundle / "train" / t / f"train_{t}_best.fasta") for t in TIER_ORDER}
+    reps = {
+        t: read_fasta_ids(in_bundle / "train" / t / f"train_{t}_best.fasta")
+        for t in TIER_ORDER
+    }
     pool = {}
     best_repr_map: dict[str, str] = {}
     quality_map: dict[str, float] = {}
     for t in TIER_ORDER:
-        members, best, quality = read_cluster_map(in_bundle / "train" / t / "clusters_best.tsv")
+        members, best, quality = read_cluster_map(
+            in_bundle / "train" / t / "clusters_best.tsv"
+        )
         pool[t] = members
         # unfiltered pool covers every pooled chain (pools nest); use it as canonical
         if t == "unfiltered":
@@ -133,13 +138,36 @@ def build(in_bundle: Path, out_path: Path) -> None:
     cols: dict[str, list] = {
         name: []
         for name in (
-            "id", "entry_id", "entity_id", "entity_assem_id", "st_id", "entity_name",
-            "sequence", "length", "gscores", "zscores", "k", "mask", "n_scored",
-            "split", "train_tier", "pool_tier", "cluster_repr", "quality",
-            "exp_method", "exp_method_subtype", "ph", "temperature", "ionic_strength",
-            "total_bbshifts", "bbshift_positions_post", "bbshift_types_post",
-            "citation_title", "citation_doi",
-            *OFF_FIELDS, *LACS_FIELDS,
+            "id",
+            "entry_id",
+            "entity_id",
+            "entity_assem_id",
+            "st_id",
+            "entity_name",
+            "sequence",
+            "length",
+            "gscores",
+            "zscores",
+            "k",
+            "mask",
+            "n_scored",
+            "split",
+            "train_tier",
+            "pool_tier",
+            "cluster_repr",
+            "quality",
+            "exp_method",
+            "exp_method_subtype",
+            "ph",
+            "temperature",
+            "ionic_strength",
+            "total_bbshifts",
+            "bbshift_positions_post",
+            "bbshift_types_post",
+            "citation_title",
+            "citation_doi",
+            *OFF_FIELDS,
+            *LACS_FIELDS,
         )
     }
 
@@ -249,6 +277,7 @@ def build(in_bundle: Path, out_path: Path) -> None:
 
     # summary
     from collections import Counter
+
     split_counts = Counter(cols["split"])
     tier_counts = Counter(t for t in cols["train_tier"] if t is not None)
     print(f"\nwrote {out_path}  ({out_path.stat().st_size / 1e6:.2f} MB)")
@@ -259,7 +288,9 @@ def build(in_bundle: Path, out_path: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--in-bundle", type=Path, required=True, help="path to trizod-dataset-2026-06/")
+    ap.add_argument(
+        "--in-bundle", type=Path, required=True, help="path to trizod-dataset-2026-06/"
+    )
     ap.add_argument("--out", type=Path, required=True, help="output .parquet path")
     args = ap.parse_args()
     build(args.in_bundle, args.out)

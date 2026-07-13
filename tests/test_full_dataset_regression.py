@@ -1,11 +1,11 @@
-"""Full-dataset regression: compare pipeline output against baselines in data/baseline/.
+"""Full-dataset regression: compare pipeline output against baselines in data/interim/baseline/.
 
 Run with:
     uv run pytest tests/test_full_dataset_regression.py -v
 
 Requires:
-    - BMRB data in data/bmrb_entries/
-    - Baseline files in data/baseline/ (unfiltered.json, tolerant.json, etc.)
+    - BMRB data in data/raw/bmrb_entries/
+    - Baseline files in data/interim/baseline/ (unfiltered.json, tolerant.json, etc.)
     - Precomputed POTENCI cache in tmp/potenci/ (optional but recommended for speed)
 """
 
@@ -16,10 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import DATA_DIR, requires_bmrb_data
+from tests.conftest import requires_bmrb_data
+from trizod import paths
 
-BASELINE_DIR = DATA_DIR / "baseline"
-BMRB_DIR = DATA_DIR / "bmrb_entries"
+BASELINE_DIR = paths.INTERIM_BASELINE
+BMRB_DIR = paths.RAW_BMRB
 
 FILTER_LEVELS = ["unfiltered", "tolerant", "moderate", "strict"]
 
@@ -37,7 +38,7 @@ def load_jsonl(path):
 @requires_bmrb_data
 @pytest.mark.skipif(
     not BASELINE_DIR.is_dir(),
-    reason="Baseline files not available (data/baseline/)",
+    reason="Baseline files not available (data/interim/baseline/)",
 )
 class TestFullDatasetRegression:
     @pytest.mark.parametrize("filter_level", FILTER_LEVELS)

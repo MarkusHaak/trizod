@@ -407,7 +407,7 @@ def main():
     parser.add_argument(
         "--baseline-dir",
         type=Path,
-        default=Path("data/baseline"),
+        default=Path("data/interim/baseline"),
         help="Directory with {tier}.json baseline files",
     )
     parser.add_argument(

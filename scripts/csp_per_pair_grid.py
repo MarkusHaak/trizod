@@ -2,8 +2,8 @@
 """Generate one CSP plot per bound/unbound pair for review.
 
 Output:
-    docs/260505/csp_pairs/<single>_vs_<bound>.png   (one per pair)
-    docs/260505/csp_pairs/index.md                  (sortable index)
+    docs/archive/260505/csp_pairs/<single>_vs_<bound>.png   (one per pair)
+    docs/archive/260505/csp_pairs/index.md                  (sortable index)
 
 Used to (a) sanity-check the CSP analysis and (b) optionally pick a more
 compelling headline example than FKBP12 for slide 9 of the talk.
@@ -75,8 +75,9 @@ def render_pair(seq, single_row, bound_row, csp, threshold, cache_dir, out_path)
 
     fig, ax = plt.subplots(figsize=(8, 3.5))
     ax.bar(residues, csp_plot, color=color)
-    ax.axhline(threshold, color="red", ls="--", lw=1.0,
-               label=f"threshold = {threshold:.3f}")
+    ax.axhline(
+        threshold, color="red", ls="--", lw=1.0, label=f"threshold = {threshold:.3f}"
+    )
     ax.set_xlabel("residue")
     ax.set_ylabel("CSP (ppm)")
     title = (
@@ -93,8 +94,11 @@ def render_pair(seq, single_row, bound_row, csp, threshold, cache_dir, out_path)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline-tolerant", type=Path,
-                        default=Path("data/baseline/tolerant.json"))
+    parser.add_argument(
+        "--baseline-tolerant",
+        type=Path,
+        default=Path("data/interim/baseline/tolerant.json"),
+    )
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
     args = parser.parse_args()
@@ -125,23 +129,29 @@ def main():
         name, max_csp, n_above = render_pair(
             seq, s, b, csp, threshold, args.cache_dir, out_path
         )
-        rendered.append({
-            "single": s["entryID"],
-            "bound": b["entryID"],
-            "name": name,
-            "max_csp": max_csp,
-            "n_above": n_above,
-            "filename": out_path.name,
-        })
+        rendered.append(
+            {
+                "single": s["entryID"],
+                "bound": b["entryID"],
+                "name": name,
+                "max_csp": max_csp,
+                "n_above": n_above,
+                "filename": out_path.name,
+            }
+        )
 
     rendered.sort(key=lambda r: -r["max_csp"] if not np.isnan(r["max_csp"]) else 0)
 
     index_path = args.out_dir / "index.md"
     with index_path.open("w") as f:
         f.write("# CSP per-pair review · sorted by max CSP descending\n\n")
-        f.write(f"Threshold = **{threshold:.3f} ppm** (trimmed-mean + SD across all pairs)\n\n")
+        f.write(
+            f"Threshold = **{threshold:.3f} ppm** (trimmed-mean + SD across all pairs)\n\n"
+        )
         f.write(f"{len(rendered)} pairs rendered.\n\n")
-        f.write("| Rank | Protein | apo | bound | max CSP | residues > threshold | plot |\n")
+        f.write(
+            "| Rank | Protein | apo | bound | max CSP | residues > threshold | plot |\n"
+        )
         f.write("|---:|---|---|---|---:|---:|---|\n")
         for i, r in enumerate(rendered, 1):
             n = (r["name"] or "?")[:50]

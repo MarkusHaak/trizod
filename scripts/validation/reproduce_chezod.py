@@ -14,7 +14,7 @@ Regenerate the potenci-only scores first (LACS recorded but NOT applied):
     # subset dir of CheZOD BMRB entries already built at tmp/chezod_subset/
     uv run python -m trizod.trizod --input-dir tmp/chezod_subset \
         --filter-defaults unfiltered --rereference-mode potenci-only \
-        --output-prefix docs/260611/data/chezod_verification/trizod_potenci_only \
+        --output-prefix data/interim/chezod_verification/trizod_potenci_only \
         --output-format json --no-progress --processes 8 --cache-dir tmp
 
 Outputs (gitignored): reproduce_summary.json, reproduce_genuine.csv.
@@ -26,22 +26,14 @@ from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 
+from trizod import paths
 from trizod.figures.chezod import load_chezod, load_trizod, summarize
 
-ROOT = Path(__file__).resolve().parents[2]
-CHEZOD = ROOT / "data" / "chezod" / "protein_nmr_1325"
-PO = (
-    ROOT
-    / "docs"
-    / "260611"
-    / "data"
-    / "chezod_verification"
-    / "trizod_potenci_only.json"
-)
-BOTH = ROOT / "data" / "release" / "unfiltered" / "scores.json"
-OUT = ROOT / "docs" / "260611" / "data" / "chezod_verification"
+CHEZOD = paths.EXT_CHEZOD_1325
+PO = paths.INTERIM_CHEZOD_VERIFICATION / "trizod_potenci_only.json"
+BOTH = paths.INTERIM_SCORED / "unfiltered" / "scores.json"
+OUT = paths.INTERIM_CHEZOD_VERIFICATION
 
 
 def main():

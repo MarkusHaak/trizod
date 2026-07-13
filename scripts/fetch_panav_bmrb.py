@@ -9,7 +9,7 @@ Setup:
 
 Usage:
     uv run python scripts/fetch_panav_bmrb.py
-    uv run python scripts/fetch_panav_bmrb.py --input-dir data/bmrb_entries --workers 8
+    uv run python scripts/fetch_panav_bmrb.py --input-dir data/raw/bmrb_entries --workers 8
 """
 
 import argparse
@@ -132,14 +132,14 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/bmrb_entries"),
-        help="Directory containing bmr* folders (default: data/bmrb_entries)",
+        default=Path("data/raw/bmrb_entries"),
+        help="Directory containing bmr* folders (default: data/raw/bmrb_entries)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/panav_offsets.json"),
-        help="Output JSON file (default: data/panav_offsets.json)",
+        default=Path("data/external/panav_offsets.json"),
+        help="Output JSON file (default: data/external/panav_offsets.json)",
     )
     parser.add_argument(
         "--panav-jar",

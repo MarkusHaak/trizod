@@ -30,12 +30,18 @@ from case_study_gscore_flips import score_entry  # noqa: E402
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, default=Path("data/baseline/tolerant.json"))
+    parser.add_argument(
+        "--baseline", type=Path, default=Path("data/interim/baseline/tolerant.json")
+    )
     parser.add_argument("--bmrb-cache", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument("--potenci-cache", type=Path, default=Path("tmp"))
     parser.add_argument("--max-scan", type=int, default=400)
-    parser.add_argument("--min-delta", type=float, default=0.05,
-                        help="Minimum mean |G_both - G_raw| to qualify as a 'real flipper'")
+    parser.add_argument(
+        "--min-delta",
+        type=float,
+        default=0.05,
+        help="Minimum mean |G_both - G_raw| to qualify as a 'real flipper'",
+    )
     parser.add_argument("--top-k", type=int, default=15)
     args = parser.parse_args()
 
@@ -85,27 +91,37 @@ def main():
             continue
         dominance = d_lacs / denom
 
-        results.append({
-            "entryID": eid,
-            "dominance": dominance,
-            "d_lacs": d_lacs,
-            "d_pot": d_pot,
-            "d_both": d_both,
-        })
+        results.append(
+            {
+                "entryID": eid,
+                "dominance": dominance,
+                "d_lacs": d_lacs,
+                "d_pot": d_pot,
+                "d_both": d_both,
+            }
+        )
 
         if len(results) % 50 == 0:
             print(f"  {len(results)} qualifying entries scanned...", file=sys.stderr)
 
     results.sort(key=lambda r: -r["dominance"])
 
-    print(f"\nTop {args.top_k} by LACS dominance (mean |Δ_lacs| / (mean |Δ_lacs| + mean |Δ_pot|)):")
-    print(f"{'entryID':>10}  {'dominance':>10}  {'|Δlacs|':>8}  {'|Δpot|':>8}  {'|Δboth|':>8}")
+    print(
+        f"\nTop {args.top_k} by LACS dominance (mean |Δ_lacs| / (mean |Δ_lacs| + mean |Δ_pot|)):"
+    )
+    print(
+        f"{'entryID':>10}  {'dominance':>10}  {'|Δlacs|':>8}  {'|Δpot|':>8}  {'|Δboth|':>8}"
+    )
     for r in results[: args.top_k]:
-        print(f"  {r['entryID']:>8}  {r['dominance']:>9.3f}  {r['d_lacs']:>8.3f}  {r['d_pot']:>8.3f}  {r['d_both']:>8.3f}")
+        print(
+            f"  {r['entryID']:>8}  {r['dominance']:>9.3f}  {r['d_lacs']:>8.3f}  {r['d_pot']:>8.3f}  {r['d_both']:>8.3f}"
+        )
 
     print(f"\nBottom {args.top_k} (POTENCI-dominant):")
-    for r in results[-args.top_k:]:
-        print(f"  {r['entryID']:>8}  {r['dominance']:>9.3f}  {r['d_lacs']:>8.3f}  {r['d_pot']:>8.3f}  {r['d_both']:>8.3f}")
+    for r in results[-args.top_k :]:
+        print(
+            f"  {r['entryID']:>8}  {r['dominance']:>9.3f}  {r['d_lacs']:>8.3f}  {r['d_pot']:>8.3f}  {r['d_both']:>8.3f}"
+        )
 
 
 if __name__ == "__main__":
