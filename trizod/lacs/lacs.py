@@ -185,8 +185,10 @@ def _robustfit(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e
             weights = new_weights
             break
         weights = new_weights
-        WX = X * weights[:, None]
-        beta, _, _, _ = np.linalg.lstsq(WX, weights * y, rcond=None)
+        # Weighted least squares: scale rows by sqrt(w) so lstsq minimizes
+        # sum(w * r^2) (as MATLAB robustfit does), not sum(w^2 * r^2).
+        sqrt_w = np.sqrt(weights)
+        beta, _, _, _ = np.linalg.lstsq(X * sqrt_w[:, None], sqrt_w * y, rcond=None)
 
     return beta[0], beta[1], weights  # intercept, slope, weights
 
