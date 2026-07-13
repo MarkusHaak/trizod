@@ -149,7 +149,7 @@ def main(argv=None) -> None:
     paths = resolve_paths(args.work_dir, args.root)
     train_fasta = args.train_fasta or (paths.mmseqs / f"train_{args.tier}_best.fasta")
     test_fasta = args.test_fasta or (paths.testset / "TriZOD_test_set.fasta")
-    scores_path = args.scores or (paths.release / args.tier / "scores.json")
+    scores_path = args.scores or (paths.scored / args.tier / "scores.json")
     out = args.out or paths.deploy_out
 
     for p in (train_fasta, test_fasta, scores_path):

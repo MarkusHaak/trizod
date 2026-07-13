@@ -33,7 +33,7 @@ def resolve_paths(work_dir=None, root=None) -> SimpleNamespace:
         root=layout.root,
         work_dir=work_dir,
         # repo-root inputs
-        release=layout.interim_scored,
+        scored=layout.interim_scored,
         pkl_dir=layout.pkl_dir,
         chezod117=layout.ext_chezod117 / "CheZOD117_test_set.fasta",
         chezod1325_txt=layout.ext_chezod_1325 / "allseqs1325.txt",

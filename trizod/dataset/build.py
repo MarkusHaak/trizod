@@ -173,7 +173,7 @@ def main(argv=None):
     all_rows = []
     raw_counts = {}
     for tier in TIERS:
-        df_t = load_tier_scores(tier, paths.release)
+        df_t = load_tier_scores(tier, paths.scored)
         raw_counts[tier] = len(df_t)
         all_rows.append(df_t)
     all_df = pd.concat(all_rows, ignore_index=True)

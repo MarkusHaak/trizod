@@ -151,7 +151,7 @@ def main(argv=None) -> None:
         reps = paths.mmseqs / f"train_{tier}.fasta"
         clu_best = paths.mmseqs / f"train_{tier}_clu_best.tsv"
         clu = paths.mmseqs / f"train_{tier}_clu.tsv"
-        scores = paths.release / tier / "scores.json"
+        scores = paths.scored / tier / "scores.json"
         for src, rel in [
             (best, f"train/{tier}/train_{tier}_best.fasta"),
             (reps, f"train/{tier}/train_{tier}.fasta"),
@@ -163,7 +163,7 @@ def main(argv=None) -> None:
                 raise SystemExit(f"missing required input: {src}")
             planned.append((src, rel))
         if args.include_str:
-            str_dir = paths.release / tier / "str"
+            str_dir = paths.scored / tier / "str"
             for sf in sorted(str_dir.glob("*.str")):
                 planned.append((sf, f"str/{tier}/{sf.name}"))
 
