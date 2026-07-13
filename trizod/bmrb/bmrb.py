@@ -375,7 +375,9 @@ class BmrbEntry:
         if entry_information:
             self.type = get_tag_vals(entry_information[0], "_Entry.Type", indices=0)
             self.title = get_tag_vals(entry_information[0], "_Entry.Title", indices=0)
-            self.details = get_tag_vals(entry_information[0], "_Entry.Title", indices=0)
+            self.details = get_tag_vals(
+                entry_information[0], "_Entry.Details", indices=0
+            )
             self.submission_date = get_tag_vals(
                 entry_information[0], "_Entry.Submission_date", indices=0
             )
