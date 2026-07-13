@@ -165,7 +165,7 @@ class SampleConditions:
         if "C" in self.temperature[1]:
             const0, const1, factor = 0.0, 273.15, 1.0
         elif "F" in self.temperature[1]:
-            const0, const1, factor = -32.0, 273.15, 1.8
+            const0, const1, factor = -32.0, 273.15, 5.0 / 9.0
         elif self.temperature[1] == "K":
             const0, const1, factor = 0.0, 0.0, 1.0
         elif assume_si:
@@ -182,7 +182,7 @@ class SampleConditions:
                 )
                 const0, const1, factor = 0.0, 273.15, 1.0
             elif 50 <= val <= 100:
-                const0, const1, factor = -32.0, 273.15, 1.8
+                const0, const1, factor = -32.0, 273.15, 5.0 / 9.0
                 logging.getLogger("trizod.bmrb").info(
                     f"Low temperature: {val}, assuming unit should be °F"
                 )
