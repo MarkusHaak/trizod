@@ -45,6 +45,52 @@ SAMPLE_FRACTION = 0.25
 CHEZOD_PREFIX = "CHEZOD__"
 
 
+def _entry_sort_key(entry_id: str):
+    """Deterministic key so the lowest-numbered entry ID sharing a sequence is
+    chosen. Splits on '_'; numeric parts sort before non-numeric parts."""
+    key = []
+    for part in entry_id.split("_"):
+        key.append((0, int(part), "") if part.isdigit() else (1, 0, part))
+    return tuple(key)
+
+
+def resolve_pinned_testset(
+    pinned: dict[str, str], strict: dict[str, str]
+) -> tuple[dict[str, str], dict]:
+    """Resolve pinned test sequences against the current strict-tier pool.
+
+    Each pinned sequence maps to its pinned entry ID if that entry is still in
+    the strict pool, else to the lowest-numbered current entry sharing the
+    identical sequence. A pinned sequence absent from the pool is dropped.
+    """
+    seq_to_ids: dict[str, list[str]] = {}
+    for eid, seq in strict.items():
+        seq_to_ids.setdefault(seq, []).append(eid)
+    for seq in seq_to_ids:
+        seq_to_ids[seq].sort(key=_entry_sort_key)
+
+    test_recs: dict[str, str] = {}
+    dropped: list[str] = []
+    substitutions: list[list[str]] = []
+    for pid, pseq in pinned.items():
+        ids = seq_to_ids.get(pseq)
+        if not ids:
+            dropped.append(pid)
+            continue
+        chosen = pid if pid in ids else ids[0]
+        if chosen != pid:
+            substitutions.append([pid, chosen])
+        test_recs[chosen] = pseq
+
+    info = {
+        "pinned_total": len(pinned),
+        "resolved": len(test_recs),
+        "dropped": dropped,
+        "substitutions": substitutions,
+    }
+    return test_recs, info
+
+
 def chezod1325_records(path: Path) -> dict[str, str]:
     """Parse allseqs1325.txt ('<BMRB_ID> <sequence>' per line) into id->seq."""
     recs: dict[str, str] = {}
