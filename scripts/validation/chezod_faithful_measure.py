@@ -13,12 +13,12 @@ from __future__ import annotations
 import json
 import sys
 from difflib import SequenceMatcher
-from pathlib import Path
 
 import numpy as np
 
-ROOT = str(Path(__file__).resolve().parents[2])
-CHEZOD = f"{ROOT}/data/external/chezod/protein_nmr_1325"
+from trizod import paths
+
+CHEZOD = str(paths.EXT_CHEZOD_1325)
 NA = 999.0
 
 

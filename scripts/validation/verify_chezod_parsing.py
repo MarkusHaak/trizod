@@ -36,17 +36,17 @@ from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
 
-ROOT = Path(__file__).resolve().parents[2]
-CHEZOD = ROOT / "data" / "external" / "chezod" / "protein_nmr_1325"
+from trizod import paths
+
+CHEZOD = paths.EXT_CHEZOD_1325
 SEQS = CHEZOD / "allseqs1325.txt"
 SCORES = CHEZOD / "allscores1325newest.txt"
-TRIZOD_SCORES = ROOT / "data" / "interim" / "scored" / "unfiltered" / "scores.json"
-OUT = ROOT / "data" / "interim" / "chezod_verification"
+TRIZOD_SCORES = paths.INTERIM_SCORED / "unfiltered" / "scores.json"
+OUT = paths.INTERIM_CHEZOD_VERIFICATION
 
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 NA = 999.0

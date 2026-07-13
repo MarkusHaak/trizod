@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LogNorm
 
+from trizod import paths
 from trizod.figures.style import (
     TEXT_BBOX,
     TIER_COLORS,
@@ -282,10 +283,10 @@ def plot_lacs_effect(pkl_path, baseline_dir, out_dir, data_out_dir):
 def main():
     root = repo_root()
     plot_lacs_effect(
-        pkl_path=root / "tmp" / "lacs_comparison_results.pkl",
-        baseline_dir=root / "data" / "interim" / "baseline",
+        pkl_path=paths.TMP / "lacs_comparison_results.pkl",
+        baseline_dir=paths.INTERIM_BASELINE,
         out_dir=root / "docs" / "archive" / "260520" / "figures",
-        data_out_dir=root / "data" / "interim" / "build",
+        data_out_dir=paths.INTERIM_BUILD,
     )
 
 

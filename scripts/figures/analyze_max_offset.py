@@ -26,16 +26,16 @@ Outputs (under docs/archive/260520/):
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-RELEASE = ROOT / "data" / "interim" / "scored"
-OUTDIR = ROOT / "docs" / "archive" / "260520" / "figures"
-DATAOUT = ROOT / "data" / "interim" / "build"
+from trizod import paths
+
+RELEASE = paths.INTERIM_SCORED
+OUTDIR = paths.ROOT / "docs" / "archive" / "260520" / "figures"
+DATAOUT = paths.INTERIM_BUILD
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 COLORS = {

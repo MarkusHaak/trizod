@@ -16,10 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import DATA_DIR, requires_bmrb_data
+from tests.conftest import requires_bmrb_data
+from trizod import paths
 
-BASELINE_DIR = DATA_DIR / "interim" / "baseline"
-BMRB_DIR = DATA_DIR / "raw" / "bmrb_entries"
+BASELINE_DIR = paths.INTERIM_BASELINE
+BMRB_DIR = paths.RAW_BMRB
 
 FILTER_LEVELS = ["unfiltered", "tolerant", "moderate", "strict"]
 

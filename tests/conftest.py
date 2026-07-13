@@ -2,10 +2,11 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from trizod import paths
+
 TESTS_DIR = Path(__file__).resolve().parent
-DATA_DIR = PROJECT_ROOT / "data"
-BMRB_DIR = DATA_DIR / "raw" / "bmrb_entries"
+DATA_DIR = paths.DATA
+BMRB_DIR = paths.RAW_BMRB
 SUBSET_DIR = TESTS_DIR / "bmrb_subset"
 SUBSET_IDS_FILE = TESTS_DIR / "quick_subset_ids.txt"
 

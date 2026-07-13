@@ -26,15 +26,14 @@ from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 
+from trizod import paths
 from trizod.figures.chezod import load_chezod, load_trizod, summarize
 
-ROOT = Path(__file__).resolve().parents[2]
-CHEZOD = ROOT / "data" / "external" / "chezod" / "protein_nmr_1325"
-PO = ROOT / "data" / "interim" / "chezod_verification" / "trizod_potenci_only.json"
-BOTH = ROOT / "data" / "interim" / "scored" / "unfiltered" / "scores.json"
-OUT = ROOT / "data" / "interim" / "chezod_verification"
+CHEZOD = paths.EXT_CHEZOD_1325
+PO = paths.INTERIM_CHEZOD_VERIFICATION / "trizod_potenci_only.json"
+BOTH = paths.INTERIM_SCORED / "unfiltered" / "scores.json"
+OUT = paths.INTERIM_CHEZOD_VERIFICATION
 
 
 def main():

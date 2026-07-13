@@ -19,13 +19,13 @@ Run: uv run python scripts/validation/build_chezod_test_subset.py
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-CHEZOD = ROOT / "data" / "external" / "chezod" / "protein_nmr_1325"
-BASELINE = ROOT / "data" / "interim" / "chezod_verification" / "repro_baseline.json"
-BMRB = ROOT / "data" / "raw" / "bmrb_entries"
-OUT = ROOT / "tests" / "reference" / "chezod_zscores_subset.json"
+from trizod import paths
+
+CHEZOD = paths.EXT_CHEZOD_1325
+BASELINE = paths.INTERIM_CHEZOD_VERIFICATION / "repro_baseline.json"
+BMRB = paths.RAW_BMRB
+OUT = paths.ROOT / "tests" / "reference" / "chezod_zscores_subset.json"
 
 NA = 999.0
 SELECT_TOL = 0.03  # margin below the test's atol=0.1
