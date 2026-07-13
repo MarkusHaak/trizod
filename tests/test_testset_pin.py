@@ -1,9 +1,11 @@
+import json
+
 import pytest
 
 from trizod.dataset import testset
 from trizod.dataset.paths import resolve_paths
 from trizod.dataset.testset import resolve_pinned_testset
-from trizod.io.fasta import count_fasta, read_fasta
+from trizod.io.fasta import count_fasta, read_fasta, write_fasta
 
 
 def test_pinned_testset_path_and_file_present():
@@ -65,9 +67,7 @@ def _setup_root_and_wd(tmp_path, pin_records, strict_records):
     wd = tmp_path / "wd"
     pin_dir = root / "trizod" / "dataset" / "pinned"
     pin_dir.mkdir(parents=True)
-    with (pin_dir / "TriZOD_test_set.fasta").open("w") as fh:
-        for rid, seq in pin_records.items():
-            fh.write(f">{rid}\n{seq}\n")
+    write_fasta(pin_records, pin_dir / "TriZOD_test_set.fasta")
     strict_dir = wd / "final_dataset" / "strict"
     strict_dir.mkdir(parents=True)
     with (strict_dir / "strict.fasta").open("w") as fh:
@@ -94,3 +94,24 @@ def test_main_missing_pin_errors(tmp_path):
     (wd / "final_dataset" / "strict" / "strict.fasta").write_text(">1_1_1_1\nAA\n")
     with pytest.raises(SystemExit):
         testset.main(["--work-dir", str(wd), "--root", str(root)])
+
+
+def test_duplicate_sequence_pin_raises():
+    # Two distinct pinned IDs carry the same sequence but only one strict entry
+    # has it, so both resolve to the same entry. This must fail loudly (a real
+    # exception, not a bare assert that -O would strip) rather than silently
+    # collapsing the two records into one.
+    pinned = {"999_1_1_1": "AAAA", "888_1_1_1": "AAAA"}
+    strict = {"100_1_1_1": "AAAA"}
+    with pytest.raises(ValueError, match="unique sequences"):
+        resolve_pinned_testset(pinned, strict)
+
+
+def test_write_pin_writes_fasta_and_provenance(tmp_path):
+    pin_path = tmp_path / "pinned" / "TriZOD_test_set.fasta"
+    testset._write_pin(pin_path, {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"})
+    assert read_fasta(pin_path) == {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"}
+    prov = json.loads(pin_path.with_suffix(".provenance.json").read_text())
+    assert prov["count"] == 2
+    assert prov["mode"] == "redraw"
+    assert prov["seed"] == testset.SEED

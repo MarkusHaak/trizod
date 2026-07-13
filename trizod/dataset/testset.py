@@ -42,6 +42,7 @@ import argparse
 import datetime
 import json
 import random
+import shutil
 from pathlib import Path
 
 from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
@@ -58,7 +59,7 @@ def _entry_sort_key(entry_id: str):
     chosen. Splits on '_'; numeric parts sort before non-numeric parts."""
     key = []
     for part in entry_id.split("_"):
-        key.append((0, int(part), "") if part.isdigit() else (1, 0, part))
+        key.append((0, int(part)) if part.isdigit() else (1, part))
     return tuple(key)
 
 
@@ -74,8 +75,6 @@ def resolve_pinned_testset(
     seq_to_ids: dict[str, list[str]] = {}
     for eid, seq in strict.items():
         seq_to_ids.setdefault(seq, []).append(eid)
-    for seq in seq_to_ids:
-        seq_to_ids[seq].sort(key=_entry_sort_key)
 
     test_recs: dict[str, str] = {}
     dropped: list[str] = []
@@ -85,13 +84,14 @@ def resolve_pinned_testset(
         if not ids:
             dropped.append(pid)
             continue
-        chosen = pid if pid in ids else ids[0]
+        chosen = pid if pid in ids else min(ids, key=_entry_sort_key)
         if chosen != pid:
             substitutions.append([pid, chosen])
-        assert chosen not in test_recs, (
-            f"two pinned sequences resolved to the same entry {chosen}; "
-            f"the pin file must have unique sequences"
-        )
+        if chosen in test_recs:
+            raise ValueError(
+                f"two pinned sequences resolved to the same entry {chosen}; "
+                f"the pin file must have unique sequences"
+            )
         test_recs[chosen] = pseq
 
     info = {
@@ -113,11 +113,29 @@ def chezod1325_records(path: Path) -> dict[str, str]:
     return recs
 
 
+def _easy_cluster(in_fa, pref, work, min_seq_id, log, *, append=False) -> None:
+    """Run ``mmseqs easy-cluster`` at ``min_seq_id`` identity and 80% coverage."""
+    run(
+        [
+            "mmseqs",
+            "easy-cluster",
+            str(in_fa),
+            str(pref),
+            str(work),
+            "--min-seq-id",
+            str(min_seq_id),
+            "-c",
+            "0.8",
+            *COMMON,
+        ],
+        log,
+        append=append,
+    )
+
+
 def _redraw(paths, out) -> dict[str, str]:
     """Seeded 30/80 -> sample -> 50/80 recipe. Writes the fasta/clu/summary and
     returns {entry_id: sequence} for the redrawn test set."""
-    import shutil
-
     strict_fasta = paths.final_dataset / "strict" / "strict.fasta"
     tmp = out / "_tmp"
     if tmp.exists():
@@ -131,39 +149,25 @@ def _redraw(paths, out) -> dict[str, str]:
 
     # ---- Step 1: cluster strict + CheZOD @30/80 ----
     step1_in = tmp / "strict_plus_chezod.fasta"
-    with step1_in.open("w") as fh:
-        for rid, seq in strict.items():
-            fh.write(f">{rid}\n{seq}\n")
-        for rid, seq in chezod.items():
-            fh.write(f">{CHEZOD_PREFIX}{rid}\n{seq}\n")
+    step1_recs = {
+        **strict,
+        **{f"{CHEZOD_PREFIX}{rid}": seq for rid, seq in chezod.items()},
+    }
+    write_fasta(step1_recs, step1_in)
     pref1 = tmp / "c30"
-    run(
-        [
-            "mmseqs",
-            "easy-cluster",
-            str(step1_in),
-            str(pref1),
-            str(tmp / "w30"),
-            "--min-seq-id",
-            "0.3",
-            "-c",
-            "0.8",
-            *COMMON,
-        ],
-        out / "build_test_set.log",
-    )
+    _easy_cluster(step1_in, pref1, tmp / "w30", 0.3, out / "build_test_set.log")
     groups30 = cluster_tsv_groups(Path(str(pref1) + "_cluster.tsv"))
 
     # ---- Step 2: CheZOD-free clusters + their strict members ----
     free_clusters: dict[str, list[str]] = {}
     n_chezod_touch = 0
     for rep, members in groups30.items():
+        # Past this guard no member carries the CheZOD prefix, so every member
+        # of the cluster is a strict sequence.
         if any(m.startswith(CHEZOD_PREFIX) for m in members):
             n_chezod_touch += 1
             continue
-        strict_members = [m for m in members if not m.startswith(CHEZOD_PREFIX)]
-        if strict_members:
-            free_clusters[rep] = strict_members
+        free_clusters[rep] = members
     print(
         f"30/80 clusters: {len(groups30)} "
         f"({n_chezod_touch} CheZOD-touching, {len(free_clusters)} CheZOD-free)"
@@ -189,21 +193,8 @@ def _redraw(paths, out) -> dict[str, str]:
     step4_in = tmp / "sampled_members.fasta"
     write_fasta({m: strict[m] for m in sampled_members}, step4_in)
     pref2 = tmp / "c50"
-    run(
-        [
-            "mmseqs",
-            "easy-cluster",
-            str(step4_in),
-            str(pref2),
-            str(tmp / "w50"),
-            "--min-seq-id",
-            "0.5",
-            "-c",
-            "0.8",
-            *COMMON,
-        ],
-        out / "build_test_set.log",
-        append=True,
+    _easy_cluster(
+        step4_in, pref2, tmp / "w50", 0.5, out / "build_test_set.log", append=True
     )
     rep_fasta = Path(str(pref2) + "_rep_seq.fasta")
     clu_tsv = Path(str(pref2) + "_cluster.tsv")
@@ -213,7 +204,8 @@ def _redraw(paths, out) -> dict[str, str]:
     write_fasta(test_recs, out_fasta)
     shutil.copy2(clu_tsv, out / "TriZOD_test_set_clu.tsv")
 
-    n_members = sum(1 for ln in clu_tsv.open() if ln.strip())
+    with clu_tsv.open() as fh:
+        n_members = sum(1 for ln in fh if ln.strip())
     summary = {
         "seed": SEED,
         "sample_fraction": SAMPLE_FRACTION,
@@ -232,7 +224,7 @@ def _redraw(paths, out) -> dict[str, str]:
     return test_recs
 
 
-def _write_pin(pin_path, test_recs: dict[str, str], extra: dict | None = None) -> None:
+def _write_pin(pin_path, test_recs: dict[str, str]) -> None:
     """Overwrite the committed pin FASTA + provenance sidecar."""
     pin_path.parent.mkdir(parents=True, exist_ok=True)
     write_fasta(test_recs, pin_path)
@@ -241,9 +233,8 @@ def _write_pin(pin_path, test_recs: dict[str, str], extra: dict | None = None) -
         "seed": SEED,
         "sample_fraction": SAMPLE_FRACTION,
         "written": datetime.date.today().isoformat(),
+        "mode": "redraw",
     }
-    if extra:
-        prov.update(extra)
     pin_path.with_suffix(".provenance.json").write_text(
         json.dumps(prov, indent=2) + "\n"
     )
@@ -276,7 +267,7 @@ def main(argv=None) -> None:
 
     if args.redraw:
         test_recs = _redraw(paths, out)
-        _write_pin(paths.pinned_testset, test_recs, extra={"mode": "redraw"})
+        _write_pin(paths.pinned_testset, test_recs)
         print(f"Re-pinned {len(test_recs)} sequences -> {paths.pinned_testset}")
         return
 
