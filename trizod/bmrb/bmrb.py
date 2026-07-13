@@ -209,7 +209,7 @@ class SampleConditions:
         elif assume_si:
             const1, factor = 0.0, 1.0
             logging.getLogger("trizod.bmrb").info(
-                f"Ionic strength unit unknown: {self.ionic_strength[1]}, assuming K"
+                f"Ionic strength unit unknown: {self.ionic_strength[1]}, assuming M"
             )
         else:
             return np.nan
