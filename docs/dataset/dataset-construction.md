@@ -73,6 +73,20 @@ then POTENCI/AIC residual correction, `--rereference-mode both`), and scored
 → `docs/260520/data/testset/TriZOD_test_set.fasta`. CheZOD117 (the external
 benchmark) is **not** rebuilt; it stays fixed.
 
+**The test set is now pinned.** The seeded recipe above only needs to run
+once; its 342 representatives are committed at
+`trizod/dataset/pinned/TriZOD_test_set.fasta`. The pinned 342 is not the same
+draw as the 344 described above: it comes from the 2026-07-13 post-fix
+rebuild (after the F→K #11, entry-details #12, and LACS robustfit fixes),
+which reran the same seeded recipe over the corrected strict tier and
+supersedes the earlier 344-representative draw. By default, `trizod dataset
+test-set` emits that pinned set, resolving each pinned sequence against the
+*current* strict-tier pool (dropping any that have since been filtered out,
+substituting an identical-sequence entry ID where the original was renamed).
+Run `trizod dataset test-set --redraw` to re-run the seeded recipe from
+scratch and overwrite the pin — only needed when deliberately regenerating
+the test set (e.g. after a BMRB refresh).
+
 ## 4. Redundancy reduction (two-stage leakage removal + clustering)
 
 `run_mmseqs_pipeline.py`, against the held-out test sets **CheZOD117 (115) +

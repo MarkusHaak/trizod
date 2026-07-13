@@ -375,11 +375,19 @@ def _dataset_build(
 def _dataset_testset(
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
     root: Optional[str] = typer.Option(None, "--root"),
+    redraw: bool = typer.Option(
+        False,
+        "--redraw",
+        help="Redraw the seeded test set and overwrite the committed pin.",
+    ),
 ):
-    """Recreate the seeded, CheZOD-free TriZOD test set (-> testset/)."""
+    """Emit the pinned TriZOD test set (-> testset/); --redraw re-establishes the pin."""
     from trizod.dataset import testset
 
-    testset.main(_wd_argv(work_dir, root))
+    argv = _wd_argv(work_dir, root)
+    if redraw:
+        argv.append("--redraw")
+    testset.main(argv)
 
 
 @dataset_app.command("redundancy")
