@@ -95,34 +95,43 @@ _PRE_PRO = {
 # fmt: on
 
 # Preceding-residue correction for 15N / 1HN. Columns: H_corr, N_corr.
-# WARNING: despite the name, these values do NOT match the ordN.m Ncorr table,
-# not even after the documented N -= 1.486 / HN -= 0.005 subtraction (e.g. Ala N
-# is +1.114 here vs -1.486 from ordN.m; Ile +1.314 vs +3.514). Their provenance
-# is unverified, and the N/HN path is not validated against BMRB (whose LACS
-# reports cover only CA/CB/HA/CO). Do NOT substitute ordN.m values without also
-# re-deriving systematic_corr in _compute_n_offset. See issue #17.
+# These are the BMRB ordN.m `Ncorr` table with the documented systematic offset
+# subtracted: N_corr = Ncorr_N_raw - 1.486, H_corr = Ncorr_HN_raw - 0.005
+# (raw table, AA order ACDEFGHIKLMNPQRSTVWY:
+#   N_raw  = 0.0 3.5 1.6 2.0 3.2 0.8 2.6 5.0 2.4 1.8 1.9 1.5 1.2 2.1 2.2 2.7 3.2 4.7 3.6 3.6
+#   HN_raw = 0.00 0.17 0.04 0.10 0.04 -0.04 0.13 0.13 0.08 0.02 0.06 0.04 0.16 0.10 0.10 0.08 0.09 0.14 -0.08 0.01).
+# Issue #17: a prior hand-entered table diverged from ordN.m (e.g. Ala N was
+# +1.114 vs -1.486 here); on 600 BMRB entries the ordN.m values roughly halve
+# the residual N-offset bias and improve agreement with PANAV (r 0.94->0.96),
+# and remove a composition-dependent artifact (see tests/test_lacs.py).
+# The post-fit `systematic_corr` (0.465 N, 0.049 HN) in _compute_n_offset are
+# ordN.m's own constants and are kept unchanged. NOTE: Wang & Markley 2009
+# defines the offset as -b with no post-fit constant, so ordN.m's constants are
+# an undocumented addition; whether to reduce them toward 0 is a separate open
+# calibration question requiring structure-based N ground truth (RefDB), tracked
+# in issue #17 -- do NOT conflate it with this table fix.
 # fmt: off
 _NCORR = {
-    "A": (-0.095,  1.114),
-    "C": (-0.075,  0.714),
-    "D": (-0.095,  0.314),
-    "E": (-0.015,  0.914),
-    "F": ( 0.105, -0.386),
-    "G": ( 0.055, -0.586),
-    "H": (-0.015, -0.486),
-    "I": (-0.125,  1.314),
-    "K": ( 0.045,  0.614),
-    "L": (-0.045,  0.014),
-    "M": (-0.035,  0.414),
-    "N": (-0.035, -0.486),
-    "P": (-0.065,  0.514),
-    "Q": (-0.035,  0.114),
-    "R": (-0.035,  0.114),
-    "S": (-0.015,  0.314),
-    "T": (-0.065,  1.514),
-    "V": (-0.055,  0.914),
-    "W": ( 0.095, -0.186),
-    "Y": (-0.045, -0.286),
+    "A": (-0.005, -1.486),
+    "C": ( 0.165,  2.014),
+    "D": ( 0.035,  0.114),
+    "E": ( 0.095,  0.514),
+    "F": ( 0.035,  1.714),
+    "G": (-0.045, -0.686),
+    "H": ( 0.125,  1.114),
+    "I": ( 0.125,  3.514),
+    "K": ( 0.075,  0.914),
+    "L": ( 0.015,  0.314),
+    "M": ( 0.055,  0.414),
+    "N": ( 0.035,  0.014),
+    "P": ( 0.155, -0.286),
+    "Q": ( 0.095,  0.614),
+    "R": ( 0.095,  0.714),
+    "S": ( 0.075,  1.214),
+    "T": ( 0.085,  1.714),
+    "V": ( 0.135,  3.214),
+    "W": (-0.085,  2.114),
+    "Y": ( 0.005,  2.114),
 }
 # fmt: on
 
