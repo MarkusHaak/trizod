@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Construct the TriZOD test set from the current strict-tier sequences.
+"""Construct or emit the TriZOD test set.
 
-Reproduces the original TriZOD test-set recipe (Senoner & Heinzinger, 2024) on
-the *current* dataset snapshot, with a FIXED SEED so it is reproducible (the
-original 2024 draw was unseeded and could not be regenerated):
+DEFAULT mode: emit the committed pin. Loads the pinned test set from
+``trizod/dataset/pinned/TriZOD_test_set.fasta`` and resolves it against the
+*current* strict-tier pool (``trizod.dataset.testset.resolve_pinned_testset``,
+no mmseqs involved) so entry IDs stay valid as the dataset snapshot evolves.
+
+``--redraw`` mode: reproduces the original TriZOD test-set recipe (Senoner &
+Heinzinger, 2024) on the *current* dataset snapshot, with a FIXED SEED so it
+is reproducible (the original 2024 draw was unseeded and could not be
+regenerated), and OVERWRITES the committed pin with the result:
 
   1. Cluster the strict unique sequences together with all CheZOD sequences
      (CheZOD117 + CheZOD1325) at 30% id / 80% cov.
@@ -19,21 +25,23 @@ in-distribution TriZOD test set is. The result is written to
 TriZOD-test leakage target.
 
 Outputs (``<work-dir>/testset/``):
-  TriZOD_test_set.fasta      one record per 50/80 representative
-  TriZOD_test_set_clu.tsv    50/80 cluster membership (representative, member)
+  TriZOD_test_set.fasta      one record per representative (pinned or redrawn)
   build_test_set_summary.json
+  (``--redraw`` additionally writes TriZOD_test_set_clu.tsv: 50/80 cluster
+  membership, and overwrites the committed pin + its provenance sidecar)
 
 Usage
 -----
     uv run python -m trizod.dataset.testset [--work-dir DIR] [--root DIR]
+    uv run python -m trizod.dataset.testset --redraw [--work-dir DIR] [--root DIR]
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import random
-import shutil
 from pathlib import Path
 
 from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
@@ -101,29 +109,15 @@ def chezod1325_records(path: Path) -> dict[str, str]:
     return recs
 
 
-def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
-        "--work-dir",
-        type=Path,
-        default=None,
-        help="dataset build dir (default: <root>/data/interim/build)",
-    )
-    ap.add_argument(
-        "--root",
-        type=Path,
-        default=None,
-        help="repository root (default: auto-detected)",
-    )
-    args = ap.parse_args(argv)
-    paths = resolve_paths(args.work_dir, args.root)
-    strict_fasta = paths.final_dataset / "strict" / "strict.fasta"
-    out = paths.testset
-    tmp = out / "_tmp"
+def _redraw(paths, out) -> dict[str, str]:
+    """Seeded 30/80 -> sample -> 50/80 recipe. Writes the fasta/clu/summary and
+    returns {entry_id: sequence} for the redrawn test set."""
+    import shutil
 
+    strict_fasta = paths.final_dataset / "strict" / "strict.fasta"
+    tmp = out / "_tmp"
     if tmp.exists():
         shutil.rmtree(tmp)
-    out.mkdir(parents=True, exist_ok=True)
     tmp.mkdir(parents=True, exist_ok=True)
 
     strict = read_fasta(strict_fasta)
@@ -231,11 +225,85 @@ def main(argv=None) -> None:
     }
     (out / "build_test_set_summary.json").write_text(json.dumps(summary, indent=2))
 
-    print(
-        f"\nTriZOD test set: {len(test_recs)} representatives "
-        f"({n_members} members) -> {out_fasta}"
+    return test_recs
+
+
+def _write_pin(pin_path, test_recs: dict[str, str], extra: dict | None = None) -> None:
+    """Overwrite the committed pin FASTA + provenance sidecar."""
+    pin_path.parent.mkdir(parents=True, exist_ok=True)
+    write_fasta(test_recs, pin_path)
+    prov = {
+        "count": len(test_recs),
+        "seed": SEED,
+        "sample_fraction": SAMPLE_FRACTION,
+        "written": datetime.date.today().isoformat(),
+    }
+    if extra:
+        prov.update(extra)
+    pin_path.with_suffix(".provenance.json").write_text(
+        json.dumps(prov, indent=2) + "\n"
     )
-    print(f"Summary: {out / 'build_test_set_summary.json'}")
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="dataset build dir (default: <root>/data/interim/build)",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repository root (default: auto-detected)",
+    )
+    ap.add_argument(
+        "--redraw",
+        action="store_true",
+        help="Redraw the seeded test set and OVERWRITE the committed "
+        "pin (default: emit the committed pin).",
+    )
+    args = ap.parse_args(argv)
+    paths = resolve_paths(args.work_dir, args.root)
+    out = paths.testset
+    out.mkdir(parents=True, exist_ok=True)
+
+    if args.redraw:
+        test_recs = _redraw(paths, out)
+        _write_pin(paths.pinned_testset, test_recs, extra={"mode": "redraw"})
+        print(f"Re-pinned {len(test_recs)} sequences -> {paths.pinned_testset}")
+        return
+
+    if not paths.pinned_testset.exists():
+        raise SystemExit(
+            f"Pinned test set not found at {paths.pinned_testset}. "
+            f"Run `trizod dataset test-set --redraw` to establish it."
+        )
+
+    strict = read_fasta(paths.final_dataset / "strict" / "strict.fasta")
+    pinned = read_fasta(paths.pinned_testset)
+    test_recs, info = resolve_pinned_testset(pinned, strict)
+
+    write_fasta(test_recs, out / "TriZOD_test_set.fasta")
+    summary = {"mode": "pinned", **info}
+    (out / "build_test_set_summary.json").write_text(json.dumps(summary, indent=2))
+
+    if info["dropped"]:
+        print(
+            f"WARNING: {len(info['dropped'])} pinned sequences are no longer in "
+            f"the strict pool and were dropped: {info['dropped']}"
+        )
+    if info["substitutions"]:
+        print(
+            f"NOTE: {len(info['substitutions'])} pinned representatives were "
+            f"substituted by the lowest-numbered entry with the same sequence."
+        )
+    print(
+        f"TriZOD test set (pinned): {len(test_recs)} sequences -> "
+        f"{out / 'TriZOD_test_set.fasta'}"
+    )
 
 
 if __name__ == "__main__":

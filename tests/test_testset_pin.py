@@ -1,6 +1,9 @@
+import pytest
+
+from trizod.dataset import testset
 from trizod.dataset.paths import resolve_paths
 from trizod.dataset.testset import resolve_pinned_testset
-from trizod.io.fasta import count_fasta
+from trizod.io.fasta import count_fasta, read_fasta
 
 
 def test_pinned_testset_path_and_file_present():
@@ -44,3 +47,39 @@ def test_pinned_stable_under_representative_reshuffle():
     r1, _ = resolve_pinned_testset(pinned, strict_v1)
     r2, _ = resolve_pinned_testset(pinned, strict_v2)
     assert r1 == r2 == {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"}
+
+
+def _setup_root_and_wd(tmp_path, pin_records, strict_records):
+    root = tmp_path / "root"
+    wd = tmp_path / "wd"
+    pin_dir = root / "trizod" / "dataset" / "pinned"
+    pin_dir.mkdir(parents=True)
+    with (pin_dir / "TriZOD_test_set.fasta").open("w") as fh:
+        for rid, seq in pin_records.items():
+            fh.write(f">{rid}\n{seq}\n")
+    strict_dir = wd / "final_dataset" / "strict"
+    strict_dir.mkdir(parents=True)
+    with (strict_dir / "strict.fasta").open("w") as fh:
+        for rid, seq in strict_records.items():
+            fh.write(f">{rid} tier=strict\n{seq}\n")
+    return root, wd
+
+
+def test_main_pinned_mode_emits_pinned_set(tmp_path):
+    root, wd = _setup_root_and_wd(
+        tmp_path,
+        pin_records={"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"},
+        strict_records={"100_1_1_1": "AAAA", "200_1_1_1": "CCCC", "300_1_1_1": "GG"},
+    )
+    testset.main(["--work-dir", str(wd), "--root", str(root)])
+    out = read_fasta(wd / "testset" / "TriZOD_test_set.fasta")
+    assert out == {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"}
+
+
+def test_main_missing_pin_errors(tmp_path):
+    root = tmp_path / "root"
+    wd = tmp_path / "wd"
+    (wd / "final_dataset" / "strict").mkdir(parents=True)
+    (wd / "final_dataset" / "strict" / "strict.fasta").write_text(">1_1_1_1\nAA\n")
+    with pytest.raises(SystemExit):
+        testset.main(["--work-dir", str(wd), "--root", str(root)])
