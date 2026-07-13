@@ -49,6 +49,17 @@ def test_pinned_stable_under_representative_reshuffle():
     assert r1 == r2 == {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"}
 
 
+def test_pinned_id_preferred_over_lower_numbered_duplicate():
+    # The pinned representative (100) is still present, but a LOWER-numbered
+    # entry (50) now shares the same sequence. The pinned ID must win, so the
+    # emitted record is 100 (not the lowest-numbered 50) and no substitution.
+    pinned = {"100_1_1_1": "AAAA"}
+    strict = {"50_1_1_1": "AAAA", "100_1_1_1": "AAAA"}
+    recs, info = resolve_pinned_testset(pinned, strict)
+    assert recs == {"100_1_1_1": "AAAA"}
+    assert info["substitutions"] == []
+
+
 def _setup_root_and_wd(tmp_path, pin_records, strict_records):
     root = tmp_path / "root"
     wd = tmp_path / "wd"

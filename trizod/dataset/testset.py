@@ -88,6 +88,10 @@ def resolve_pinned_testset(
         chosen = pid if pid in ids else ids[0]
         if chosen != pid:
             substitutions.append([pid, chosen])
+        assert chosen not in test_recs, (
+            f"two pinned sequences resolved to the same entry {chosen}; "
+            f"the pin file must have unique sequences"
+        )
         test_recs[chosen] = pseq
 
     info = {
