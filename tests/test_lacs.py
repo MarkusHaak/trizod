@@ -290,9 +290,11 @@ class TestNOffsetCompositionIndependence:
 
     def test_n_offset_independent_of_preceding_composition(self):
         # Two correctly-referenced proteins carrying the true ordN.m preceding
-        # effect but with opposite-extreme preceding residues (Ala vs Ile).
-        off_ala = self._n_offset("A" * 50, rng_seed=1)
-        off_ile = self._n_offset("I" * 50, rng_seed=2)
+        # effect but with opposite-extreme preceding residues (Ala vs Ile: the
+        # min/max Ncorr_N entries).  Same rng seed for both so composition is the
+        # only difference between the two recovered offsets.
+        off_ala = self._n_offset("A" * 50, rng_seed=7)
+        off_ile = self._n_offset("I" * 50, rng_seed=7)
 
         assert off_ala is not None and off_ile is not None
         # With the faithful table the effect cancels and both recover the same
@@ -301,3 +303,15 @@ class TestNOffsetCompositionIndependence:
             f"N offset depends on composition: Ala-rich={off_ala}, "
             f"Ile-rich={off_ile} (Δ={off_ala - off_ile:.2f})"
         )
+
+    def test_n_offset_zero_for_heterogeneous_composition(self):
+        # Homopolymers only exercise a *constant* preceding effect.  A mixed
+        # sequence exercises the composition-*varying* case the Ncorr table
+        # actually targets: with the faithful table the per-residue effect
+        # cancels position-by-position, so a correctly-referenced protein still
+        # recovers ~0.  (Gly/His are excluded as preceding residues and Pro has
+        # no amide, so they are left out of the repeat unit.)
+        seq = "ADEFIKLMNQRSTVWY" * 4
+        off = self._n_offset(seq, rng_seed=7)
+        assert off is not None
+        assert abs(off) < 0.5, f"N offset for correctly-referenced protein: {off}"

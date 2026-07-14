@@ -94,46 +94,37 @@ _PRE_PRO = {
 }
 # fmt: on
 
-# Preceding-residue correction for 15N / 1HN. Columns: H_corr, N_corr.
-# These are the BMRB ordN.m `Ncorr` table with the documented systematic offset
-# subtracted: N_corr = Ncorr_N_raw - 1.486, H_corr = Ncorr_HN_raw - 0.005
-# (raw table, AA order ACDEFGHIKLMNPQRSTVWY:
-#   N_raw  = 0.0 3.5 1.6 2.0 3.2 0.8 2.6 5.0 2.4 1.8 1.9 1.5 1.2 2.1 2.2 2.7 3.2 4.7 3.6 3.6
-#   HN_raw = 0.00 0.17 0.04 0.10 0.04 -0.04 0.13 0.13 0.08 0.02 0.06 0.04 0.16 0.10 0.10 0.08 0.09 0.14 -0.08 0.01).
-# Issue #17: a prior hand-entered table diverged from ordN.m (e.g. Ala N was
-# +1.114 vs -1.486 here); on 600 BMRB entries the ordN.m values roughly halve
-# the residual N-offset bias and improve agreement with PANAV (r 0.94->0.96),
-# and remove a composition-dependent artifact (see tests/test_lacs.py).
-# The post-fit `systematic_corr` (0.465 N, 0.049 HN) in _compute_n_offset are
-# ordN.m's own constants and are kept unchanged. NOTE: Wang & Markley 2009
-# defines the offset as -b with no post-fit constant, so ordN.m's constants are
-# an undocumented addition; whether to reduce them toward 0 is a separate open
-# calibration question requiring structure-based N ground truth (RefDB), tracked
-# in issue #17 -- do NOT conflate it with this table fix.
+# Preceding-residue correction for 15N / 1HN, derived from the BMRB ordN.m
+# `Ncorr` table (github.com/bmrb-io/LACS/ordN.m). ordN.m subtracts a documented
+# systematic offset from the raw table before use (Ncorr_N -= 1.486,
+# Ncorr_HN -= 0.005); `_NCORR` reproduces that subtraction in code so the raw
+# published values are the single source of truth and the offsets are named once
+# (this is exactly the hand-transcription that issue #17 got wrong: a prior table
+# had Ala N = +1.114 vs -1.486 here). An independent transcription of the raw
+# table is machine-checked against `_NCORR` in tests/test_lacs.py::TestNCorrProvenance.
+#
+# On 600 BMRB entries the ordN.m values roughly halve the residual N-offset bias,
+# improve agreement with PANAV (r 0.94->0.96), and remove a composition-dependent
+# artifact (see tests/test_lacs.py). The separate, still-open question of whether
+# to reduce the post-fit `systematic_corr` constants in _compute_n_offset toward 0
+# is tracked in issue #17 and docs/lacs.md -- do NOT conflate it with this table.
+_NCORR_SYSTEMATIC_N = 1.486
+_NCORR_SYSTEMATIC_HN = 0.005
+# Raw ordN.m Ncorr table, AA order ACDEFGHIKLMNPQRSTVWY. Columns: (N_raw, HN_raw).
 # fmt: off
-_NCORR = {
-    "A": (-0.005, -1.486),
-    "C": ( 0.165,  2.014),
-    "D": ( 0.035,  0.114),
-    "E": ( 0.095,  0.514),
-    "F": ( 0.035,  1.714),
-    "G": (-0.045, -0.686),
-    "H": ( 0.125,  1.114),
-    "I": ( 0.125,  3.514),
-    "K": ( 0.075,  0.914),
-    "L": ( 0.015,  0.314),
-    "M": ( 0.055,  0.414),
-    "N": ( 0.035,  0.014),
-    "P": ( 0.155, -0.286),
-    "Q": ( 0.095,  0.614),
-    "R": ( 0.095,  0.714),
-    "S": ( 0.075,  1.214),
-    "T": ( 0.085,  1.714),
-    "V": ( 0.135,  3.214),
-    "W": (-0.085,  2.114),
-    "Y": ( 0.005,  2.114),
-}
+_ORDN_NCORR_RAW = {
+    "A": (0.0, 0.00), "C": (3.5, 0.17), "D": (1.6, 0.04), "E": (2.0, 0.10),
+    "F": (3.2, 0.04), "G": (0.8, -0.04), "H": (2.6, 0.13), "I": (5.0, 0.13),
+    "K": (2.4, 0.08), "L": (1.8, 0.02), "M": (1.9, 0.06), "N": (1.5, 0.04),
+    "P": (1.2, 0.16), "Q": (2.1, 0.10), "R": (2.2, 0.10), "S": (2.7, 0.08),
+    "T": (3.2, 0.09), "V": (4.7, 0.14), "W": (3.6, -0.08), "Y": (3.6, 0.01),
+}  # fmt: skip
 # fmt: on
+# _NCORR columns are (H_corr, N_corr) to match _NCORR_H / _NCORR_N below.
+_NCORR = {
+    aa: (hn_raw - _NCORR_SYSTEMATIC_HN, n_raw - _NCORR_SYSTEMATIC_N)
+    for aa, (n_raw, hn_raw) in _ORDN_NCORR_RAW.items()
+}
 
 _NCORR_H = 0
 _NCORR_N = 1

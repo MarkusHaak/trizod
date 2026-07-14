@@ -52,7 +52,7 @@ All three must pass.
 
 ## Re-Referencing and Offset Correction
 - Two complementary systems for correcting systematic NMR referencing errors:
-  1. **LACS** (`trizod/lacs/`) — standalone module, uses Wishart 1995 random coil tables as reference. Works on all residues (structured + disordered). Not yet integrated into scoring pipeline.
+  1. **LACS** (`trizod/lacs/`) — uses Wishart 1995 random coil tables as reference. Works on all residues (structured + disordered). Integrated into scoring: `scoring.apply_lacs_correction()` is called from `get_offset_corrected_shifts()` and runs by default (`--rereference-mode both`, also active for `lacs`; skipped only for `potenci-only`/`none`).
   2. **POTENCI-based offset correction** (`scoring.py`) — uses POTENCI predictions as reference, AIC-based global offset + 9-residue rolling window. Integrated into scoring.
 - LACS is designed to run BEFORE POTENCI comparison (corrects raw observed shifts)
 - The POTENCI-based correction handles residual biases AFTER LACS
