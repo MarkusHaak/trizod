@@ -1,4 +1,4 @@
-# TriZOD dataset (release 2026-06)
+# TriZOD dataset (release 2026-07)
 
 Per-residue **protein-disorder** labels derived from BMRB NMR backbone chemical
 shifts, in four **nested** stringency tiers (`strict ⊂ moderate ⊂ tolerant ⊂
@@ -10,13 +10,13 @@ and held-out test sets are removed.
 
 | tier | training proteins | scored records |
 |---|--:|--:|
-| unfiltered | 5,927 | 16,851 |
-| tolerant | 5,684 | 15,433 |
-| moderate | 4,063 | 10,107 |
-| strict | 1,254 | 3,033 |
+| unfiltered | 5,900 | 16,851 |
+| tolerant | 5,660 | 15,440 |
+| moderate | 4,491 | 10,941 |
+| strict | 1,381 | 3,271 |
 
 Held-out **test sets** (disjoint from every training set): CheZOD117 (115) and
-TriZOD (344).
+TriZOD (365).
 
 ## Layout
 

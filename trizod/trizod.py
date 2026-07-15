@@ -597,7 +597,7 @@ def run_scoring_pipeline(args):
                 lacs_offsets=lacs_offsets,
                 potenci_residual_offsets=potenci_offsets,
                 rereference_mode=args.rereference_mode,
-                pipeline_version="trizod-2026-05-05",
+                pipeline_version="trizod-2026-07-14",
             )
 
     logging.getLogger("trizod").info("Output filtering results.")

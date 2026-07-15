@@ -37,7 +37,7 @@ from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, read_fasta
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
-DEFAULT_VERSION = "2026-05"
+DEFAULT_VERSION = "2026-07"
 
 
 def sha256(path: Path) -> str:
@@ -187,7 +187,7 @@ def main(argv=None) -> None:
 
     summary = {
         "version": args.version,
-        "pipeline_version": "trizod-2026-05-05",
+        "pipeline_version": "trizod-2026-07-14",
         "rereference_mode": "both",
         "canonical_training_fasta": "train/<tier>/train_<tier>_best.fasta",
         "tiers": {

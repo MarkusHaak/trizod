@@ -1,8 +1,7 @@
 {
-  "adopted_from": "2026-07-13 post-fix rebuild (F->K #11, details #12, robustfit)",
-  "source_build_version": "2026-06",
+  "count": 365,
   "seed": 42,
   "sample_fraction": 0.25,
-  "count": 342,
-  "written": "2026-07-13"
+  "written": "2026-07-14",
+  "mode": "redraw"
 }

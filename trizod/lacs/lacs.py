@@ -94,37 +94,37 @@ _PRE_PRO = {
 }
 # fmt: on
 
-# Preceding-residue correction for 15N / 1HN. Columns: H_corr, N_corr.
-# WARNING: despite the name, these values do NOT match the ordN.m Ncorr table,
-# not even after the documented N -= 1.486 / HN -= 0.005 subtraction (e.g. Ala N
-# is +1.114 here vs -1.486 from ordN.m; Ile +1.314 vs +3.514). Their provenance
-# is unverified, and the N/HN path is not validated against BMRB (whose LACS
-# reports cover only CA/CB/HA/CO). Do NOT substitute ordN.m values without also
-# re-deriving systematic_corr in _compute_n_offset. See issue #17.
+# Preceding-residue correction for 15N / 1HN, derived from the BMRB ordN.m
+# `Ncorr` table (github.com/bmrb-io/LACS/ordN.m). ordN.m subtracts a documented
+# systematic offset from the raw table before use (Ncorr_N -= 1.486,
+# Ncorr_HN -= 0.005); `_NCORR` reproduces that subtraction in code so the raw
+# published values are the single source of truth and the offsets are named once
+# (this is exactly the hand-transcription that issue #17 got wrong: a prior table
+# had Ala N = +1.114 vs -1.486 here). An independent transcription of the raw
+# table is machine-checked against `_NCORR` in tests/test_lacs.py::TestNCorrProvenance.
+#
+# On 600 BMRB entries the ordN.m values roughly halve the residual N-offset bias,
+# improve agreement with PANAV (r 0.94->0.96), and remove a composition-dependent
+# artifact (see tests/test_lacs.py). The separate, still-open question of whether
+# to reduce the post-fit `systematic_corr` constants in _compute_n_offset toward 0
+# is tracked in issue #17 and docs/lacs.md -- do NOT conflate it with this table.
+_NCORR_SYSTEMATIC_N = 1.486
+_NCORR_SYSTEMATIC_HN = 0.005
+# Raw ordN.m Ncorr table, AA order ACDEFGHIKLMNPQRSTVWY. Columns: (N_raw, HN_raw).
 # fmt: off
-_NCORR = {
-    "A": (-0.095,  1.114),
-    "C": (-0.075,  0.714),
-    "D": (-0.095,  0.314),
-    "E": (-0.015,  0.914),
-    "F": ( 0.105, -0.386),
-    "G": ( 0.055, -0.586),
-    "H": (-0.015, -0.486),
-    "I": (-0.125,  1.314),
-    "K": ( 0.045,  0.614),
-    "L": (-0.045,  0.014),
-    "M": (-0.035,  0.414),
-    "N": (-0.035, -0.486),
-    "P": (-0.065,  0.514),
-    "Q": (-0.035,  0.114),
-    "R": (-0.035,  0.114),
-    "S": (-0.015,  0.314),
-    "T": (-0.065,  1.514),
-    "V": (-0.055,  0.914),
-    "W": ( 0.095, -0.186),
-    "Y": (-0.045, -0.286),
-}
+_ORDN_NCORR_RAW = {
+    "A": (0.0, 0.00), "C": (3.5, 0.17), "D": (1.6, 0.04), "E": (2.0, 0.10),
+    "F": (3.2, 0.04), "G": (0.8, -0.04), "H": (2.6, 0.13), "I": (5.0, 0.13),
+    "K": (2.4, 0.08), "L": (1.8, 0.02), "M": (1.9, 0.06), "N": (1.5, 0.04),
+    "P": (1.2, 0.16), "Q": (2.1, 0.10), "R": (2.2, 0.10), "S": (2.7, 0.08),
+    "T": (3.2, 0.09), "V": (4.7, 0.14), "W": (3.6, -0.08), "Y": (3.6, 0.01),
+}  # fmt: skip
 # fmt: on
+# _NCORR columns are (H_corr, N_corr) to match _NCORR_H / _NCORR_N below.
+_NCORR = {
+    aa: (hn_raw - _NCORR_SYSTEMATIC_HN, n_raw - _NCORR_SYSTEMATIC_N)
+    for aa, (n_raw, hn_raw) in _ORDN_NCORR_RAW.items()
+}
 
 _NCORR_H = 0
 _NCORR_N = 1

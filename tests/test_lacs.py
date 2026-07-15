@@ -228,3 +228,90 @@ class TestLacsSyntheticBenchmark:
             assert abs(recovered[atom]) < 1.0, (
                 f"{atom} offset {recovered[atom]} too large for zero corruption"
             )
+
+
+# ordN.m preceding-residue correction ``Ncorr`` table, exactly as published in
+# the BMRB LACS source (github.com/bmrb-io/LACS/ordN.m), AA order
+# ACDEFGHIKLMNPQRSTVWY.  Columns are the RAW (N, HN) values; ordN.m then applies
+# ``Ncorr_N -= 1.486`` and ``Ncorr_HN -= 0.005`` before use.
+_ORDN_RAW = {
+    "A": (0.0, 0.00), "C": (3.5, 0.17), "D": (1.6, 0.04), "E": (2.0, 0.10),
+    "F": (3.2, 0.04), "G": (0.8, -0.04), "H": (2.6, 0.13), "I": (5.0, 0.13),
+    "K": (2.4, 0.08), "L": (1.8, 0.02), "M": (1.9, 0.06), "N": (1.5, 0.04),
+    "P": (1.2, 0.16), "Q": (2.1, 0.10), "R": (2.2, 0.10), "S": (2.7, 0.08),
+    "T": (3.2, 0.09), "V": (4.7, 0.14), "W": (3.6, -0.08), "Y": (3.6, 0.01),
+}  # fmt: skip
+_ORDN_NCORR_N = {aa: raw_n - 1.486 for aa, (raw_n, _) in _ORDN_RAW.items()}
+_ORDN_NCORR_HN = {aa: raw_hn - 0.005 for aa, (_, raw_hn) in _ORDN_RAW.items()}
+
+
+def _inject_ncorr_effect(shifts, seq, table_n, table_hn):
+    """Add a preceding-residue (i-1) effect to N/HN, simulating the real effect
+    that ordN.m's Ncorr correction is meant to remove."""
+    out = {atom: arr.copy() for atom, arr in shifts.items()}
+    for i in range(1, len(seq)):
+        prev = seq[i - 1]
+        if not np.isnan(out["N"][i]):
+            out["N"][i] += table_n.get(prev, 0.0)
+        if not np.isnan(out["H"][i]):
+            out["H"][i] += table_hn.get(prev, 0.0)
+    return out
+
+
+class TestNCorrProvenance:
+    """Issue #17: the _NCORR preceding-residue table must match its cited
+    source, BMRB ordN.m (raw Ncorr minus the documented 1.486 / 0.005)."""
+
+    def test_ncorr_matches_ordn_source(self):
+        from trizod.lacs import lacs as lacs_mod
+
+        for aa in _ORDN_RAW:
+            got_hn, got_n = lacs_mod._NCORR[aa]
+            assert got_n == pytest.approx(_ORDN_NCORR_N[aa], abs=1e-6), (
+                f"{aa} N: {got_n} != ordN.m {_ORDN_NCORR_N[aa]}"
+            )
+            assert got_hn == pytest.approx(_ORDN_NCORR_HN[aa], abs=1e-6), (
+                f"{aa} HN: {got_hn} != ordN.m {_ORDN_NCORR_HN[aa]}"
+            )
+
+
+class TestNOffsetCompositionIndependence:
+    """The recovered 15N offset must not depend on amino-acid composition once
+    the (ordN.m) preceding-residue effect has been correctly subtracted.  A
+    wrong Ncorr table leaves a composition-dependent residual (issue #17)."""
+
+    def _n_offset(self, seq, rng_seed):
+        seq_nums = np.arange(1, len(seq) + 1)
+        base = _generate_shifts(
+            seq, secondary_noise_std=1.0, rng=np.random.default_rng(rng_seed)
+        )
+        shifts = _inject_ncorr_effect(base, seq, _ORDN_NCORR_N, _ORDN_NCORR_HN)
+        return compute_lacs_offsets(seq, seq_nums, shifts)["N"]
+
+    def test_n_offset_independent_of_preceding_composition(self):
+        # Two correctly-referenced proteins carrying the true ordN.m preceding
+        # effect but with opposite-extreme preceding residues (Ala vs Ile: the
+        # min/max Ncorr_N entries).  Same rng seed for both so composition is the
+        # only difference between the two recovered offsets.
+        off_ala = self._n_offset("A" * 50, rng_seed=7)
+        off_ile = self._n_offset("I" * 50, rng_seed=7)
+
+        assert off_ala is not None and off_ile is not None
+        # With the faithful table the effect cancels and both recover the same
+        # offset; the wrong table gives a >4 ppm composition-dependent split.
+        assert abs(off_ala - off_ile) < 0.5, (
+            f"N offset depends on composition: Ala-rich={off_ala}, "
+            f"Ile-rich={off_ile} (Δ={off_ala - off_ile:.2f})"
+        )
+
+    def test_n_offset_zero_for_heterogeneous_composition(self):
+        # Homopolymers only exercise a *constant* preceding effect.  A mixed
+        # sequence exercises the composition-*varying* case the Ncorr table
+        # actually targets: with the faithful table the per-residue effect
+        # cancels position-by-position, so a correctly-referenced protein still
+        # recovers ~0.  (Gly/His are excluded as preceding residues and Pro has
+        # no amide, so they are left out of the repeat unit.)
+        seq = "ADEFIKLMNQRSTVWY" * 4
+        off = self._n_offset(seq, rng_seed=7)
+        assert off is not None
+        assert abs(off) < 0.5, f"N offset for correctly-referenced protein: {off}"

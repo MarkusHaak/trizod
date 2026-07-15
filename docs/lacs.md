@@ -96,7 +96,7 @@ The 15N and HN analysis uses a **different linear relationship**: the secondary 
 X_i = (CA_obs,i-1 - CB_obs,i-1) - (CA_rc,aa(i-1) - CB_rc,aa(i-1))
 ```
 
-**Preceding-residue correction (Ncorr):** The identity of residue `i-1` systematically influences the N/HN shift of residue `i`. The `_NCORR` table provides empirical corrections (20 amino acid types x 2 atom types) that are subtracted from Y before fitting.
+**Preceding-residue correction (Ncorr):** The identity of residue `i-1` systematically influences the N/HN shift of residue `i`. The `_NCORR` table (20 amino acid types x 2 atom types) is subtracted from Y before fitting. Its values are BMRB `ordN.m`'s `Ncorr` table with the documented systematic offset removed (`N -= 1.486`, `HN -= 0.005`). A previous hand-entered table diverged from `ordN.m` and left a composition-dependent bias in the N offset; see issue #17.
 
 **Additional filters:**
 - Residue `i` must not be Pro (no amide H/N)
@@ -118,7 +118,7 @@ If the slope deviates from the expected range **and** the dataset is small (< 66
 - N: +0.465 ppm
 - HN: +0.049 ppm
 
-These constants account for residual systematic bias in the Ncorr correction table.
+These are `ordN.m`'s own post-fit constants and are kept unchanged. Note that Wang & Markley (2009) defines the offset simply as `-b` (the negative fit intercept) with *no* post-fit constant, so these constants are an undocumented `ordN.m` addition. On a 600-entry BMRB sample they leave a residual ~+0.5 ppm N-offset bias versus PANAV; whether to reduce them toward zero is a separate open calibration question (needs structure-based N ground truth, e.g. RefDB) tracked in issue #17, distinct from the `_NCORR` table correction.
 
 ## Robust regression implementation
 
