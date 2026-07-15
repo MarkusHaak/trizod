@@ -27,7 +27,7 @@ moderate ⊃ strict`) so users can trade quantity for quality.
 | moderate | 10,107 | 4,063 |
 | strict | 3,033 | 1,254 |
 
-Pipeline version: `trizod-2026-05-05`, `--rereference-mode both`. Dataset
+Pipeline version: `trizod-2026-07-14`, `--rereference-mode both`. Dataset
 release: `2026-06`.
 
 ## 2. Composition

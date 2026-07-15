@@ -34,7 +34,7 @@ def test_write_rereferenced_str_round_trip(tmp_path):
         lacs_offsets=lacs_offsets,
         potenci_residual_offsets=potenci_offsets,
         rereference_mode="both",
-        pipeline_version="trizod-2026-05-05",
+        pipeline_version="trizod-2026-07-14",
     )
 
     parsed = pynmrstar.Entry.from_file(str(out_path))
@@ -67,10 +67,10 @@ def test_write_rereferenced_str_records_offsets_in_aux(tmp_path):
         lacs_offsets=lacs_offsets,
         potenci_residual_offsets=potenci_offsets,
         rereference_mode="both",
-        pipeline_version="trizod-2026-05-05",
+        pipeline_version="trizod-2026-07-14",
     )
     text = out_path.read_text()
     assert "LACS_offsets" in text
     assert "POTENCI_residual_offsets" in text
     assert "1.5" in text
-    assert "trizod-2026-05-05" in text
+    assert "trizod-2026-07-14" in text

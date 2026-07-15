@@ -1,4 +1,4 @@
-# TriZOD dataset (release 2026-06)
+# TriZOD dataset (release 2026-07)
 
 Per-residue **protein-disorder** labels derived from BMRB NMR backbone chemical
 shifts, in four **nested** stringency tiers (`strict ⊂ moderate ⊂ tolerant ⊂

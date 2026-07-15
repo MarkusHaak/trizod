@@ -414,7 +414,7 @@ def _dataset_representatives(
 
 @dataset_app.command("package")
 def _dataset_package(
-    version: str = typer.Option("2026-05", "--version"),
+    version: str = typer.Option("2026-07", "--version"),
     include_str: bool = typer.Option(False, "--include-str"),
     out: Optional[str] = typer.Option(None, "--out"),
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
