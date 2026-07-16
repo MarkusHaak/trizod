@@ -23,6 +23,7 @@ from trizod.pipeline import (
     prefilter_dataframe,
     print_filter_losses,
 )
+from trizod.provenance import git_revision
 
 
 class Found(Exception):
@@ -597,7 +598,7 @@ def run_scoring_pipeline(args):
                 lacs_offsets=lacs_offsets,
                 potenci_residual_offsets=potenci_offsets,
                 rereference_mode=args.rereference_mode,
-                pipeline_version="trizod-2026-07-14",
+                pipeline_version=f"trizod-{git_revision()}",
             )
 
     logging.getLogger("trizod").info("Output filtering results.")
