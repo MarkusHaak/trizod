@@ -114,11 +114,7 @@ X_i = (CA_obs,i-1 - CB_obs,i-1) - (CA_rc,aa(i-1) - CB_rc,aa(i-1))
 
 If the slope deviates from the expected range **and** the dataset is small (< 66 points) or unbalanced (< 15% of points on either the helix or strand side), the slope is constrained and the intercept is re-estimated.
 
-**Systematic correction:** An empirical offset is added after the regression:
-- N: +0.465 ppm
-- HN: +0.049 ppm
-
-These are `ordN.m`'s own post-fit constants and are kept unchanged. Note that Wang & Markley (2009) defines the offset simply as `-b` (the negative fit intercept) with *no* post-fit constant, so these constants are an undocumented `ordN.m` addition. On a 600-entry BMRB sample they leave a residual ~+0.5 ppm N-offset bias versus PANAV; whether to reduce them toward zero is a separate open calibration question (needs structure-based N ground truth, e.g. RefDB) tracked in issue #17, distinct from the `_NCORR` table correction.
+**No post-fit constant (issue #20):** The N/HN offset is the bare fit intercept, matching Wang & Markley (2009), which defines the offset simply as `-b` (the negative fit intercept). The reference `ordN.m` added an undocumented post-fit constant here (N: +0.465 ppm, HN: +0.049 ppm) that appears in no LACS publication. It was **removed**: on 2000 BMRB entries the constant induced a bias, with the aligned N offset versus PANAV at −0.489 ppm with the constant and −0.024 ppm without it (sign alignment measured against the constant-free CA offset; PANAV emits no HN reference, so HN is dropped by analogy with N). This is distinct from the `_NCORR` preceding-residue table correction, which is retained.
 
 ## Robust regression implementation
 
