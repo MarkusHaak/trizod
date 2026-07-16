@@ -11,7 +11,6 @@ deliberately remain in ``trizod.trizod`` until that global is removed.
 """
 
 import logging
-import os
 import pickle
 import re
 import time
@@ -25,6 +24,7 @@ import trizod.potenci.potenci as potenci
 import trizod.scoring.scoring as scoring
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
+from trizod.io.atomic import atomic_write
 from trizod.provenance import scoring_cache_version
 
 
@@ -461,13 +461,7 @@ def compute_scores(
             lacs_offsets,
         ) = ret
         if cache_dir:
-            # Write to a unique temp file then atomically rename, so an
-            # interrupted or concurrent write can never leave a half-written
-            # .npz that a later run would read as valid (issue #20).
-            tmp_cache_path = shifts_cache_path.with_name(
-                f"{shifts_cache_path.name}.{os.getpid()}.tmp"
-            )
-            with tmp_cache_path.open("wb") as _cache_fh:
+            with atomic_write(shifts_cache_path, "wb") as _cache_fh:
                 np.savez(
                     _cache_fh,
                     shw=weighted_diffs_final,
@@ -487,7 +481,6 @@ def compute_scores(
                         [lacs_offsets[atom_type] for atom_type in BACKBONE_ATOMS]
                     ),
                 )
-            os.replace(tmp_cache_path, shifts_cache_path)
     offsets = offsets_final
     if not offset_correction:
         abs_weighted_diffs_final = abs_weighted_diffs_initial

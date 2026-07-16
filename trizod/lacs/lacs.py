@@ -552,8 +552,7 @@ def _compute_n_offset(
     # a bias: the aligned N offset vs PANAV sits at -0.489 ppm with the constant
     # and collapses to -0.024 ppm without it. It is therefore dropped, matching
     # the published definition.
-    offset = intercept
-    offset = round(offset * 100) / 100
+    offset = round(intercept * 100) / 100
     return offset
 
 

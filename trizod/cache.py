@@ -9,7 +9,8 @@ from ``trizod.trizod`` so the cache can be used without importing the CLI module
 import hashlib
 import json
 import logging
-import os
+
+from trizod.io.atomic import atomic_write
 
 
 def _potenci_cache_key(seq, temperature, pH, ion):
@@ -47,10 +48,5 @@ def save_potenci_cache(cache_dir, seq, temperature, pH, ion, predshiftdct):
     )
     # Convert (int, str) tuple keys to strings for JSON
     raw = {f"{k[0]},{k[1]}": v for k, v in predshiftdct.items()}
-    # Write to a unique temp file then atomically rename, so an interrupted
-    # or concurrent write can never leave a truncated JSON that a later run
-    # would read as valid (issue #20).
-    tmp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
-    with tmp_path.open("w") as f:
+    with atomic_write(cache_path, "w") as f:
         json.dump(raw, f)
-    os.replace(tmp_path, cache_path)

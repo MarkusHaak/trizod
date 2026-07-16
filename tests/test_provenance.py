@@ -15,6 +15,8 @@ import numpy as np
 from trizod.lacs import compute_lacs_offsets
 from trizod.provenance import git_revision, scoring_cache_version
 
+from .test_lacs import _SEQ, _SEQ_NUMS, _generate_shifts
+
 
 def test_scoring_cache_version_is_stable_hex():
     v = scoring_cache_version()
@@ -30,23 +32,6 @@ def test_git_revision_is_nonempty_string():
     assert isinstance(rev, str) and rev
 
 
-def _synthetic_lacs_input(n=120, seed=0):
-    """Deterministic pseudo-protein with a planted CA/N offset."""
-    rng = np.random.default_rng(seed)
-    aa = "ACDEFGHIKLMNQRSTVWY"  # exclude P to keep every position valid
-    seq = "".join(aa[i % len(aa)] for i in range(n))
-    seq_nums = np.arange(1, n + 1)
-    ss = rng.normal(0, 2, n)  # per-residue secondary-structure signal
-    obs = {
-        "CA": ss + rng.normal(0, 0.1, n) + 0.30,  # planted +0.30 ppm CA offset
-        "CB": -0.5 * ss + rng.normal(0, 0.1, n),
-        "C": 0.3 * ss + rng.normal(0, 0.1, n),
-        "N": -0.4 * ss + rng.normal(0, 0.3, n) + 0.70,  # planted N offset
-        "H": -0.07 * ss + rng.normal(0, 0.05, n),
-    }
-    return seq, seq_nums, obs
-
-
 def test_lacs_offsets_bit_reproducible():
     """Same input -> byte-identical offsets across many repeats.
 
@@ -54,7 +39,8 @@ def test_lacs_offsets_bit_reproducible():
     robust fit. This asserts the offsets are exactly reproducible so any real
     future regression (an unseeded RNG, an order-dependent reduction) is caught.
     """
-    seq, seq_nums, obs = _synthetic_lacs_input()
+    seq, seq_nums = _SEQ, _SEQ_NUMS
+    obs = _generate_shifts(seq, secondary_noise_std=1.0, rng=np.random.default_rng(0))
     first = compute_lacs_offsets(seq, seq_nums, obs)
     for _ in range(25):
         again = compute_lacs_offsets(seq, seq_nums, obs)

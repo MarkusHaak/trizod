@@ -22,14 +22,13 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-# Source modules whose contents determine the numeric content of cached
-# scoring artifacts. If any of these changes, cached wSCS arrays are stale.
-_MATH_SOURCES = (
-    "lacs/lacs.py",
-    "scoring/scoring.py",
-    "potenci/potenci.py",
-    "constants.py",
-)
+# Subpackages + modules whose contents determine the numeric content of cached
+# scoring artifacts. Whole directories are hashed (not a filename allowlist) so
+# that adding or splitting a module inside them still moves the version — under-
+# invalidation would silently reuse offsets from different code, the very bug
+# this guards against, whereas over-invalidation only costs a recompute.
+_MATH_DIRS = ("lacs", "scoring", "potenci")
+_MATH_FILES = ("constants.py",)
 
 _PKG_ROOT = Path(__file__).resolve().parent
 
@@ -38,17 +37,19 @@ _PKG_ROOT = Path(__file__).resolve().parent
 def scoring_cache_version() -> str:
     """Return a short hash of the scoring-math source.
 
-    Changes whenever any module in ``_MATH_SOURCES`` changes, so it can be
-    embedded in a cache key to force recomputation after a math change.
-    Falls back to ``"nover"`` if the sources cannot be read (e.g. a zipped
-    install); a stable-but-uninformative tag is safer than crashing the
-    pipeline over a cache-key optimisation.
+    Changes whenever any ``.py`` under the scoring subpackages (or the shared
+    constants) changes, so it can be embedded in a cache key to force
+    recomputation after a math change. Falls back to ``"nover"`` if the sources
+    cannot be read (e.g. a zipped install); a stable-but-uninformative tag is
+    safer than crashing the pipeline over a cache-key optimisation.
     """
+    paths = [p for d in _MATH_DIRS for p in (_PKG_ROOT / d).rglob("*.py")]
+    paths += [_PKG_ROOT / f for f in _MATH_FILES]
     h = hashlib.sha256()
     try:
-        for rel in _MATH_SOURCES:
-            h.update(rel.encode())
-            h.update((_PKG_ROOT / rel).read_bytes())
+        for p in sorted(paths):
+            h.update(str(p.relative_to(_PKG_ROOT)).encode())
+            h.update(p.read_bytes())
     except OSError:
         return "nover"
     return h.hexdigest()[:12]
@@ -82,3 +83,12 @@ def git_revision() -> str:
     except (subprocess.SubprocessError, OSError):
         dirty = 0
     return f"{sha}-dirty" if dirty else sha
+
+
+def pipeline_version() -> str:
+    """Full ``pipeline_version`` label stamped into scored/release metadata.
+
+    Owns the ``trizod-<revision>`` format in one place so the two stamp sites
+    (scoring output and the release manifest) cannot drift.
+    """
+    return f"trizod-{git_revision()}"
