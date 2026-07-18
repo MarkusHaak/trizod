@@ -24,6 +24,8 @@ import trizod.potenci.potenci as potenci
 import trizod.scoring.scoring as scoring
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
+from trizod.io.atomic import atomic_write
+from trizod.provenance import scoring_cache_version
 
 
 class ZscoreComputationError(Exception):
@@ -379,14 +381,18 @@ def compute_scores(
     if score_types is None:
         score_types = ["zscores"]
     exe_times = [np.nan, np.nan, np.nan]
+    # The scoring-code version is part of the key so that a change to the
+    # LACS/scoring math invalidates stale cache entries by construction
+    # (issue #20): a key without it silently reused offsets computed by
+    # different code.
     shifts_cache_path = (
         cache_dir
         / "wSCS"
-        / f"{entry.id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}.npz"
+        / f"{entry.id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}"
+        f"_v{scoring_cache_version()}.npz"
     )
     if cache_dir and shifts_cache_path.exists():
         try:
-            # cache keys kept as-is for backward compatibility
             cached = np.load(str(shifts_cache_path))
             weighted_diffs_final = cached["shw"]
             abs_weighted_diffs_final = cached["ashwi"]
@@ -455,26 +461,26 @@ def compute_scores(
             lacs_offsets,
         ) = ret
         if cache_dir:
-            # cache keys kept as-is for backward compatibility
-            np.savez(
-                str(shifts_cache_path),
-                shw=weighted_diffs_final,
-                ashwi=abs_weighted_diffs_final,
-                cmp_mask=cmp_mask,
-                olf=outlier_mask_final,
-                offf=np.array(
-                    [offsets_final[atom_type] for atom_type in BACKBONE_ATOMS]
-                ),
-                shw0=weighted_diffs_initial,
-                ashwi0=abs_weighted_diffs_initial,
-                ol0=outlier_mask_initial,
-                off0=np.array(
-                    [offsets_initial[atom_type] for atom_type in BACKBONE_ATOMS]
-                ),
-                lacs=np.array(
-                    [lacs_offsets[atom_type] for atom_type in BACKBONE_ATOMS]
-                ),
-            )
+            with atomic_write(shifts_cache_path, "wb") as _cache_fh:
+                np.savez(
+                    _cache_fh,
+                    shw=weighted_diffs_final,
+                    ashwi=abs_weighted_diffs_final,
+                    cmp_mask=cmp_mask,
+                    olf=outlier_mask_final,
+                    offf=np.array(
+                        [offsets_final[atom_type] for atom_type in BACKBONE_ATOMS]
+                    ),
+                    shw0=weighted_diffs_initial,
+                    ashwi0=abs_weighted_diffs_initial,
+                    ol0=outlier_mask_initial,
+                    off0=np.array(
+                        [offsets_initial[atom_type] for atom_type in BACKBONE_ATOMS]
+                    ),
+                    lacs=np.array(
+                        [lacs_offsets[atom_type] for atom_type in BACKBONE_ATOMS]
+                    ),
+                )
     offsets = offsets_final
     if not offset_correction:
         abs_weighted_diffs_final = abs_weighted_diffs_initial

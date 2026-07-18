@@ -10,6 +10,8 @@ import hashlib
 import json
 import logging
 
+from trizod.io.atomic import atomic_write
+
 
 def _potenci_cache_key(seq, temperature, pH, ion):
     """Content-based cache key for POTENCI predictions."""
@@ -46,5 +48,5 @@ def save_potenci_cache(cache_dir, seq, temperature, pH, ion, predshiftdct):
     )
     # Convert (int, str) tuple keys to strings for JSON
     raw = {f"{k[0]},{k[1]}": v for k, v in predshiftdct.items()}
-    with cache_path.open("w") as f:
+    with atomic_write(cache_path, "w") as f:
         json.dump(raw, f)

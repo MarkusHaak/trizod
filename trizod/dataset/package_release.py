@@ -35,6 +35,7 @@ from pathlib import Path
 
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, read_fasta
+from trizod.provenance import pipeline_version
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 DEFAULT_VERSION = "2026-07"
@@ -187,7 +188,7 @@ def main(argv=None) -> None:
 
     summary = {
         "version": args.version,
-        "pipeline_version": "trizod-2026-07-14",
+        "pipeline_version": pipeline_version(),
         "rereference_mode": "both",
         "canonical_training_fasta": "train/<tier>/train_<tier>_best.fasta",
         "tiers": {

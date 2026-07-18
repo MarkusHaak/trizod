@@ -105,9 +105,11 @@ _PRE_PRO = {
 #
 # On 600 BMRB entries the ordN.m values roughly halve the residual N-offset bias,
 # improve agreement with PANAV (r 0.94->0.96), and remove a composition-dependent
-# artifact (see tests/test_lacs.py). The separate, still-open question of whether
-# to reduce the post-fit `systematic_corr` constants in _compute_n_offset toward 0
-# is tracked in issue #17 and docs/lacs.md -- do NOT conflate it with this table.
+# artifact (see tests/test_lacs.py). This preceding-residue table is separate from
+# the post-fit `systematic_corr` constant, which was a DIFFERENT ordN.m addition:
+# that constant (issue #20) has since been dropped from _compute_n_offset because it
+# is unpublished and empirically induced a ~0.47 ppm N bias vs PANAV -- do NOT
+# conflate the two.
 _NCORR_SYSTEMATIC_N = 1.486
 _NCORR_SYSTEMATIC_HN = 0.005
 # Raw ordN.m Ncorr table, AA order ACDEFGHIKLMNPQRSTVWY. Columns: (N_raw, HN_raw).
@@ -517,12 +519,10 @@ def _compute_n_offset(
         expected_slope = -0.4
         slope_tol = 0.1
         slope_bounds = (-0.45, -0.35)
-        systematic_corr = 0.465
     else:  # H
         expected_slope = -0.07
         slope_tol = 0.02
         slope_bounds = (-0.08, -0.06)
-        systematic_corr = 0.049
 
     needs_constraint = abs(slope - expected_slope) > slope_tol and (
         min(ec, hc) < 0.15 * n_clean or n_clean < 66
@@ -543,9 +543,16 @@ def _compute_n_offset(
                 best_intercept = test_intercept
         intercept = best_intercept
 
-    # Positive offset = obs too high → subtract to correct
-    offset = intercept + systematic_corr
-    offset = round(offset * 100) / 100
+    # Positive offset = obs too high → subtract to correct.
+    #
+    # NOTE (issue #20): the reference ordN.m added a fixed post-fit constant
+    # here (+0.465 ppm for N, +0.049 for HN). That constant appears in no LACS
+    # publication — Wang & Markley 2009 defines the offset as the bare (negative)
+    # intercept — and an empirical check on 2000 BMRB entries showed it *induces*
+    # a bias: the aligned N offset vs PANAV sits at -0.489 ppm with the constant
+    # and collapses to -0.024 ppm without it. It is therefore dropped, matching
+    # the published definition.
+    offset = round(intercept * 100) / 100
     return offset
 
 
