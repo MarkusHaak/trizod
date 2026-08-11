@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pynmrstar
 
-from trizod.constants import AA1TO3, BACKBONE_ATOMS
+from trizod.constants import AA1TO3, BACKBONE_ATOMS, REFINED_WEIGHTS
 
 _AMBIGUITY_NOT_SET = "."
 
@@ -38,8 +38,13 @@ def write_rereferenced_str(
         bbshifts_arr: (N, len(BACKBONE_ATOMS)) corrected shifts (already
             LACS-corrected if rereference_mode applied LACS).
         bbshifts_mask: (N, len(BACKBONE_ATOMS)) boolean mask.
-        lacs_offsets: dict atom -> ppm.
-        potenci_residual_offsets: dict atom -> ppm.
+        lacs_offsets: dict atom -> ppm. LACS offsets are subtracted from the
+            raw shifts, so they are genuine ppm.
+        potenci_residual_offsets: dict atom -> sigma units, i.e. the `off_<atom>`
+            columns. `scoring.compute_offsets()` averages `diff_arr /
+            REFINED_WEIGHTS`, so these are multiples of the per-atom POTENCI
+            RMSD, NOT ppm. Both the sigma value and its ppm equivalent
+            (sigma * REFINED_WEIGHTS[atom]) are written out.
         rereference_mode: which mode produced the shifts; copied to metadata.
         pipeline_version: free-form string copied to metadata.
     """
@@ -110,11 +115,15 @@ def write_rereferenced_str(
         lacs_loop.add_data([atom, f"{lacs_offsets.get(atom, 0.0):.6f}"])
     aux.add_loop(lacs_loop)
 
+    # The POTENCI/AIC offsets come in as sigma units (see docstring). Report them
+    # as such, and give the ppm equivalent alongside so the file is self-contained.
     potenci_loop = pynmrstar.Loop.from_scratch("POTENCI_residual_offsets")
     potenci_loop.set_category("POTENCI_residual_offsets")
-    potenci_loop.add_tag(["Atom_ID", "Offset_ppm"])
+    potenci_loop.add_tag(["Atom_ID", "Offset_sigma", "Offset_ppm"])
     for atom in BACKBONE_ATOMS:
-        potenci_loop.add_data([atom, f"{potenci_residual_offsets.get(atom, 0.0):.6f}"])
+        offset_sigma = potenci_residual_offsets.get(atom, 0.0)
+        offset_ppm = offset_sigma * REFINED_WEIGHTS[atom]
+        potenci_loop.add_data([atom, f"{offset_sigma:.6f}", f"{offset_ppm:.6f}"])
     aux.add_loop(potenci_loop)
 
     entry.add_saveframe(aux)

@@ -15,11 +15,16 @@ Core bundle (~115 MB):
   MANIFEST.json
 
 Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
+Optional (~12 MB): shifts/trizod_sidechain_shifts.parquet — the side-chain
+chemical shifts the scoring path discards, AS DEPOSITED (no re-referencing).
+Staged automatically when it exists; build it with
+``scripts/build_parquet_dataset.py --sidechain-out``.
 
 Usage
 -----
     uv run python -m trizod.dataset.package_release [--version VER]
-        [--include-str] [--out DIR] [--work-dir DIR] [--root DIR]
+        [--include-str] [--sidechain-parquet PATH] [--out DIR]
+        [--work-dir DIR] [--root DIR]
 
 The output directory defaults under the work dir (gitignored). Nothing is
 uploaded; this only stages files locally for a manual Zenodo deposit.
@@ -33,9 +38,11 @@ import json
 import shutil
 from pathlib import Path
 
+from trizod import paths as repo_paths
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, read_fasta
 from trizod.provenance import pipeline_version
+from trizod.sidechain import SIDECHAIN_PARQUET_NAME
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 DEFAULT_VERSION = "2026-07"
@@ -99,12 +106,30 @@ def assert_no_leakage(bundle: Path) -> None:
     print(msg)
 
 
+def count_parquet_rows(path: Path):
+    """Row count of a Parquet file, or None when pyarrow is unavailable.
+
+    pyarrow is not a project dependency (nothing in the pipeline needs it), so
+    the manifest records bytes + checksum either way and the row count only
+    when the packaging run happens to have it: ``uv run --with pyarrow ...``.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return None
+    return pq.ParquetFile(path).metadata.num_rows
+
+
 def record_entry(rel: str, abs_path: Path) -> dict:
     entry = {"bytes": abs_path.stat().st_size, "sha256": sha256(abs_path)}
     if abs_path.suffix == ".fasta":
         entry["n_sequences"] = count_fasta(abs_path)
     elif abs_path.name == "scores.json":
         entry["n_records"] = count_jsonl(abs_path)
+    elif abs_path.suffix == ".parquet":
+        n_rows = count_parquet_rows(abs_path)
+        if n_rows is not None:
+            entry["n_records"] = n_rows
     return {rel: entry}
 
 
@@ -115,6 +140,17 @@ def main(argv=None) -> None:
         "--include-str",
         action="store_true",
         help="also bundle the ~1.4 GB re-referenced .str files",
+    )
+    ap.add_argument(
+        "--sidechain-parquet",
+        type=Path,
+        default=None,
+        help=(
+            "companion side-chain shift table to stage under shifts/ "
+            "(default: <root>/data/processed/"
+            + SIDECHAIN_PARQUET_NAME
+            + " if it exists)"
+        ),
     )
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument(
@@ -173,6 +209,34 @@ def main(argv=None) -> None:
             raise SystemExit(f"missing test set: {src}")
         planned.append((src, f"test/{src.name}"))
 
+    # The label table records, per pinned test chain, the strictest tier it still
+    # satisfies and any ID substituted since the pin was drawn. Without it an
+    # ID-based join against an earlier release is silently wrong, so it ships
+    # beside the FASTA rather than staying an intermediate.
+    test_labels = paths.testset / "TriZOD_test_set_labels.tsv"
+    if not test_labels.exists():
+        raise SystemExit(f"missing test-set labels: {test_labels}")
+    planned.append((test_labels, f"test/{test_labels.name}"))
+
+    # Companion side-chain shift table: explicit path is required to exist, the
+    # default location is best-effort so a release can be staged before it has
+    # been built (scripts/build_parquet_dataset.py --sidechain-out).
+    sidechain = args.sidechain_parquet
+    if sidechain is None:
+        default_sidechain = (
+            repo_paths.layout(args.root).processed / SIDECHAIN_PARQUET_NAME
+        )
+        sidechain = default_sidechain if default_sidechain.exists() else None
+    elif not sidechain.exists():
+        raise SystemExit(f"missing side-chain companion table: {sidechain}")
+    if sidechain is not None:
+        planned.append((sidechain, f"shifts/{SIDECHAIN_PARQUET_NAME}"))
+    else:
+        print(
+            "  note: no side-chain companion table staged (build it with "
+            "scripts/build_parquet_dataset.py --sidechain-out)"
+        )
+
     manifest: dict[str, dict] = {}
     total = 0
     print(f"Staging {len(planned)} files into {bundle} ...")
@@ -208,6 +272,16 @@ def main(argv=None) -> None:
         "n_files": len(planned),
         "files": dict(sorted(manifest.items())),
     }
+    if sidechain is not None:
+        rel = f"shifts/{SIDECHAIN_PARQUET_NAME}"
+        summary["sidechain_shifts"] = {
+            "path": rel,
+            "n_records": manifest[rel].get("n_records"),
+            # stated in the manifest as well as the datasheet: these are the
+            # values the scoring path discards, exactly as deposited
+            "rereferenced": False,
+            "offset_corrected": False,
+        }
     (bundle / "MANIFEST.json").write_text(json.dumps(summary, indent=2))
 
     print(f"\nBundle: {bundle}")
@@ -222,6 +296,12 @@ def main(argv=None) -> None:
         f"  test: CheZOD117={summary['test_sets']['CheZOD117']}, "
         f"TriZOD={summary['test_sets']['TriZOD_test']}"
     )
+    if sidechain is not None:
+        n_sc = summary["sidechain_shifts"]["n_records"]
+        print(
+            f"  side chains: shifts/{SIDECHAIN_PARQUET_NAME} "
+            f"({n_sc if n_sc is not None else 'unknown'} shifts, as deposited)"
+        )
     print("\nNothing uploaded. Review the bundle, then deposit to Zenodo manually.")
 
 
