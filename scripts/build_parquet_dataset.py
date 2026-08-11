@@ -19,10 +19,14 @@ sequence; unscored positions are NaN in the score columns and False in the
 explicit boolean ``mask`` (no magic sentinel that could leak into a regression
 loss).
 
-The companion side-chain table (``--sidechain-out``) is a second, flat long
-Parquet holding the ~3.5 M side-chain chemical shifts the scoring path discards
-(``bmrb.get_sidechain_shifts``). It joins 1:1 on ``id`` with the main table and
-carries values AS DEPOSITED — no re-referencing, no offset correction.
+The companion shift table (``--shifts-out``) is a second, flat long Parquet
+holding every assigned chemical shift **on a canonical residue** of every
+released chain — backbone and side chain, 11,839,037 values in release 2026-08
+(``bmrb.get_deposited_shifts``, which drops the 0.139 % of deposited values
+sitting on a non-canonical residue). It joins on ``id`` with the main table,
+ships ``val_ppm`` exactly as deposited, and adds ``val_corrected_ppm`` wherever
+a trustworthy referencing offset transfers (``trizod.shifts.annotate_offsets``);
+that column is NULL, never a copy of the raw value, where none does.
 
 Every column is declared once, in ``COLUMNS`` below, together with the record it
 is read from. ``tests/test_parquet_columns.py`` asserts that declaration against
@@ -36,7 +40,7 @@ Usage:
         --in-bundle     <path to trizod-dataset-2026-06/> \
         --out           <path to trizod_dataset.parquet> \
         [--composition-csv <path to _composition_cache.csv>] \
-        [--sidechain-out <path to trizod_sidechain_shifts.parquet>]
+        [--shifts-out <path to trizod_shifts.parquet>]
 """
 
 from __future__ import annotations
@@ -46,20 +50,71 @@ import csv
 import json
 import logging
 import math
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from trizod import paths
+from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
-from trizod.sidechain import iter_sidechain_frames, write_sidechain_parquet
+from trizod.offsets import (
+    lacs_off_ppm_col,
+    legacy_lacs_off_col,
+    legacy_off_col,
+    off_sigma_col,
+    total_off_ppm_col,
+)
+from trizod.shifts import (
+    annotate_offsets,
+    chain_offsets,
+    iter_shift_frames,
+    write_shift_parquet,
+)
 
 # Tiers ordered loosest -> strictest. "strictest membership" = last match.
 TIER_ORDER = ["unfiltered", "tolerant", "moderate", "strict"]
 
+# Publication order of the per-atom offset columns. Deliberately NOT
+# ``BACKBONE_ATOMS`` (whose order is the internal shift-array column order):
+# these columns are published, so their order is frozen at what v0.3.0 shipped.
 BACKBONE = ["C", "CA", "CB", "H", "HA", "HB", "N"]
-OFF_FIELDS = [f"off_{a}" for a in BACKBONE]
-LACS_FIELDS = [f"lacs_off_{a}" for a in BACKBONE]
+assert set(BACKBONE) == set(BACKBONE_ATOMS)
+# Three offset columns per atom, in three DIFFERENT units -- the names say which:
+# off_<a>_sigma is a multiple of the per-atom POTENCI RMSD, lacs_off_<a>_ppm and
+# total_off_<a>_ppm are ppm. total_off is the one to subtract from a deposited
+# shift; adding the first two together is a unit error worth up to 21.2 ppm.
+OFF_FIELDS = [off_sigma_col(a) for a in BACKBONE]
+LACS_FIELDS = [lacs_off_ppm_col(a) for a in BACKBONE]
+TOTAL_OFF_FIELDS = [total_off_ppm_col(a) for a in BACKBONE]
+
+#: Table-level documentation of the 21 offset columns, mirroring the
+#: ``correction_formula`` key of ``trizod_shifts.parquet``. The main table is
+#: where the offsets actually ship, and it used to document them nowhere at all
+#: while the companion — which carries none of them — explained them
+#: exhaustively. Everything a consumer needs to convert is stated here,
+#: REFINED_WEIGHTS included, so the conversion never has to be looked up.
+OFFSET_COLUMNS_DOC = (
+    "Three referencing-offset columns per backbone atom A in "
+    + "/".join(BACKBONE)
+    + ", in TWO DIFFERENT UNITS. "
+    "off_A_sigma: the POTENCI/AIC residual offset, in multiples of the per-atom "
+    "POTENCI RMSD REFINED_WEIGHTS[A] -- NOT ppm. --max-offset (3/3/2 per tier) "
+    "is compared against this column, which is why it stays in sigma. "
+    "lacs_off_A_ppm: the LACS offset, in ppm; it is subtracted straight off the "
+    "deposited shift. total_off_A_ppm: derived, in ppm, and the ONLY one to "
+    "use downstream -- total_off_A_ppm = lacs_off_A_ppm + off_A_sigma * "
+    "REFINED_WEIGHTS[A], so that corrected_ppm = deposited_ppm - "
+    "total_off_A_ppm reproduces the shift TriZOD scored. ADDING off_A_sigma "
+    "AND lacs_off_A_ppm TOGETHER IS A UNIT ERROR worth up to 21.2 ppm. "
+    "REFINED_WEIGHTS (ppm) = "
+    + ", ".join(f"{a}:{REFINED_WEIGHTS[a]:g}" for a in BACKBONE)
+    + ". A null offset means it was never computed for that atom, or was "
+    "rejected by --max-offset -- never a zero. Per-value corrected shifts, "
+    "including the side-chain transfer policy, are published in "
+    "trizod_shifts.parquet (val_ppm / val_corrected_ppm / offset_applied_ppm / "
+    "offset_source)."
+)
 
 # pyarrow is deliberately NOT a project dependency (nothing in the pipeline or
 # the dataset chain needs it), so it is imported lazily — the column contract
@@ -313,11 +368,14 @@ COLUMNS: list[Column] = [
     _scores("citation_doi", "string", "citation_DOI", clean_str),
     *[_scores(f, "float32", f, as_float) for f in OFF_FIELDS],
     *[_scores(f, "float32", f, as_float) for f in LACS_FIELDS],
+    # float64: total_off is what a consumer subtracts from a deposited ppm shift,
+    # so it must not lose precision relative to the shifts themselves
+    *[_scores(f, "float64", f, as_float) for f in TOTAL_OFF_FIELDS],
     # --- appended in v0.4.0 --------------------------------------------------
     # Sample-state annotations (plan §3.1/§3.2). Emitted at every tier and
     # filtered by none of them except the per-tier physical_state deny list.
     _scores("physical_state", "string", "physical_state", clean_str),
-    _scores("denaturant_evidence", "bool", "denaturant_evidence", as_bool),
+    _scores("cosolvent_evidence", "bool", "cosolvent_evidence", as_bool),
     _scores("sample_state_evidence", "string", "sample_state_evidence", clean_str),
     _scores("membrane_mimetic", "string", "membrane_mimetic", clean_str),
     # Composition labels (plan §3.3/§3.4), joined on the BMRB entry ID, so every
@@ -357,11 +415,37 @@ SCORES_JSON_SOURCES = frozenset(c.source for c in COLUMNS if c.origin == "scores
 COMPOSITION_SOURCES = frozenset(c.source for c in COLUMNS if c.origin == "composition")
 #: ``scores.json`` keys deliberately NOT carried: ``--include-shifts`` adds one
 #: column per backbone atom holding re-referenced shifts, while the deposit ships
-#: raw shifts in the side-chain companion table. The release is generated without
-#: that flag, so these keys are normally absent from scores.json entirely.
+#: every shift, raw and corrected, in ``trizod_shifts.parquet``. The release is
+#: generated without that flag, so these keys are normally absent entirely.
 SCORES_JSON_NOT_CARRIED = frozenset(
     BACKBONE + ["HA2", "HA3", "HB1", "HB2", "HB3"]
 )  # fmt: skip
+
+#: Pre-rename offset keys. A ``scores.json`` staged before the offset columns
+#: were renamed for unit safety spells them ``off_CA`` / ``lacs_off_CA``; those
+#: files must still build, and must produce the same numbers.
+LEGACY_OFFSET_KEYS = frozenset(
+    [legacy_off_col(a) for a in BACKBONE] + [legacy_lacs_off_col(a) for a in BACKBONE]
+)
+
+
+def normalize_offset_keys(record: dict) -> dict:
+    """Return ``record`` with the offset block in the current spelling.
+
+    Reads whichever spelling is present and writes ``off_<a>_sigma`` /
+    ``lacs_off_<a>_ppm`` / ``total_off_<a>_ppm``. The sigma->ppm conversion is
+    never done here: :func:`trizod.shifts.chain_offsets` defers to
+    :func:`trizod.offsets.total_offset_ppm`, the single place it is written.
+    """
+    if not LEGACY_OFFSET_KEYS & set(record):
+        return record
+    offsets = chain_offsets(record)
+    out = {k: v for k, v in record.items() if k not in LEGACY_OFFSET_KEYS}
+    for atom in BACKBONE:
+        out[off_sigma_col(atom)] = offsets.sigma[atom]
+        out[lacs_off_ppm_col(atom)] = offsets.lacs_ppm[atom]
+        out[total_off_ppm_col(atom)] = offsets.total_ppm[atom]
+    return out
 
 
 def arrow_schema(pa):
@@ -387,7 +471,10 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
     Pure Python, no pyarrow: the join/null behaviour is the part worth testing,
     and pyarrow is an optional extra.
     """
-    scores = read_jsonl(in_bundle / "scores" / "unfiltered" / "scores.json")
+    scores = [
+        normalize_offset_keys(rec)
+        for rec in read_jsonl(in_bundle / "scores" / "unfiltered" / "scores.json")
+    ]
     print(f"loaded {len(scores)} scored chains (unfiltered = superset)")
 
     reps = {
@@ -510,6 +597,7 @@ def build(in_bundle: Path, out_path: Path, composition_csv: Path | None = None) 
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
         b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
         b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
+        b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
     }
     table = table.replace_schema_metadata(metadata)
 
@@ -517,8 +605,6 @@ def build(in_bundle: Path, out_path: Path, composition_csv: Path | None = None) 
     pq.write_table(table, out_path, compression="zstd", compression_level=19)
 
     # summary
-    from collections import Counter
-
     split_counts = Counter(cols["split"])
     tier_counts = Counter(t for t in cols["train_tier"] if t is not None)
     print(f"\nwrote {out_path}  ({out_path.stat().st_size / 1e6:.2f} MB)")
@@ -527,31 +613,47 @@ def build(in_bundle: Path, out_path: Path, composition_csv: Path | None = None) 
     print("train_tier counts (strictest):", dict(tier_counts))
 
 
-def build_sidechain(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
-    """Write the companion side-chain shift table for the bundle's chains.
+def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
+    """Write the chemical-shift table for the bundle's chains.
 
-    The ids come from the same unfiltered ``scores.json`` the main table is
-    built from (unfiltered is a superset of every tier), so the companion joins
-    1:1 on ``id`` with no orphans on either side.
+    Every assigned shift on a canonical residue of every released chain,
+    backbone and side chain (shifts on non-canonical residues are excluded --
+    see :func:`trizod.bmrb.bmrb.get_deposited_shifts`), with ``val_ppm`` as
+    deposited and ``val_corrected_ppm`` beside it. The offsets
+    come from the same unfiltered ``scores.json`` the main table is built from
+    (unfiltered is a superset of every tier, and the offsets are per chain, not
+    per tier — verified identical for all 4,113 strict chains), so the table
+    joins on ``id`` with no orphans on either side.
     """
-    ids = [
-        rec["ID"]
+    records = [
+        normalize_offset_keys(rec)
         for rec in read_jsonl(in_bundle / "scores" / "unfiltered" / "scores.json")
     ]
-    print(f"\nbuilding side-chain companion for {len(ids)} chains from {pkl_dir} ...")
+    offsets = {rec["ID"]: chain_offsets(rec) for rec in records}
+    print(f"\nbuilding shift table for {len(offsets)} chains from {pkl_dir} ...")
     if not pkl_dir.is_dir():
         raise SystemExit(f"BMRB pickle cache not found: {pkl_dir}")
     # per-chain rejections (AA mismatch, unparsable Seq_ID) are expected in bulk
     # and would emit thousands of lines; the summary below counts them instead
     logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
-    frames = iter_sidechain_frames(ids, pkl_dir)
-    path, n_rows = write_sidechain_parquet(frames, out_path)
+    frames = (
+        (cid, annotate_offsets(df, offsets.get(cid)))
+        for cid, df in iter_shift_frames(list(offsets), pkl_dir)
+    )
+    path, n_rows = write_shift_parquet(frames, out_path)
 
     _, pq = _import_pyarrow()
-    table = pq.read_table(path, columns=["id"])
+    table = pq.read_table(path, columns=["id", "is_backbone", "offset_source"])
     n_chains = len(set(table.column("id").to_pylist()))
+    is_bb = table.column("is_backbone").to_pylist()
+    sources = table.column("offset_source").to_pylist()
+    n_bb = sum(is_bb)
+    withheld = sum(1 for s in sources if s == "not_transferable")
     print(f"wrote {path}  ({path.stat().st_size / 1e6:.2f} MB)")
-    print(f"rows: {n_rows}   chains with side-chain shifts: {n_chains} / {len(ids)}")
+    print(f"rows: {n_rows}   chains: {n_chains} / {len(offsets)}")
+    print(f"  backbone: {n_bb}   side chain: {n_rows - n_bb}")
+    print(f"  corrected: {n_rows - withheld}   raw only (NULL): {withheld}")
+    print("  offset_source:", dict(Counter(sources)))
 
 
 def main() -> None:
@@ -575,20 +677,20 @@ def main() -> None:
         help="write the composition columns as all-null instead of joining them",
     )
     ap.add_argument(
-        "--sidechain-out",
+        "--shifts-out",
         type=Path,
         default=None,
-        help="also write the companion side-chain shift table here",
+        help="also write the complete chemical-shift table here",
     )
     ap.add_argument(
         "--pkl-dir",
         type=Path,
         default=paths.PKL_DIR,
-        help="BMRB pickle cache read by --sidechain-out (default: tmp/bmrb_entries)",
+        help="BMRB pickle cache read by --shifts-out (default: tmp/bmrb_entries)",
     )
     args = ap.parse_args()
-    if not args.out and not args.sidechain_out:
-        ap.error("nothing to do: pass --out and/or --sidechain-out")
+    if not args.out and not args.shifts_out:
+        ap.error("nothing to do: pass --out and/or --shifts-out")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.out:
         # The composition cache lives in the build work dir, not in the bundle
@@ -609,8 +711,8 @@ def main() -> None:
                 "pass --skip-composition to accept null composition columns"
             )
         build(args.in_bundle, args.out, composition_csv)
-    if args.sidechain_out:
-        build_sidechain(args.in_bundle, args.sidechain_out, args.pkl_dir)
+    if args.shifts_out:
+        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,10 @@
-"""Walk BMRB entries and yield the discarded side-chain shifts per chain.
+"""Walk BMRB entries and yield every deposited shift, per chain.
 
-The scoring pipeline keeps 12 backbone atom IDs and drops everything else.
-:func:`trizod.bmrb.bmrb.get_sidechain_shifts` reads the complement for one
-chain; the helpers here apply it across a set of chain IDs (the ``id`` column of
-the released dataset Parquet, ``entryID_stID_entity_assemID_entityID``) and
-stream the result in ``id`` order so the companion table can be written without
-holding ~3.5 M rows in memory.
+:func:`trizod.bmrb.bmrb.get_deposited_shifts` reads one chain; the helpers here
+apply it across a set of chain IDs (the ``id`` column of the released dataset
+Parquet, ``entryID_stID_entity_assemID_entityID``) and stream the result in
+``id`` order so the released table can be written without holding ~12 M rows in
+memory.
 """
 
 from __future__ import annotations
@@ -15,11 +14,11 @@ import pickle
 from itertools import groupby
 from pathlib import Path
 
-from trizod.bmrb.bmrb import get_sidechain_shifts
+from trizod.bmrb.bmrb import get_deposited_shifts
 
-SIDECHAIN_PARQUET_NAME = "trizod_sidechain_shifts.parquet"
+SHIFTS_PARQUET_NAME = "trizod_shifts.parquet"
 
-log = logging.getLogger("trizod.sidechain")
+log = logging.getLogger("trizod.shifts")
 
 
 def chain_id(entry_id, stID, entity_assemID, entityID) -> str:
@@ -39,15 +38,14 @@ def entry_chains(entry, keep_ids=None):
         yield cid, seq, shifts
 
 
-def entry_sidechain_frames(entry, keep_ids=None):
+def entry_shift_frames(entry, keep_ids=None):
     """Yield ``(chain_id, DataFrame)`` for every polypeptide chain of ``entry``.
 
-    Chains with no side-chain values, or a shift table that fails the
-    sequence-consistency guards, are skipped — the same chains the backbone
-    read rejects.
+    Chains whose shift table fails the sequence-consistency guards are skipped —
+    the same chains the backbone read rejects.
     """
     for cid, seq, shifts in entry_chains(entry, keep_ids):
-        df = get_sidechain_shifts(shifts, seq)
+        df = get_deposited_shifts(shifts, seq)
         if df is None or df.empty:
             continue
         yield cid, df
@@ -93,14 +91,14 @@ def iter_chains(ids, pkl_dir, bmrb_dir=None, progress_every=2000):
                 yield (cid, *chains[cid])
 
 
-def iter_sidechain_frames(ids, pkl_dir, bmrb_dir=None, progress_every=2000):
+def iter_shift_frames(ids, pkl_dir, bmrb_dir=None, progress_every=2000):
     """Yield ``(chain_id, DataFrame)`` for ``ids``, in sorted ``id`` order.
 
-    Chains with no recoverable side-chain values are skipped, so the companion
-    table has no empty groups (it still joins 1:1 into the main table).
+    Chains whose table fails a sequence-consistency guard are skipped, so the
+    released table has no empty groups (it still joins into the main table).
     """
     for cid, seq, shifts in iter_chains(ids, pkl_dir, bmrb_dir, progress_every):
-        df = get_sidechain_shifts(shifts, seq)
+        df = get_deposited_shifts(shifts, seq)
         if df is None or df.empty:
             continue
         yield cid, df

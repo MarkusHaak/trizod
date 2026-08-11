@@ -15,15 +15,15 @@ Core bundle (~115 MB):
   MANIFEST.json
 
 Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
-Optional (~12 MB): shifts/trizod_sidechain_shifts.parquet — the side-chain
-chemical shifts the scoring path discards, AS DEPOSITED (no re-referencing).
-Staged automatically when it exists; build it with
-``scripts/build_parquet_dataset.py --sidechain-out``.
+Optional (~50 MB): shifts/trizod_shifts.parquet — every assigned chemical
+shift of every released chain, backbone and side chain, as deposited, beside the
+re-referenced value where one transfers. Staged automatically when it exists;
+build it with ``scripts/build_parquet_dataset.py --shifts-out``.
 
 Usage
 -----
     uv run python -m trizod.dataset.package_release [--version VER]
-        [--include-str] [--sidechain-parquet PATH] [--out DIR]
+        [--include-str] [--shifts-parquet PATH] [--out DIR]
         [--work-dir DIR] [--root DIR]
 
 The output directory defaults under the work dir (gitignored). Nothing is
@@ -42,7 +42,7 @@ from trizod import paths as repo_paths
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, read_fasta
 from trizod.provenance import pipeline_version
-from trizod.sidechain import SIDECHAIN_PARQUET_NAME
+from trizod.shifts import SHIFTS_PARQUET_NAME
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 DEFAULT_VERSION = "2026-07"
@@ -142,14 +142,12 @@ def main(argv=None) -> None:
         help="also bundle the ~1.4 GB re-referenced .str files",
     )
     ap.add_argument(
-        "--sidechain-parquet",
+        "--shifts-parquet",
         type=Path,
         default=None,
         help=(
-            "companion side-chain shift table to stage under shifts/ "
-            "(default: <root>/data/processed/"
-            + SIDECHAIN_PARQUET_NAME
-            + " if it exists)"
+            "chemical-shift table to stage under shifts/ "
+            "(default: <root>/data/processed/" + SHIFTS_PARQUET_NAME + " if it exists)"
         ),
     )
     ap.add_argument("--out", type=Path, default=None)
@@ -218,23 +216,21 @@ def main(argv=None) -> None:
         raise SystemExit(f"missing test-set labels: {test_labels}")
     planned.append((test_labels, f"test/{test_labels.name}"))
 
-    # Companion side-chain shift table: explicit path is required to exist, the
-    # default location is best-effort so a release can be staged before it has
-    # been built (scripts/build_parquet_dataset.py --sidechain-out).
-    sidechain = args.sidechain_parquet
-    if sidechain is None:
-        default_sidechain = (
-            repo_paths.layout(args.root).processed / SIDECHAIN_PARQUET_NAME
-        )
-        sidechain = default_sidechain if default_sidechain.exists() else None
-    elif not sidechain.exists():
-        raise SystemExit(f"missing side-chain companion table: {sidechain}")
-    if sidechain is not None:
-        planned.append((sidechain, f"shifts/{SIDECHAIN_PARQUET_NAME}"))
+    # Chemical-shift table: explicit path is required to exist, the default
+    # location is best-effort so a release can be staged before it has been
+    # built (scripts/build_parquet_dataset.py --shifts-out).
+    shifts = args.shifts_parquet
+    if shifts is None:
+        default_shifts = repo_paths.layout(args.root).processed / SHIFTS_PARQUET_NAME
+        shifts = default_shifts if default_shifts.exists() else None
+    elif not shifts.exists():
+        raise SystemExit(f"missing chemical-shift table: {shifts}")
+    if shifts is not None:
+        planned.append((shifts, f"shifts/{SHIFTS_PARQUET_NAME}"))
     else:
         print(
-            "  note: no side-chain companion table staged (build it with "
-            "scripts/build_parquet_dataset.py --sidechain-out)"
+            "  note: no chemical-shift table staged (build it with "
+            "scripts/build_parquet_dataset.py --shifts-out)"
         )
 
     manifest: dict[str, dict] = {}
@@ -272,15 +268,18 @@ def main(argv=None) -> None:
         "n_files": len(planned),
         "files": dict(sorted(manifest.items())),
     }
-    if sidechain is not None:
-        rel = f"shifts/{SIDECHAIN_PARQUET_NAME}"
-        summary["sidechain_shifts"] = {
+    if shifts is not None:
+        rel = f"shifts/{SHIFTS_PARQUET_NAME}"
+        summary["chemical_shifts"] = {
             "path": rel,
             "n_records": manifest[rel].get("n_records"),
-            # stated in the manifest as well as the datasheet: these are the
-            # values the scoring path discards, exactly as deposited
-            "rereferenced": False,
-            "offset_corrected": False,
+            # stated in the manifest as well as the datasheet: val_ppm is always
+            # the deposited value, and val_corrected_ppm is null wherever no
+            # trustworthy offset transfers rather than a copy of it
+            "raw_column": "val_ppm",
+            "rereferenced_column": "val_corrected_ppm",
+            "rereferenced_nuclei": "backbone (all), side-chain 13C",
+            "raw_only_nuclei": "side-chain 1H, side-chain 15N",
         }
     (bundle / "MANIFEST.json").write_text(json.dumps(summary, indent=2))
 
@@ -296,11 +295,12 @@ def main(argv=None) -> None:
         f"  test: CheZOD117={summary['test_sets']['CheZOD117']}, "
         f"TriZOD={summary['test_sets']['TriZOD_test']}"
     )
-    if sidechain is not None:
-        n_sc = summary["sidechain_shifts"]["n_records"]
+    if shifts is not None:
+        n_shifts = summary["chemical_shifts"]["n_records"]
         print(
-            f"  side chains: shifts/{SIDECHAIN_PARQUET_NAME} "
-            f"({n_sc if n_sc is not None else 'unknown'} shifts, as deposited)"
+            f"  shifts: shifts/{SHIFTS_PARQUET_NAME} "
+            f"({n_shifts if n_shifts is not None else 'unknown'} values, "
+            "backbone + side chain)"
         )
     print("\nNothing uploaded. Review the bundle, then deposit to Zenodo manually.")
 

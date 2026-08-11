@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from trizod import paths
 from trizod.bmrb.bmrb import BB_ATOM_IDS, get_sidechain_shifts, get_valid_bbshifts
 from trizod.constants import AA1TO3, AA3TO1, BACKBONE_ATOMS
-from trizod.sidechain import iter_chains
+from trizod.shifts import iter_chains
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 AA3 = sorted(AA3TO1)

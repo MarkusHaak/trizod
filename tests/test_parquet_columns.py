@@ -23,6 +23,12 @@ import pytest
 from trizod import paths
 from trizod.bmrb.bmrb import EntityAssemblyRow
 from trizod.dataset import composition as comp
+from trizod.offsets import (
+    lacs_off_ppm_col,
+    off_sigma_col,
+    total_off_ppm_col,
+    total_offset_ppm,
+)
 from trizod.trizod import output_dataset
 
 SCRIPT = paths.ROOT / "scripts" / "build_parquet_dataset.py"
@@ -45,10 +51,10 @@ builder = _load_builder()
 
 SCORE_TYPES = ["zscores", "gscores"]
 
-#: The 42 columns published in v0.3.0, in order, with their Arrow types. Pinned
-#: literally: consumers of the deposit index on these, so they may be appended
-#: to but never reordered, renamed or retyped.
-PUBLISHED_V030 = [
+#: The 28 non-offset columns published in v0.3.0, in order, with their Arrow
+#: types. Pinned literally: consumers of the deposit index on these, so they may
+#: be appended to but never reordered, renamed or retyped.
+PUBLISHED_V030_HEAD = [
     ("id", "string"),
     ("entry_id", "string"),
     ("entity_id", "string"),
@@ -77,8 +83,27 @@ PUBLISHED_V030 = [
     ("bbshift_types_post", "int32"),
     ("citation_title", "string"),
     ("citation_doi", "string"),
-    *[(f"off_{a}", "float32") for a in builder.BACKBONE],
-    *[(f"lacs_off_{a}", "float32") for a in builder.BACKBONE],
+]
+
+#: The one exception to "never renamed": the offset columns v0.3.0 shipped as
+#: ``off_<a>`` / ``lacs_off_<a>`` were renamed for unit safety, because the two
+#: are NOT in the same unit and nothing in the old names said so. ``off_<a>`` is
+#: a multiple of the per-atom POTENCI RMSD, ``lacs_off_<a>`` is ppm, and adding
+#: them together is an error worth up to 21.2 ppm. The mapping is pinned here so
+#: the break is explicit and a consumer can migrate mechanically.
+OFFSET_RENAMED_2026_08 = {
+    **{f"off_{a}": f"off_{a}_sigma" for a in builder.BACKBONE},
+    **{f"lacs_off_{a}": f"lacs_off_{a}_ppm" for a in builder.BACKBONE},
+}
+
+#: ...and the ppm total each pair collapses to, appended beside them so nobody
+#: has to do the sigma->ppm arithmetic downstream.
+OFFSET_APPENDED_2026_08 = [(f"total_off_{a}_ppm", "float64") for a in builder.BACKBONE]
+
+PUBLISHED_V030 = [
+    *PUBLISHED_V030_HEAD,
+    *[(f"off_{a}_sigma", "float32") for a in builder.BACKBONE],
+    *[(f"lacs_off_{a}_ppm", "float32") for a in builder.BACKBONE],
 ]
 
 
@@ -107,7 +132,7 @@ def _scored_frame():
         "exp_method_subtype": ["solution"],
         "sample_state_evidence": ["solution"],
         "physical_state": ["native"],
-        "denaturant_evidence": [False],
+        "cosolvent_evidence": [False],
         "membrane_mimetic": ["SDS;micelle"],
         "citation_DOI": ["10.1000/xyz"],
         "citation_title": ["A title"],
@@ -124,8 +149,9 @@ def _scored_frame():
         "pass_post": [True],
     }
     for atom in builder.BACKBONE:
-        row[f"off_{atom}"] = [0.1]
-        row[f"lacs_off_{atom}"] = [0.2]
+        row[off_sigma_col(atom)] = [0.1]
+        row[lacs_off_ppm_col(atom)] = [0.2]
+        row[total_off_ppm_col(atom)] = [total_offset_ppm(atom, 0.2, 0.1)]
     return pd.DataFrame(row)
 
 
@@ -178,7 +204,7 @@ def test_declared_scores_sources_are_actually_emitted(tmp_path):
     "key",
     [
         "physical_state",
-        "denaturant_evidence",
+        "cosolvent_evidence",
         "sample_state_evidence",
         "membrane_mimetic",
     ],
@@ -237,6 +263,25 @@ def test_parquet_carries_every_composition_column():
 def test_published_v030_columns_are_unchanged():
     published = [(c.name, c.arrow) for c in builder.COLUMNS[: len(PUBLISHED_V030)]]
     assert published == PUBLISHED_V030
+
+
+def test_the_offset_rename_is_the_only_rename_and_it_is_complete():
+    """No v0.3.0 name may survive under its old, unit-ambiguous spelling, and
+    every one of them must have a successor."""
+    names = {c.name for c in builder.COLUMNS}
+    for old, new in OFFSET_RENAMED_2026_08.items():
+        assert old not in names, f"{old} still shipped alongside {new}"
+        assert new in names, f"{old} was dropped instead of renamed to {new}"
+    head = [(c.name, c.arrow) for c in builder.COLUMNS[: len(PUBLISHED_V030_HEAD)]]
+    assert head == PUBLISHED_V030_HEAD
+
+
+def test_total_offset_column_is_appended_for_every_atom():
+    """The ppm total is what a consumer actually subtracts; it must ship beside
+    the two raw estimates rather than leaving them to combine the units."""
+    declared = [(c.name, c.arrow) for c in builder.COLUMNS]
+    for column in OFFSET_APPENDED_2026_08:
+        assert column in declared, column
 
 
 def test_new_columns_are_appended_after_the_published_ones():
@@ -421,7 +466,7 @@ def test_sample_state_columns_are_copied_from_scores_json(tmp_path):
                 "12345",
                 "12345_1_1_1",
                 physical_state="molten globule",
-                denaturant_evidence=True,
+                cosolvent_evidence=True,
                 sample_state_evidence="solution",
                 membrane_mimetic="SDS;micelle",
             ),
@@ -430,12 +475,12 @@ def test_sample_state_columns_are_copied_from_scores_json(tmp_path):
     )
     cols = builder.collect_columns(bundle, None)
     assert _one(cols, "physical_state") == "molten globule"
-    assert _one(cols, "denaturant_evidence") is True
+    assert _one(cols, "cosolvent_evidence") is True
     assert _one(cols, "sample_state_evidence") == "solution"
     assert _one(cols, "membrane_mimetic") == "SDS;micelle"
     for name in (
         "physical_state",
-        "denaturant_evidence",
+        "cosolvent_evidence",
         "sample_state_evidence",
         "membrane_mimetic",
     ):
@@ -509,3 +554,22 @@ def test_as_bool_never_invents_false(raw, expected):
 )
 def test_as_str_list_round_trips_the_classifier_join(raw, expected):
     assert builder.as_str_list(raw) == expected
+
+
+def test_legacy_scores_json_still_builds_and_agrees(tmp_path):
+    """A scores.json staged before the rename must still produce the Parquet,
+    with the same numbers under the new names — including the ppm total, which
+    such a file never carried."""
+    legacy = _record("12345", "12345_1_1_1")
+    for atom in builder.BACKBONE:
+        legacy[f"off_{atom}"] = 0.1
+        legacy[f"lacs_off_{atom}"] = 0.2
+    bundle = _write_bundle(tmp_path / "bundle", records=[legacy])
+
+    cols = builder.collect_columns(bundle, None)
+    for atom in builder.BACKBONE:
+        assert _one(cols, off_sigma_col(atom)) == pytest.approx(0.1)
+        assert _one(cols, lacs_off_ppm_col(atom)) == pytest.approx(0.2)
+        assert _one(cols, total_off_ppm_col(atom)) == pytest.approx(
+            total_offset_ppm(atom, 0.2, 0.1)
+        )
