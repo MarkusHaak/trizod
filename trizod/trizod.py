@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import logging
+import re
 import time
 
 import numpy as np
@@ -8,6 +9,14 @@ from pandarallel import pandarallel
 from tqdm import tqdm
 
 import trizod.bmrb.bmrb as bmrb
+from trizod.bmrb.sample_state import (
+    PHYSICAL_STATE_MODERATE_DENY,
+    PHYSICAL_STATE_STRICT_DENY,
+    PHYSICAL_STATE_TOLERANT_DENY,
+    entry_sample_state,
+    has_denaturant_evidence,
+    resolve_physical_state,
+)
 from trizod.cache import (
     _potenci_cache_key,  # noqa: F401  (re-exported for backward compatibility)
     load_potenci_cache,  # noqa: F401
@@ -26,10 +35,6 @@ from trizod.pipeline import (
 from trizod.provenance import pipeline_version
 
 
-class Found(Exception):
-    pass
-
-
 class OffsetTooLargeException(Exception):
     pass
 
@@ -40,6 +45,52 @@ class OffsetCausedFilterException(Exception):
 
 class FilterException(Exception):
     pass
+
+
+#: Keywords that must match as whole words rather than as substrings.
+#: ``bound`` is the only one: 22 moderate rows match it exclusively through
+#: ``unbound`` / ``boundaries`` ("Unbound Med25ACID", "Human Pdx1 Homeodomain in
+#: the Unbound State"), i.e. exactly the free-state depositions the strict tier
+#: wants to KEEP. Prefix keywords such as ``denatur`` and ``unfold`` deliberately
+#: stay substring matches.
+WORD_BOUNDARY_KEYWORDS = frozenset({"bound"})
+
+#: Detergents/lipids that make a sample a membrane mimetic rather than a
+#: denaturant. Annotated as the ``membrane_mimetic`` column, never filtered:
+#: the rows they would remove are 93.7 % ordered and contain zero disordered
+#: chains, so filtering on them would be a one-sided removal of ordered examples.
+MEMBRANE_MIMETIC_TOKENS = (
+    "SDS",
+    "DPC",
+    "dodecyl",
+    "LPPG",
+    "LMPG",
+    "DHPC",
+    "DMPC",
+    "POPC",
+    "bicelle",
+    "micelle",
+    "Triton",
+    "CHAPS",
+    "octyl",
+    "maltoside",
+    "digitonin",
+    "nanodisc",
+)
+
+_KEYWORD_PATTERNS = {}
+
+
+def _keyword_matches(keyword, fields):
+    """Does ``keyword`` occur in any of ``fields`` (all lower-cased already)?"""
+    if keyword in WORD_BOUNDARY_KEYWORDS:
+        pattern = _KEYWORD_PATTERNS.get(keyword)
+        if pattern is None:
+            pattern = _KEYWORD_PATTERNS[keyword] = re.compile(
+                rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
+            )
+        return any(pattern.search(field) for field in fields)
+    return any(keyword in field for field in fields)
 
 
 filter_defaults = pd.DataFrame(
@@ -65,22 +116,38 @@ filter_defaults = pd.DataFrame(
             [],
             ["denatur"],
             ["denatur", "unfold", "misfold"],
-            ["denatur", "unfold", "misfold", "interacti", "bound"],
-        ],  # interacti[on/ng]
-        "chemical-denaturants": [
-            [],
-            ["guanidin", "GdmCl", "Gdn-Hcl", "urea"],
-            ["guanidin", "GdmCl", "Gdn-Hcl", "urea"],
             [
-                "guanidin",
-                "GdmCl",
-                "Gdn-Hcl",
-                "urea",
-                "TFA",
-                "trifluoroethanol",
-                "Potassium Pyrophosphate",
+                "denatur",
+                "unfold",
+                "misfold",
+                "bound",
+                "in complex with",
+                "complexed with",
             ],
         ],
+        # 'interacti[on/ng]' removed: all 46 of its strict hits came from
+        # _Citation_keyword/_Struct_keywords -- paper-topic labels such as
+        # "protein-protein interaction" on free monomers -- and only 41 % had an
+        # independent detect_bound() signal. The two complex phrases replace it
+        # on sample-descriptive fields only (261 strict rows, 94 % corroborated).
+        "keyword-search-scope": ["sample", "sample", "sample", "sample"],
+        "physical-state-blacklist": [
+            [],
+            list(PHYSICAL_STATE_TOLERANT_DENY),
+            list(PHYSICAL_STATE_MODERATE_DENY),
+            list(PHYSICAL_STATE_STRICT_DENY),
+        ],
+        "chemical-denaturants": [
+            [],
+            ["guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol"],
+            ["guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol", "DMSO"],
+            ["guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol", "DMSO"],
+        ],
+        # 'TFA' removed (57 percent-unit components, median 0.1 %, 56/57 <= 0.2 %:
+        # an HPLC counterion, and its acidification pathway is already covered by
+        # the pH filter) and 'Potassium Pyrophosphate' removed (a buffer, added in
+        # an unreviewed grab-bag commit). Net data impact of both: +1 strict row.
+        # 'TFE' is genuinely new -- 'trifluoroethanol' does not contain 'tfe'.
         "exp-method-whitelist": [
             ["", "."],
             ["", "solution", "structures"],
@@ -93,6 +160,11 @@ filter_defaults = pd.DataFrame(
             ["solid"],
             ["solid"],
         ],
+        # What to do about the 4,103 entries whose _Entry.Experimental_method_subtype
+        # tag is simply ABSENT -- 90.8 % of everything the strict method filter
+        # rejects, 90.7 % of them deposited before 2006 when the tag was not
+        # routinely filled in. 'off' keeps unfiltered = the raw corpus.
+        "method-fallback": ["off", "reject-solid", "reject-solid", "require-solution"],
         "exclude-paramagnetic": [False, True, True, True],
         "max-offset": [np.inf, 3.0, 3.0, 2.0],
         "reject-shift-type-only": [True, True, False, False],
@@ -110,8 +182,16 @@ def fill_row_data(
     fix_outliers=True,
     include_shifts=False,
     no_shift_averaging=False,
+    keyword_search_scope="all",
+    membrane_mimetics=MEMBRANE_MIMETIC_TOKENS,
     bmrb_entries=None,
 ):
+    """Fill in one peptide row's metadata, keyword flags and state columns.
+
+    ``keyword_search_scope`` defaults to ``"all"`` -- the historical behaviour of
+    this function -- while the shipped tier defaults resolve it to ``"sample"``
+    through ``filter_defaults``, like every other filter policy.
+    """
     entry = bmrb_entries.loc[row["entryID"], "entry"]  # row['entry']
     peptide_shifts = entry.get_peptide_shifts()
     shifts, condID, assemID, sampleIDs = peptide_shifts[
@@ -175,56 +255,104 @@ def fill_row_data(
     row["paramagnetic"] = (
         assembly.paramagnetic and assembly.paramagnetic.lower() == "yes"
     ) or (entity.paramagnetic and entity.paramagnetic.lower() == "yes")
-    # check if keywords are present
-    fields = [
+    # _Entity_assembly.Physical_state, resolved to THIS row's entity assembly.
+    # An entry-wide OR over-filters by 10-28 rows per tier. Emitted at every
+    # tier; the per-tier exact-match deny list is applied in prefilter_dataframe.
+    physical_state = resolve_physical_state(
+        assembly, row["entity_assemID"], row["entityID"]
+    )
+    row["physical_state"] = physical_state if physical_state else pd.NA
+    # A shift table that references no sample is searched against every sample
+    # of the entry. Resolved once, here, so the denaturant evidence below and
+    # the component scan further down see the same sample set.
+    if len(sampleIDs) == 0 and entry.samples:
+        sampleIDs = list(entry.samples.keys())
+    # `denatured`/`unfolded` are ambiguous depositor vocabulary -- alpha-synuclein
+    # (bmr6968) is deposited as `denatured`. Those states are only denied when the
+    # entry independently names a denaturant, so record that evidence here, where
+    # the sample components are in reach. Tier-independent by design.
+    denaturant_texts = [
         entry.title,
         entry.details,
-        entry.citation_title,
-        entry.assemblies[assemID].name,
-        entry.assemblies[assemID].details,
-        entry.entities[row["entityID"]].name,
-        entry.entities[row["entityID"]].details,
+        assembly.name,
+        assembly.details,
+        entity.name,
+        entity.details,
     ]
-    if entry.citation_keywords is not None:
-        if isinstance(entry.citation_keywords, list):
-            for el in entry.citation_keywords:
-                fields.extend(el)
-        else:
-            fields.extend(entry.citation_keywords)
-    if entry.struct_keywords is not None:
-        if isinstance(entry.struct_keywords, list):
-            for el in entry.struct_keywords:
-                fields.extend(el)
-        else:
-            fields.extend(entry.struct_keywords)
     for sID in sampleIDs:
-        fields.extend(
-            [
-                entry.samples[sID].name,
-                entry.samples[sID].details,
-                entry.samples[sID].framecode,
-            ]
-        )
+        sample = entry.samples.get(sID)
+        if sample is None:
+            continue
+        denaturant_texts.extend([sample.name, sample.details])
+        denaturant_texts.extend(comp[3] for comp in sample.components)
+    row["denaturant_evidence"] = has_denaturant_evidence(denaturant_texts)
+    # Is this solution NMR or solid-state NMR, judging by _Sample.Type,
+    # _Experiment.Sample_state and the experiment names?
+    row["sample_state_evidence"] = entry_sample_state(entry, sampleIDs)
+    # check if keywords are present.
+    # Sample-descriptive fields describe what is in the NMR tube; the paper-topic
+    # fields (citation title/keywords, struct keywords) describe what the
+    # *publication* is about. Matching a state keyword on the latter drops good
+    # data -- e.g. bmr51322, an Abeta(1-42) deposition whose own Physical_state
+    # is 'intrinsically disordered', on a citation title about amyloid fibrils.
+    sample_fields = [
+        entry.title,
+        entry.details,
+        assembly.name,
+        assembly.details,
+        entity.name,
+        entity.details,
+    ]
+    for sID in sampleIDs:
+        sample = entry.samples.get(sID)
+        if sample is None:
+            continue
+        sample_fields.extend([sample.name, sample.details, sample.framecode])
+    topic_fields = [entry.citation_title]
+    # issue #23: these are lists of STRINGS. The former `fields.extend(el)` on a
+    # str exploded it into single characters, so no multi-character keyword could
+    # ever match _Citation_keyword.Keyword or _Struct_keywords.
+    for kw_field in (entry.citation_keywords, entry.struct_keywords):
+        if kw_field is None:
+            continue
+        if isinstance(kw_field, list):
+            topic_fields.extend(kw_field)
+        else:
+            topic_fields.append(kw_field)
+    fields = (
+        sample_fields
+        if keyword_search_scope == "sample"
+        else sample_fields + topic_fields
+    )
+    fields = [field.lower() for field in fields if field]  # field can be None
     for keyword in keywords:
-        row[keyword] = False
-        for field in fields:
-            if field and keyword.lower() in field.lower():  # field can be None
-                row[keyword] = True
-                break
+        row[keyword] = _keyword_matches(keyword.lower(), fields)
+    # Sample components, once. _Sample_component.Mol_common_name (comp[3]) is
+    # only meaningful for components that are not the studied polymer itself
+    # (_Sample_component.Entity_ID, comp[2], unset).
+    component_names = []
+    for sID in sampleIDs:
+        # .get(): bmrb.py strips sample IDs only AFTER the membership test, so a
+        # whitespace-padded ID yields a key that is no longer in entry.samples.
+        # The KeyError that used to raise here was not caught by the surrounding
+        # `except Found`.
+        sample = entry.samples.get(sID)
+        if sample is None:
+            continue
+        component_names.extend(
+            comp[3].lower() for comp in sample.components if comp[3] and not comp[2]
+        )
     # check if chemical detergents are present
     for den_comp in chemical_denaturants:
-        row[den_comp] = False
-        if len(sampleIDs) == 0 and entry.samples:
-            # if no sampleID is referenced, conservatively assume and search all sample entries
-            sampleIDs = list(entry.samples.keys())
-        try:
-            for sID in sampleIDs:
-                for comp in entry.samples[sID].components:
-                    if comp[3] and not comp[2] and den_comp.lower() in comp[3].lower():
-                        row[den_comp] = True
-                        raise Found
-        except Found:
-            pass
+        row[den_comp] = any(den_comp.lower() in name for name in component_names)
+    # Membrane mimetics are annotated, never filtered: the matched token(s), not
+    # a bool, so an SDS micelle stays distinguishable from DDM solubilisation.
+    matched = [
+        token
+        for token in membrane_mimetics
+        if any(token.lower() in name for name in component_names)
+    ]
+    row["membrane_mimetic"] = ";".join(matched) if matched else pd.NA
     # add columns that will be filled later
     row["scores"] = None
     row["k"] = None
@@ -246,6 +374,7 @@ def create_peptide_dataframe(
     fix_outliers=True,
     include_shifts=False,
     no_shift_averaging=False,
+    keyword_search_scope="all",
     progress=False,
 ):
     data = []
@@ -273,6 +402,7 @@ def create_peptide_dataframe(
         fix_outliers=fix_outliers,
         include_shifts=include_shifts,
         no_shift_averaging=no_shift_averaging,
+        keyword_search_scope=keyword_search_scope,
         bmrb_entries=bmrb_entries,
     )
     df = df.astype(
@@ -285,6 +415,9 @@ def create_peptide_dataframe(
                 "exp_method_subtype",
                 "entity_name",
                 "seq",
+                "physical_state",
+                "membrane_mimetic",
+                "sample_state_evidence",
             ],
             "string",
         )
@@ -367,8 +500,12 @@ def output_dataset(
         )
     shifts = []
     if include_shifts:
+        # Column i of bbshifts holds bmrb.get_valid_bbshifts()'s atom i: that is
+        # BACKBONE_ATOMS when averaging, plus the split methylene/methyl protons
+        # when not. Copy the list -- BACKBONE_ATOMS is a module global.
+        shifts = list(BACKBONE_ATOMS)
         if no_shift_averaging:
-            shifts = BACKBONE_ATOMS + ["HA2", "HA3", "HB1", "HB2", "HB3"]
+            shifts += ["HA2", "HA3", "HB1", "HB2", "HB3"]
         for i, atom_type in enumerate(shifts):
             df.loc[df.pass_post, atom_type] = df.loc[df.pass_post, "bbshifts"].apply(
                 lambda x, i=i: x[:, i]
@@ -425,6 +562,10 @@ def output_dataset(
                 "entity_name",
                 "exp_method",
                 "exp_method_subtype",
+                "sample_state_evidence",
+                "physical_state",
+                "denaturant_evidence",
+                "membrane_mimetic",
                 "citation_DOI",
                 "citation_title",
                 "ionic_strength",
@@ -493,6 +634,7 @@ def run_scoring_pipeline(args):
         fix_outliers=args.unit_corrections,
         include_shifts=args.include_shifts,
         no_shift_averaging=args.no_shift_averaging,
+        keyword_search_scope=args.keyword_search_scope,
         progress=args.progress,
     )
     df, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all_pre = (
@@ -512,6 +654,8 @@ def run_scoring_pipeline(args):
             keywords=args.keywords_blacklist,
             chemical_denaturants=args.chemical_denaturants,
             exclude_paramagnetic=args.exclude_paramagnetic,
+            physical_state_blacklist=args.physical_state_blacklist,
+            method_fallback=args.method_fallback,
         )
     )
     print()
@@ -529,6 +673,13 @@ def run_scoring_pipeline(args):
     )
     if args.progress:
         print()  # prevents overwriting last line of progress bars
+    for score_type in args.score_types:
+        if score_type not in df:
+            # compute_scores_row only creates the score columns for rows that
+            # passed the pre-filter, so a run where nothing passes used to reach
+            # postfilter_dataframe with no `zscores` column at all and die on a
+            # KeyError instead of writing an empty dataset.
+            df[score_type] = None
     logging.getLogger("trizod").info("Filtering results.")
     sels_post, sels_off, sels_all_post = postfilter_dataframe(
         df,

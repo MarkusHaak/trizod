@@ -51,6 +51,17 @@ class ScoreType(str, Enum):
     gscores = "gscores"
 
 
+class KeywordSearchScope(str, Enum):
+    sample = "sample"
+    all = "all"
+
+
+class MethodFallback(str, Enum):
+    off = "off"
+    reject_solid = "reject-solid"
+    require_solution = "require-solution"
+
+
 @app.callback(invoke_without_command=True)
 def score(
     ctx: typer.Context,
@@ -160,7 +171,23 @@ def score(
     keywords_blacklist: Optional[list[str]] = typer.Option(
         None,
         "--keywords-blacklist",
-        help="Exclude entries with any of these keywords mentioned anywhere in the BMRB file, case ignored.",
+        help="Exclude entries with any of these keywords as a substring of a searched free-text field, case ignored. See --keyword-search-scope.",
+    ),
+    keyword_search_scope: Optional[KeywordSearchScope] = typer.Option(
+        None,
+        "--keyword-search-scope",
+        help=(
+            "Which free-text fields --keywords-blacklist searches. 'sample' (default): "
+            "only fields describing the deposited sample (entry title/details, assembly "
+            "and entity name/details, sample name/details/framecode). 'all': also the "
+            "paper-topic fields (citation title and keywords, struct keywords), which "
+            "describe the publication rather than the NMR tube."
+        ),
+    ),
+    physical_state_blacklist: Optional[list[str]] = typer.Option(
+        None,
+        "--physical-state-blacklist",
+        help="Exclude entries whose _Entity_assembly.Physical_state EXACTLY equals one of these values, case ignored.",
     ),
     chemical_denaturants: Optional[list[str]] = typer.Option(
         None,
@@ -176,6 +203,17 @@ def score(
         None,
         "--exp-method-blacklist",
         help="Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.",
+    ),
+    method_fallback: Optional[MethodFallback] = typer.Option(
+        None,
+        "--method-fallback",
+        help=(
+            "How to treat entries with no _Entry.Experimental_method_subtype. "
+            "'off': the whitelist alone decides. 'reject-solid': drop those entries "
+            "when _Sample.Type / _Experiment.Sample_state / the experiment names "
+            "are solid-state. 'require-solution': admit them only on positive "
+            "solution evidence, and reject any row with solid evidence."
+        ),
     ),
     exclude_paramagnetic: Optional[bool] = typer.Option(
         None,
@@ -274,6 +312,15 @@ def score(
         ),
         max_x_fraction=float(resolve(max_x_fraction, "max-x-fraction")),
         keywords_blacklist=list(resolve(keywords_blacklist, "keywords-blacklist")),
+        keyword_search_scope=str(
+            resolve(
+                keyword_search_scope.value if keyword_search_scope else None,
+                "keyword-search-scope",
+            )
+        ),
+        physical_state_blacklist=list(
+            resolve(physical_state_blacklist, "physical-state-blacklist")
+        ),
         chemical_denaturants=list(
             resolve(chemical_denaturants, "chemical-denaturants")
         ),
@@ -282,6 +329,11 @@ def score(
         ),
         exp_method_blacklist=list(
             resolve(exp_method_blacklist, "exp-method-blacklist")
+        ),
+        method_fallback=str(
+            resolve(
+                method_fallback.value if method_fallback else None, "method-fallback"
+            )
         ),
         exclude_paramagnetic=bool(
             resolve(exclude_paramagnetic, "exclude-paramagnetic")
@@ -364,11 +416,23 @@ def _wd_argv(work_dir, root):
 def _dataset_build(
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
     root: Optional[str] = typer.Option(None, "--root"),
+    exclude_homo_oligomers: bool = typer.Option(
+        False,
+        "--exclude-homo-oligomers",
+        help=(
+            "Also drop rows whose entity appears on more than one "
+            "_Entity_assembly record (n_copies >= 2). Off by default: "
+            "oligomeric state is annotated, not filtered."
+        ),
+    ),
 ):
     """Bound-removal + exact-seq dedup + quality ranking (-> final_dataset/)."""
     from trizod.dataset import build
 
-    build.main(_wd_argv(work_dir, root))
+    argv = _wd_argv(work_dir, root)
+    if exclude_homo_oligomers:
+        argv.append("--exclude-homo-oligomers")
+    build.main(argv)
 
 
 @dataset_app.command("test-set")
