@@ -13,11 +13,14 @@ Steps
 1. Load the per-entry assembly composition from BMRB pkls and mark each
    entry as "single-entity protein" or "multi-molecule (bound)".  Bound
    means any of:
-     * the entry has more than one Entity record (homo-oligomers count
-       as one), or
+     * an assembly references more than one distinct non-water Entity
+       (homo-oligomers reference ONE Entity repeatedly and count as one;
+       a ``water`` Entity is not a binding partner), or
      * the entry contains a ``non-polymer`` entity (ligand, drug), or
-     * the entry contains a ``polydeoxyribonucleotide`` /
-       ``polyribonucleotide`` entity (DNA/RNA).
+     * the entry contains a nucleic-acid entity (DNA, RNA, or the
+       DNA/RNA hybrid polymer type).
+   Metal, ligand and oligomer metadata ride along as labels; see
+   ``trizod.dataset.composition``.
 2. For every row in the per-tier scores.json, attach the bound flag and
    compute a per-row quality score:
        quality = (bbshift_positions_post * bbshift_types_post)
@@ -60,8 +63,17 @@ MIN_SEQ_LEN = 20
 
 
 def build_composition_cache(pkl_dir: Path) -> dict:
-    """Load every BMRB pkl once and return entryID -> composition dict."""
+    """Load every BMRB pkl once and return entryID -> composition dict.
+
+    Classifier failures are collected and re-raised at the end rather than
+    swallowed. The previous bare ``except Exception`` wrote
+    ``{"is_bound": True, "error": ...}`` per failing entry, which meant a stale
+    ``tmp/bmrb_entries/`` cache produced a ``_composition_cache.csv`` with NaN
+    on every composition column for thousands of entries — and the build still
+    exited 0.
+    """
     cache: dict[str, dict] = {}
+    failures: list[tuple[str, str]] = []
     pkls = list(pkl_dir.glob("*.pkl"))
     print(f"Loading composition info from {len(pkls)} BMRB pkl files...")
     for i, pkl_path in enumerate(pkls):
@@ -71,9 +83,18 @@ def build_composition_cache(pkl_dir: Path) -> dict:
                 entry = pickle.load(f)
             cache[eid] = detect_bound(entry)
         except Exception as exc:
-            cache[eid] = {"is_bound": True, "error": str(exc)}
+            failures.append((eid, f"{type(exc).__name__}: {exc}"))
         if (i + 1) % 2000 == 0:
             print(f"  {i + 1} / {len(pkls)} processed")
+    if failures:
+        shown = "\n".join(f"    {eid}: {msg}" for eid, msg in failures[:10])
+        more = f"\n    ... and {len(failures) - 10} more" if len(failures) > 10 else ""
+        raise RuntimeError(
+            f"composition classifier failed on {len(failures)} of {len(pkls)} "
+            f"BMRB pickles in {pkl_dir}:\n{shown}{more}\n"
+            "A stale pickle cache is the usual cause — delete the directory and "
+            "let the pipeline re-parse the .str files."
+        )
     return cache
 
 
@@ -128,7 +149,7 @@ def compute_quality(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def main(argv=None):
+def make_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--work-dir",
@@ -142,7 +163,20 @@ def main(argv=None):
         default=None,
         help="repository root (default: auto-detected)",
     )
-    args = ap.parse_args(argv)
+    ap.add_argument(
+        "--exclude-homo-oligomers",
+        action="store_true",
+        help=(
+            "also drop rows whose entity appears on more than one _Entity_assembly "
+            "record (n_copies >= 2). OFF by default: oligomeric state is annotated, "
+            "not filtered, and n_copies is a conservative lower bound."
+        ),
+    )
+    return ap
+
+
+def main(argv=None):
+    args = make_parser().parse_args(argv)
     paths = resolve_paths(args.work_dir, args.root)
     out = paths.final_dataset
 
@@ -190,6 +224,15 @@ def main(argv=None):
     n_dropped_bound_global = int(
         ((all_df["len"] >= MIN_SEQ_LEN) & all_df["is_bound"]).sum()
     )
+    n_dropped_oligomer_global = 0
+    if args.exclude_homo_oligomers:
+        is_oligomer = all_df["n_copies"].fillna(1).astype(float) >= 2
+        n_dropped_oligomer_global = int((universal_keep & is_oligomer).sum())
+        universal_keep &= ~is_oligomer
+        print(
+            f"  --exclude-homo-oligomers: dropping {n_dropped_oligomer_global} "
+            "rows with n_copies >= 2"
+        )
     kept_all = all_df.loc[universal_keep].copy()
 
     # Reduce each (ID) appearance to its strictest tier — quality_score
@@ -218,6 +261,7 @@ def main(argv=None):
         "composition_flagged_bound": int(n_bound_global),
         "global_dropped_short": n_dropped_short_global,
         "global_dropped_bound": n_dropped_bound_global,
+        "global_dropped_homo_oligomer": n_dropped_oligomer_global,
         "global_unique_sequences": int(global_repr["seq"].nunique()),
         "tiers": {},
     }
@@ -256,7 +300,12 @@ def main(argv=None):
             "seq_rank_tier", "is_seq_repr_tier",
             "global_repr_ID", "global_repr_tier",
             "is_bound", "has_non_polymer", "has_nucleic",
-            "multi_protein_assembly", "n_entities", "entity_name",
+            "has_metal", "has_metal_ion", "has_metal_cofactor",
+            "has_water", "has_other_ligand",
+            "metal_comp_ids", "ligand_comp_ids", "ligand_names",
+            "multi_protein_assembly", "n_entities",
+            "n_entity_assembly_rows", "n_copies", "has_conformational_isomer",
+            "entity_name",
             "ionic_strength", "pH", "temperature", "seq",
         ]  # fmt: skip
         df_t[keep_cols].to_csv(
