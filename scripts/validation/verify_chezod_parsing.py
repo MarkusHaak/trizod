@@ -13,10 +13,13 @@ CheZOD reference Z-scores is a concordance analysis:
   2. Sequence  — do TriZOD and CheZOD agree on the sequence per entry?
                  (referencing-independent: the direct parsing/association check)
   3. Z-scores  — per-residue concordance on sequence-matched entries.
-                 Divergences are split by each entry's max |LACS offset|:
-                 large LACS offset => divergence is TriZOD re-referencing
+                 Divergences are split by each entry's max |total offset| in
+                 ppm (``total_off_<atom>_ppm``, LACS *and* the POTENCI residual
+                 correction — both move the shifts, so LACS alone understates
+                 how far a chain was re-referenced):
+                 large total offset => divergence is TriZOD re-referencing
                  (a correction, e.g. alpha-synuclein), not a parse error;
-                 small LACS offset + low correlation => candidate genuine
+                 small total offset + low correlation => candidate genuine
                  discrepancy / CheZOD mis-association.
 
 Inputs
@@ -41,6 +44,7 @@ import numpy as np
 from scipy.stats import pearsonr, spearmanr
 
 from trizod import paths
+from trizod.offsets import max_abs_offset, total_off_ppm_col
 
 CHEZOD = paths.EXT_CHEZOD_1325
 SEQS = CHEZOD / "allseqs1325.txt"
@@ -51,7 +55,13 @@ OUT = paths.INTERIM_CHEZOD_VERIFICATION
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 NA = 999.0
 LOW_CORR = 0.5  # flag matched entries below this Pearson r
-SMALL_LACS = 0.5  # |LACS offset| (ppm) below which divergence is NOT re-ref
+SMALL_REREF = 0.5  # |total offset| (ppm) below which divergence is NOT re-ref
+
+#: The question this script asks of the offsets is "how badly was this chain
+#: re-referenced", so it reads the TOTAL applied offset in ppm, not the LACS
+#: term alone -- the POTENCI residual correction moves the shifts too, and
+#: reading only LACS misclassified those entries as genuine discrepancies.
+TOTAL_PPM_COLS = [total_off_ppm_col(a) for a in ATOMS]
 
 
 def load_chezod() -> dict[str, dict]:
@@ -80,11 +90,15 @@ def load_trizod() -> dict[str, list[dict]]:
                 continue
             r = json.loads(line)
             eid = str(r["entryID"])
-            max_lacs = max(
-                (abs(r.get(f"lacs_off_{a}") or 0.0) for a in ATOMS), default=0.0
-            )
+            # Raises if the column is absent (a pre-rename scores.json must be
+            # regenerated); None only when nothing was measurable at all.
+            max_reref = max_abs_offset(r, TOTAL_PPM_COLS)
             by_entry.setdefault(eid, []).append(
-                {"seq": r["seq"] or "", "z": r["zscores"] or [], "max_lacs": max_lacs}
+                {
+                    "seq": r["seq"] or "",
+                    "z": r["zscores"] or [],
+                    "max_reref": 0.0 if max_reref is None else max_reref,
+                }
             )
     return by_entry
 
@@ -152,7 +166,7 @@ def main() -> None:
                 "pearson": conc.get("pearson"),
                 "spearman": conc.get("spearman"),
                 "mae": conc.get("mae"),
-                "max_lacs_off": round(rec["max_lacs"], 3) if rec else None,
+                "max_total_off_ppm": round(rec["max_reref"], 3) if rec else None,
             }
         )
 
@@ -167,7 +181,7 @@ def main() -> None:
         "pearson",
         "spearman",
         "mae",
-        "max_lacs_off",
+        "max_total_off_ppm",
     ]
     with (OUT / "per_entry.csv").open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
@@ -186,8 +200,8 @@ def main() -> None:
     with_corr = [r for r in seq_ok if r.get("pearson") is not None]
     pear = np.array([r["pearson"] for r in with_corr])
     low = [r for r in with_corr if r["pearson"] < LOW_CORR]
-    low_reref = [r for r in low if (r["max_lacs_off"] or 0) >= SMALL_LACS]
-    low_genuine = [r for r in low if (r["max_lacs_off"] or 0) < SMALL_LACS]
+    low_reref = [r for r in low if (r["max_total_off_ppm"] or 0) >= SMALL_REREF]
+    low_genuine = [r for r in low if (r["max_total_off_ppm"] or 0) < SMALL_REREF]
 
     summary = {
         "chezod_entries": len(chezod),
@@ -214,7 +228,7 @@ def main() -> None:
                 {
                     "bmrb_id": r["bmrb_id"],
                     "pearson": round(r["pearson"], 3),
-                    "max_lacs_off": r["max_lacs_off"],
+                    "max_total_off_ppm": r["max_total_off_ppm"],
                     "n": r["n_compared"],
                 }
                 for r in low_genuine
@@ -242,16 +256,16 @@ def main() -> None:
         )
     print(
         f"  low-corr (r<{LOW_CORR}): {len(low)} "
-        f"-> {len(low_reref)} explained by LACS re-referencing "
-        f"(|offset|>={SMALL_LACS} ppm), "
+        f"-> {len(low_reref)} explained by re-referencing "
+        f"(|offset|>={SMALL_REREF} ppm), "
         f"{len(low_genuine)} candidate genuine discrepancies"
     )
     if summary["low_corr_candidate_discrepancies"]:
-        print("  candidate discrepancies (low r, small LACS offset):")
+        print("  candidate discrepancies (low r, small total offset):")
         for r in summary["low_corr_candidate_discrepancies"][:15]:
             print(
                 f"    bmr{r['bmrb_id']}: r={r['pearson']}, "
-                f"maxLACS={r['max_lacs_off']}, n={r['n']}"
+                f"maxOff={r['max_total_off_ppm']}ppm, n={r['n']}"
             )
     print(f"\nWrote {OUT / 'per_entry.csv'} and {OUT / 'summary.json'}")
 

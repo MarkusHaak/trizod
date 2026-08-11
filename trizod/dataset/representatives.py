@@ -84,7 +84,8 @@ def main(argv=None):
             .drop_duplicates(subset=["global_repr_ID"], keep="first")[
                 [
                     "global_repr_ID", "ID", "tier", "quality_score", "seq",
-                    "n_bb_pos", "n_bb_types", "max_potenci_off", "max_lacs_off",
+                    "n_bb_pos", "n_bb_types", "max_potenci_off",
+                    "max_total_off_ppm",
                 ]
             ]
             .rename(
@@ -131,7 +132,7 @@ def main(argv=None):
             "cluster_repr", "member", "best_repr",
             "member_quality", "best_repr_quality", "quality_diff_vs_mmseqs",
             "member_tier", "member_ID", "n_bb_pos", "n_bb_types",
-            "max_potenci_off", "max_lacs_off",
+            "max_potenci_off", "max_total_off_ppm",
         ]  # fmt: skip
         merged[merged_cols].to_csv(
             mmseqs / f"train_{tier}_clu_best.tsv", sep="\t", index=False

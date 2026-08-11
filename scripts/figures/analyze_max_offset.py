@@ -3,7 +3,12 @@
 
 The pipeline filter ``--max-offset`` rejects (or partially masks) entries
 whose per-atom POTENCI/AIC residual offset exceeds a threshold:
-  unfiltered  ∞,  tolerant 3.0 ppm,  moderate 3.0 ppm,  strict 2.0 ppm.
+  unfiltered  ∞,  tolerant 3.0,  moderate 3.0,  strict 2.0.
+
+The thresholds are in SIGMA, not ppm: ``scoring.compute_offsets`` averages
+``diff / REFINED_WEIGHTS``, so ``off_<atom>_sigma`` is a multiple of the
+per-atom POTENCI RMSD. The ppm counterpart of the full correction is
+``total_off_<atom>_ppm``, plotted separately below.
 
 This script loads the released ``data/interim/scored/<tier>/scores.json`` files
 (written with --rereference-mode both, so LACS pre-correction has already
@@ -13,7 +18,7 @@ been applied) and asks:
      LACS for each backbone atom and each tier?
   2. How many entries WOULD have been rejected (or masked) by the
      current filter thresholds?
-  3. How would relaxed thresholds (4 ppm, 5 ppm, ∞) change tier sizes?
+  3. How would relaxed thresholds (4, 5, ∞ sigma) change tier sizes?
   4. Is the residual large enough to matter, or has LACS already
      handled the worst cases?
 
@@ -32,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from trizod import paths
+from trizod.offsets import off_sigma_col, offset_value, total_off_ppm_col
 
 RELEASE = paths.INTERIM_SCORED
 OUTDIR = paths.ROOT / "docs" / "archive" / "260520" / "figures"
@@ -68,15 +74,21 @@ def load_scores(tier: str) -> pd.DataFrame:
                 "n_bb_types": r["bbshift_types_post"],
                 "n_bb_pos": r["bbshift_positions_post"],
             }
+            # offset_value() raises on an absent column instead of yielding
+            # np.nan: reading a stale key used to produce an all-NaN frame and
+            # therefore silently empty plots, which looks like "no offsets" and
+            # is indistinguishable from a genuinely well-referenced corpus.
             for a in ATOMS:
-                v = r.get(f"off_{a}")
-                row[f"off_{a}"] = float(v) if v is not None else np.nan
-                vl = r.get(f"lacs_off_{a}")
-                row[f"lacs_off_{a}"] = float(vl) if vl is not None else np.nan
+                v = offset_value(r, off_sigma_col(a))
+                row[off_sigma_col(a)] = np.nan if v is None else v
+                vt = offset_value(r, total_off_ppm_col(a))
+                row[total_off_ppm_col(a)] = np.nan if vt is None else vt
             rows.append(row)
     df = pd.DataFrame(rows)
-    df["max_potenci_off"] = df[[f"off_{a}" for a in ATOMS]].abs().max(axis=1)
-    df["max_lacs_off"] = df[[f"lacs_off_{a}" for a in ATOMS]].abs().max(axis=1)
+    df["max_potenci_off"] = df[[off_sigma_col(a) for a in ATOMS]].abs().max(axis=1)
+    df["max_total_off_ppm"] = (
+        df[[total_off_ppm_col(a) for a in ATOMS]].abs().max(axis=1)
+    )
     return df
 
 
@@ -96,7 +108,7 @@ def main():
     for i, atom in enumerate(ATOMS):
         ax = axes[i // 4, i % 4]
         for tier in TIERS:
-            vals = frames[tier][f"off_{atom}"].dropna().values
+            vals = frames[tier][off_sigma_col(atom)].dropna().values
             vals = vals[np.abs(vals) > 1e-9]
             if len(vals) == 0:
                 continue
@@ -111,7 +123,7 @@ def main():
             )
         for thr, ls in [(2.0, "-"), (3.0, "--")]:
             ax.axvline(thr, color="gray", lw=0.8, ls=ls, alpha=0.6)
-        ax.set_xlabel(f"|POTENCI offset {atom}| [ppm]")
+        ax.set_xlabel(f"|POTENCI offset {atom}| [sigma]")
         ax.set_ylabel("density")
         ax.set_title(f"{atom}")
         ax.set_xlim(0, 5)
@@ -119,8 +131,8 @@ def main():
             ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
     axes[1, 3].axis("off")
     fig.suptitle(
-        "POTENCI residual offsets (per atom) after LACS pre-correction.  "
-        "Vertical lines: 2 ppm (strict), 3 ppm (tolerant/moderate).",
+        "POTENCI residual offsets (per atom, in sigma) after LACS "
+        "pre-correction.  Vertical lines: 2 (strict), 3 (tolerant/moderate).",
         fontsize=11,
         y=0.995,
     )
@@ -173,7 +185,7 @@ def main():
 
     axA.set_xlim(0, 5)
     axA.set_ylim(0, 1.01)
-    axA.set_xlabel("max-offset threshold [ppm]")
+    axA.set_xlabel("max-offset threshold [sigma]")
     axA.set_ylabel("Fraction of entries passing")
     axA.set_title("Fraction passing filter vs threshold (per tier)")
     axA.legend(framealpha=0.9, fontsize=9)
@@ -193,7 +205,7 @@ def main():
     x = np.arange(len(TIERS))
     width = 0.16
     for i, cand in enumerate(cand_set):
-        label = "∞" if np.isinf(cand) else f"{cand:.0f} ppm"
+        label = "∞" if np.isinf(cand) else f"{cand:.0f} sigma"
         axB.bar(
             x + (i - (len(cand_set) - 1) / 2) * width,
             bar_data[cand],
@@ -238,7 +250,7 @@ def main():
         else:
             n_pass = (df["max_potenci_off"] <= cur).sum()
             print(
-                f"  {tier:>10}: current max-offset = {cur:.1f} ppm; "
+                f"  {tier:>10}: current max-offset = {cur:.1f} sigma; "
                 f"{n_pass}/{n_total} pass ({n_pass / n_total:.1%}); "
                 f"median={df['max_potenci_off'].median():.3f}, "
                 f"p95={df['max_potenci_off'].quantile(0.95):.3f}, "
@@ -249,7 +261,7 @@ def main():
         for thr in (1.0, 2.0, 3.0, 5.0):
             n = (df["max_potenci_off"] > thr).sum()
             print(
-                f"      |max offset| > {thr:.1f} ppm: {n}/{n_total} ({n / n_total:.1%})"
+                f"      |max offset| > {thr:.1f} sigma: {n}/{n_total} ({n / n_total:.1%})"
             )
 
 
