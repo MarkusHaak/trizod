@@ -302,7 +302,7 @@ def test_all_pinned_sequences_resolve_against_the_tolerant_pool():
     )
     # One pinned chain is legitimately gone: bmr19342 ("Transmembrane-cytosolic
     # part of Trop2") was measured in 70 % TFE, which the tolerant tier now
-    # excludes as a chemical denaturant. At that concentration the shifts report
+    # excludes as a perturbing cosolvent. At that concentration the shifts report
     # a solvent-forced helical conformation rather than the aqueous state, so
     # losing it from the evaluation set is a correction, not collateral. Any
     # OTHER drop is a regression against the D2 promise.

@@ -28,7 +28,7 @@ unfiltered`.
 
 Each BMRB chemical-shift record is parsed with integrity checks, filtered
 per tier (temperature / pH / ionic-strength windows, backbone-shift coverage,
-keyword & denaturant blacklists, the `_Entity_assembly.Physical_state` deny
+keyword & perturbing-cosolvent blacklists, the `_Entity_assembly.Physical_state` deny
 list, the experiment-method whitelist and its `sample_state_evidence` fallback,
 etc.), **re-referenced** (LACS pre-correction then POTENCI/AIC residual
 correction, `--rereference-mode both`), and scored (per-residue Z-score and the
@@ -111,7 +111,7 @@ For the `2026-08` build (`build_test_set_summary.json`):
 
 `19342_1_1_1` ("Transmembrane-cytosolic part of Trop2") is dropped because it
 lists a sample component `TFE` at **70 %** (`_Sample.Solvent_system` reads
-`30%H2O/70% trifluoroethanol`), now matched by the new TFE denaturant token —
+`30%H2O/70% trifluoroethanol`), now matched by the new TFE cosolvent token —
 tolerant already carries it, so the chain leaves the resolve pool. At that
 concentration the shifts report a solvent-forced helical conformation, not the
 aqueous state, so this is a correction rather than collateral.
@@ -174,10 +174,12 @@ training set. It passes with **0 shared IDs and 0 exact-sequence matches**
 against the 479 test sequences.
 
 → `data/interim/build/release_bundle/trizod-dataset-2026-08/` (train/ + scores/
-+ test/ + README + MANIFEST — 23 files, 139,765,222 bytes). The single-table
-`trizod_dataset.parquet` (16,851 rows × 63 columns) and the side-chain companion
-`trizod_sidechain_shifts.parquet` (3,458,851 shifts over 12,643 chains) are then
-built from that bundle by `scripts/build_parquet_dataset.py`.
++ test/ + README + MANIFEST — 24 files, 139,790,629 bytes). The single-table
+`trizod_dataset.parquet` (16,851 rows × 70 columns) and the chemical-shift
+companion `trizod_shifts.parquet` (11,839,037 assigned shifts on canonical
+residues over all 16,851 chains — 8,380,186 backbone, 3,458,851 side chain, of
+which 12,643 chains carry side-chain assignments) are then built from that
+bundle by `scripts/build_parquet_dataset.py`.
 
 ## 7. The leakage guarantee
 

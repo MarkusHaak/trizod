@@ -914,7 +914,9 @@ own evidence block noted the collateral without resolving it.
 
 That is not what shipped. Those four values are now
 `PHYSICAL_STATE_AMBIGUOUS` and are denied **only where the entry independently names a
-denaturant** (`has_denaturant_evidence`, exposed as the `denaturant_evidence` column).
+perturbing cosolvent** (`has_cosolvent_evidence`, exposed as the `cosolvent_evidence`
+column; both were called `*_denaturant_*` when this plan was written — see
+"Perturbing cosolvents" in `docs/filtering.md` for why they were renamed).
 Everything else in the deny lists still stands on the tag alone, which is what preserves
 the mechanism's original purpose: 5158, 5119 and 16948 are still removed.
 

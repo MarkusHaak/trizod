@@ -24,13 +24,13 @@ respective CLI arguments.
 | max-x-fraction               | Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence.                                                                                                  |
 | keywords-blacklist           | Exclude entries with any of these keywords as a substring of one of the searched free-text fields, case ignored. See "Keyword search scope" below — the search is field-scoped, not a scan of the whole BMRB file. |
 | keyword-search-scope         | Which free-text fields `keywords-blacklist` searches: `sample` (default) or `all`. See "Keyword search scope".                                                                              |
-| physical-state-blacklist     | Exclude entries whose `_Entity_assembly.Physical_state` **exactly equals** one of these values (case ignored, whitespace stripped), resolved to the entity assembly of the row being filtered. Four ambiguous values are denied only where the entry independently names a denaturant. See "Physical state". |
-| chemical-denaturants         | Exclude entries with any of these chemicals as substrings of `_Sample_component.Mol_common_name`, case ignored, for components that are not the studied polymer itself (no `Entity_ID`). Distinct from `denaturant_evidence`, which is broader and never filters. |
+| physical-state-blacklist     | Exclude entries whose `_Entity_assembly.Physical_state` **exactly equals** one of these values (case ignored, whitespace stripped), resolved to the entity assembly of the row being filtered. Four ambiguous values are denied only where the entry independently names a perturbing cosolvent. See "Physical state". |
+| perturbing-cosolvents        | Exclude entries with any of these chemicals as substrings of `_Sample_component.Mol_common_name`, case ignored, for components that are not the studied polymer itself (no `Entity_ID`). Renamed from `chemical-denaturants` — see "Perturbing cosolvents". Distinct from `cosolvent_evidence`, which is broader and never filters. |
 | exp-method-whitelist         | Include only entries with any of these keywords as substring of the experiment subtype, case ignored. `""` is a sentinel meaning "accept a *missing* subtype", never a search term.          |
 | exp-method-blacklist         | Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.                                                                                            |
 | method-fallback              | What to do about entries with no `_Entry.Experimental_method_subtype` at all: `off`, `reject-solid` or `require-solution`. See "Undeclared experimental method".                            |
 | exclude-paramagnetic         | Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata. Paramagnetic samples cause massive chemical shift perturbations that make Z-score computation meaningless. |
-| max-offset                   | Maximum valid offset correction for any random coil chemical shift type, in **sigma units** — the offsets are means of `(observed - POTENCI) / REFINED_WEIGHTS[atom]`, not ppm. Multiply by `REFINED_WEIGHTS[atom]` for ppm (e.g. 3 sigma is ~0.59 ppm for CA, ~0.08 ppm for HA). |
+| max-offset                   | Maximum valid offset correction for any random coil chemical shift type. Compared against the `off_<atom>_sigma` columns, which are in **sigma units** — means of `(observed - POTENCI) / REFINED_WEIGHTS[atom]`, not ppm. Multiply by `REFINED_WEIGHTS[atom]` for ppm (e.g. 3 sigma is ~0.59 ppm for CA, ~0.08 ppm for HA). The ppm siblings `lacs_off_<atom>_ppm` and `total_off_<atom>_ppm` are **not** what this threshold sees. |
 | reject-shift-type-only       | Upon exceeding the maximal offset set by `--max-offset`, exclude only the backbone shifts exceeding the offset instead of the whole entry.                                                  |
 
 ## Keyword Search Scope
@@ -78,6 +78,52 @@ tier wants to keep. `-bound` compounds such as "membrane-bound" still match.
 `interacti` was **removed** from the strict tier and replaced by the phrases
 `in complex with` / `complexed with`, matched on sample-descriptive fields only.
 
+## Perturbing Cosolvents
+
+This filter was called `chemical-denaturants` until 2026-08, and the annotation
+column beside it was called `denaturant_evidence`. Both were renamed
+(`--perturbing-cosolvents`, `cosolvent_evidence`) because the old name described
+half the list and misdescribed the other half.
+
+**1. The predicate is not denaturation.** What the filter actually tests is *the
+sample is not aqueous buffer, so the reference is out of domain*. POTENCI is
+parameterised on aqueous random-coil data and the LACS reference tables are
+Wishart's aqueous random-coil shifts, so neither has anything to say about a
+peptide in 50 % TFE — regardless of whether that peptide is folded, unfolded or
+helical. Urea, GdmCl, TFE, DMSO and HFIP all satisfy that predicate; only urea
+and the guanidinium salts are denaturants.
+
+**2. The direction of the error is opposite within the one filter.** Urea and
+GdmCl unfold the chain and so inflate apparent **disorder**. TFE, HFIP and DMSO
+drive helix formation and so inflate apparent **order** — a mislabelled
+positive, which is the worse failure for a disorder dataset. Calling the whole
+family "denaturants" invites a reader to assume every excluded entry would
+otherwise have scored spuriously disordered; that is wrong for three of the
+five, and those three are the dangerous ones.
+
+**3. It removed a live name collision.** `chemical-denaturants` (a per-tier
+filter token list) and `denaturant_evidence` (a tier-independent annotation
+column, from `sample_state.has_cosolvent_evidence()`, used to corroborate an
+ambiguous deposited `denatured` / `unfolded` physical state) meant different
+things under near-identical names.
+
+"Cosolvent" is the umbrella term the protein-folding literature already uses for
+all five, and "perturbing" is what separates them from the **stabilising**
+osmolytes — TMAO, glycerol — which this filter deliberately does **not** exclude.
+The argument is emphatically *not* "TFE is not a denaturant": Buck 1998 (Q Rev
+Biophys **31**:297) opens by noting that alcohol cosolvents "have been used for
+many decades to denature proteins".
+
+**Compatibility.** `--chemical-denaturants` still works as a deprecated alias of
+`--perturbing-cosolvents` for one release and warns when used. The
+`filter_defaults` key (`"perturbing-cosolvents"`) and the emitted column
+(`cosolvent_evidence`) are breaking changes with no alias; v0.3.0 of the released
+dataset keeps the old column name at its own Zenodo version.
+
+The token values themselves (`urea`, `guanidin`, `TFE`, `DMSO`, `HFIP`, …) and
+the per-chemical boolean columns in `scores.json`, which are named after the
+chemical, are unchanged.
+
 ## Physical State
 
 `_Entity_assembly.Physical_state` is the depositor's own label for the conformational
@@ -111,20 +157,21 @@ alpha-synuclein"* and whose buffer is KPi/EDTA/NaCl, is deposited as `denatured`
 `tests/test_physical_state.py::test_alpha_synuclein_survives_the_tolerant_deny_list`
 pins that it must not be dropped.
 
-So these four are denied **only when the entry independently names a denaturant**.
-Everything else in the deny list stands on the tag alone — which is what still removes
-BMRB **5158** (apo-myoglobin molten globule, 52 % of its residues scored ordered and a
-`train_tier=moderate` chain in v0.3.0), **5119** and **16948**.
+So these four are denied **only when the entry independently names a perturbing
+cosolvent**. Everything else in the deny list stands on the tag alone — which is what
+still removes BMRB **5158** (apo-myoglobin molten globule, 52 % of its residues scored
+ordered and a `train_tier=moderate` chain in v0.3.0), **5119** and **16948**.
 
-The corroborating signal is `has_denaturant_evidence()`, surfaced as the
-tier-independent **`denaturant_evidence`** column. It is deliberately not a filter
-policy but a statement about what was in the tube:
+The corroborating signal is `has_cosolvent_evidence()`, surfaced as the
+tier-independent **`cosolvent_evidence`** column (called `denaturant_evidence` before
+2026-08; see "Perturbing cosolvents" for why). It is deliberately not a filter policy
+but a statement about what was in the tube:
 
 | | |
 | :-- | :-- |
-| tokens | `guanidin*`, `gdm*` (prefixes, so `guanidine`/`guanidinium`/`GdmCl` all match) and the whole words `urea`, `TFE`, `trifluoroethanol`, `DMSO`, `SDS`, `Gdn-HCl`, `GdnCl` |
+| tokens | `guanidin*`, `gdm*`, `hexafluoroisopropanol*`, `hexafluoro-2-propanol*` (prefixes, so `guanidine`/`guanidinium`/`GdmCl` and the `-d2` spellings all match) and the whole words `urea`, `TFE`, `trifluoroethanol`, `HFIP`, `DMSO`, `SDS`, `Gdn-HCl`, `GdnCl` |
 | matching | word-boundary anchored and case-insensitive, so `urea` cannot fire on `urease` |
-| searched | entry title & details, assembly name & details, entity name & details, and for every referenced sample its name, details and **all** `_Sample_component.Mol_common_name` values — including components that carry an `Entity_ID`, unlike the `chemical-denaturants` filter |
+| searched | entry title & details, assembly name & details, entity name & details, and for every referenced sample its name, details and **all** `_Sample_component.Mol_common_name` values — including components that carry an `Entity_ID`, unlike the `perturbing-cosolvents` filter |
 
 **What corroboration costs and buys.** Three candidate rules, measured on the 17,843-row
 pre-filter frame as `filtered (unique)` — same definitions as in "Measured impact":
@@ -145,11 +192,11 @@ tolerant, 10 moderate), i.e. 5158 and its siblings.
 | | unfiltered | tolerant | moderate | strict |
 | :------------------------------------------ | ---------: | -------: | -------: | -----: |
 | records carrying one of the four values      |        238 |       77 |       28 |      5 |
-| — of them, with no denaturant anywhere       |         96 |       72 |       28 |      5 |
+| — of them, with no perturbing cosolvent anywhere |     96 |       72 |       28 |      5 |
 | records retained that a tag-alone rule would delete | n/a | **24** | **28** | **5** |
 
 The `unfiltered` tier applies no deny list, so its 238 rows are the raw population: 142
-of them do name a denaturant and are the cases the rule is meant to catch. The retained
+of them do name a perturbing cosolvent and are the cases the rule is meant to catch. The retained
 records are the ones the dataset exists for — at tolerant they include α-synuclein
 (6968, 16342), the yeast SNAREs Snc1/Sso1 (4286/4287) and the Myc bHLHZip domain
 (27704); at moderate they add endosulfine α (15136), NS5A D2 (15225), ACTR/CBP
@@ -221,7 +268,7 @@ an absent tag before.
 | keyword-search-scope         | sample      | sample                                  | sample                                  | sample                                                                                         |
 | physical-state-blacklist     | []          | tolerant deny list (see "Physical state") | + unfolded / intermediate             | + bound / reconstituted                                                                        |
 | ↳ ambiguous values           | —           | corroborated only                       | corroborated only                       | corroborated only                                                                              |
-| chemical-denaturants         | []          | ['guanidin', 'GdmCl', 'Gdn-Hcl', 'urea', 'TFE', 'trifluoroethanol'] | ['guanidin', 'GdmCl', 'Gdn-Hcl', 'urea', 'TFE', 'trifluoroethanol', 'DMSO'] | ['guanidin', 'GdmCl', 'Gdn-Hcl', 'urea', 'TFE', 'trifluoroethanol', 'DMSO']                    |
+| perturbing-cosolvents        | []          | `COSOLVENT_TOKENS` (all 13, below)      | `COSOLVENT_TOKENS` (all 13, below)      | `COSOLVENT_TOKENS` (all 13, below)                                                             |
 | exp-method-whitelist         | ['', '.']   | ['','solution', 'structures']           | ['','solution', 'structures']           | ['solution', 'structures']                                                                     |
 | exp-method-blacklist         | []          | ['solid']                               | ['solid']                               | ['solid']                                                                                      |
 | method-fallback              | off         | reject-solid                            | reject-solid                            | require-solution                                                                               |
@@ -229,13 +276,55 @@ an absent tag before.
 | max-offset                   | +inf        | 3                                       | 3                                       | 2                                                                                              |
 | reject-shift-type-only       | Yes         | Yes                                     | No                                      | No                                                                                             |
 
-`TFA` and `Potassium Pyrophosphate` were **removed** from the strict denaturant list:
-TFA's 57 percent-unit components have a median of 0.1 % (56/57 ≤ 0.2 %), i.e. it is an
-HPLC counterion whose acidification pathway the pH filter already covers, and potassium
-pyrophosphate is a buffer. Net data impact of both removals: +1 strict row. `TFE` is a
-genuinely new token — `'trifluoroethanol'` does not contain `'tfe'`, so both are needed.
-DMSO is applied **ungated**: its concentration boundary is undefined at the only value
-that matters (bmr36172 is exactly 5.0 % v/v).
+### The cosolvent token list
+
+`COSOLVENT_TOKENS` (`trizod/trizod.py`) is **identical at tolerant, moderate and
+strict**; `unfiltered` filters nothing. All 13 tokens, matched against
+`_Sample_component.Mol_common_name` case-insensitively:
+
+| family | tokens | why several spellings |
+| :----- | :----- | :-------------------- |
+| guanidinium | `guanidin`, `GdmCl`, `Gdn-Hcl` | `guanidin` carries the filter (it reaches `guanidine` and `guanidinium`); the two acronyms remove **zero** rows that another filter does not already remove, at every tier, and are kept only as insurance against a deposition spelled without the word "guanidine" |
+| urea | `urea` | word-boundary matched, see below |
+| TFE | `TFE`, `trifluoroethanol`, `trifluoro ethanol` | `'trifluoroethanol'` does not contain `'tfe'`, and neither spelling contains `trifluoro ethanol`, which bmr15559/15579/15580 deposit at 50 % v/v |
+| HFIP | `hexafluoroisopropanol`, `hexafluoro-2-propanol`, `HFIP` | three tokens rather than a bare `hexafluoro`, which also matches bmr7375's `tetrakis(acetonitrile)copper(I) hexafluorophosphate` (1.8 mM, a Cu(I) source) |
+| DMSO | `DMSO`, `dimethyl sulfoxide`, `dimethylsulfoxide` | never a bare `dimethyl`: it matches DSS, the shift reference standard |
+
+Two tokens are matched as **whole words** rather than as substrings
+(`WORD_BOUNDARY_COSOLVENTS`): `urea`, because as a substring it fires on
+"palmitate, la**urea**te, and stearate" (bmr50434) and on "bis-pyridyl**urea**
+inhibitor" (bmr26598) — word-boundary matching readmits exactly those two entries
+(+2 tolerant rows, +2 moderate, +1 strict) — and `hfip`, where all 14 corpus
+components containing it are genuine HFIP so the boundary costs nothing, but a
+four-letter acronym is precisely the token class where a substring match goes
+wrong. The rest stay substrings: `guanidin` must reach `guanidinium`, `TFE` must
+reach `TFE-d2`.
+
+**HFIP was added at tolerant and above.** It is a *stronger* helix inducer than TFE
+(Hirota, Mizuno & Goto 1998, JMB **275**:365); 22 entries deposit it and not one
+below 25 % v/v, so six strict rows were being admitted at 25–40 % HFIP while 5 %
+TFE was excluded. Impact of the three tokens: −24 tolerant / −18 moderate / −7
+strict rows, against one row each at tolerant and moderate for the `hexafluoro`
+false positive that a coarser token would have cost.
+
+**DMSO applies from tolerant, not from moderate.** Not because of the ~10 % v/v
+threshold of Bhattacharjya & Balaram 1997 (Proteins **29**:492), but because 46 %
+of the percent-unit DMSO components deposited corpus-wide (66/143) are ≥ 95 % v/v:
+neat DMSO, referenced against DMSO-d6 rather than DSS, of which 23 rows were
+shipping in the tolerant tier. It is applied **ungated** by concentration all the
+same — only 16 tolerant rows sit below 5 % v/v, 11 of them already dropped as bound
+complexes at dataset-build time, so a 5 % gate would buy back 4/2/1 rows for a much
+more fragile rule.
+
+`TFA` and `Potassium Pyrophosphate` were **removed** from the strict list: TFA's 57
+percent-unit components have a median of 0.1 % (56/57 ≤ 0.2 %), i.e. it is an HPLC
+counterion whose acidification pathway the pH filter already covers, and potassium
+pyrophosphate is a buffer. Net data impact of both removals: +1 strict row.
+
+Stabilising osmolytes (TMAO, glycerol) are **not** in the list — they do not take
+the sample out of the aqueous regime the reference data describe. Detergents and
+lipids are not in it either; they are annotated as `membrane_mimetic` and never
+filtered (see "Membrane mimetics are annotated, never filtered").
 
 Each filter can be set individually with the respective CLI option, which takes
 precedence over `--filter-defaults`.
@@ -292,19 +381,25 @@ Each cell is `filtered (unique)`:
 | keyword `bound` (whole word)    | —           | —           | —             | 1,151 (375)   |
 | keyword `in complex with`       | —           | —           | —             | 880 (338)     |
 | keyword `complexed with`        | —           | —           | —             | 173 (58)      |
-| denaturant `guanidin`           | —           | 19 (2)      | 19 (2)        | 19 (2)        |
-| denaturant `GdmCl`              | —           | 3 (0)       | 3 (0)         | 3 (0)         |
-| denaturant `Gdn-Hcl`            | —           | 2 (0)       | 2 (0)         | 2 (0)         |
-| denaturant `urea`               | —           | 133 (28)    | 133 (19)      | 133 (9)       |
-| denaturant `TFE`                | —           | 175 (168)   | 175 (98)      | 175 (12)      |
-| denaturant `trifluoroethanol`   | —           | 75 (69)     | 75 (42)       | 75 (9)        |
-| denaturant `DMSO`               | —           | —           | 130 (67)      | 130 (14)      |
+| cosolvent `guanidin`            | —           | 19 (2)      | 19 (2)        | 19 (2)        |
+| cosolvent `GdmCl`               | —           | 3 (0)       | 3 (0)         | 3 (0)         |
+| cosolvent `Gdn-Hcl`             | —           | 2 (0)       | 2 (0)         | 2 (0)         |
+| cosolvent `urea`                | —           | 133 (28)    | 133 (19)      | 133 (9)       |
+| cosolvent `TFE`                 | —           | 175 (168)   | 175 (98)      | 175 (12)      |
+| cosolvent `trifluoroethanol`    | —           | 75 (69)     | 75 (42)       | 75 (9)        |
+| cosolvent `DMSO`                | —           | —           | 130 (67)      | 130 (14)      |
 | missing required values         | 30          | 30          | 30            | 6,895         |
 | **rows passing the pre-filter** | **16,867**  | **15,409**  | **12,246**    | **5,442**     |
 
 A dash means the criterion is not configured at that tier. `filtered` is identical across
-tiers for the keyword and denaturant rows because the underlying boolean column is
+tiers for the keyword and cosolvent rows because the underlying boolean column is
 tier-independent — only `unique`, the marginal cost, is tier-specific.
+
+**These per-cosolvent rows predate the HFIP tokens and the move of DMSO to the
+tolerant tier**, so they show `DMSO` as moderate-and-above and carry no HFIP,
+`trifluoro ethanol` or spelled-out-DMSO rows at all. Treat them as a lower bound
+on the family until the report is re-run; the per-token impact of the additions is
+quoted under "The cosolvent token list" above. Every other row is current.
 
 Two reading notes:
 
@@ -318,7 +413,7 @@ Two reading notes:
 
 The single largest strict-only cost is the **ionic-strength window** (1,807 rows removed
 by nothing else), followed by **pH** (908) and the **backbone-shift-fraction** minimum
-(609) — all three larger than every state, keyword and denaturant policy combined.
+(609) — all three larger than every state, keyword and cosolvent policy combined.
 
 ## Annotation Columns
 
@@ -329,7 +424,7 @@ never remove anything on their own.
 | column                  | meaning                                                                                                      |
 | :---------------------- | :------------------------------------------------------------------------------------------------------------ |
 | `physical_state`        | `_Entity_assembly.Physical_state` for this row's entity assembly, verbatim (lower-cased, stripped), or null   |
-| `denaturant_evidence`   | bool — does the entry independently name a chemical denaturant? Gates the four ambiguous physical states; see "Physical state" |
+| `cosolvent_evidence`    | bool — does the entry independently name a perturbing cosolvent? Gates the four ambiguous physical states; see "Physical state". Called `denaturant_evidence` before 2026-08 |
 | `sample_state_evidence` | `solution` / `solid` / `unknown` — see "Undeclared experimental method"                                       |
 | `membrane_mimetic`      | the matched membrane-mimetic token(s), `;`-joined, or null. A string, not a bool, so an SDS micelle stays distinguishable from DDM solubilisation |
 

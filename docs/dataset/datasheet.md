@@ -47,14 +47,18 @@ Four layers are shipped:
    - `zscores`, `gscores`, `k` — per-residue lists **aligned 1:1 to `seq`**
      (`null` where no shift is available; `k` = number of weighted secondary
      shifts contributing to that residue).
-   - `off_<atom>` / `lacs_off_<atom>` — POTENCI/AIC residual and LACS offsets
-     per backbone atom (C, CA, CB, H, HA, HB, N). **Different units**:
-     `lacs_off_<atom>` is ppm, `off_<atom>` is in sigma units (multiples of the
-     per-atom POTENCI RMSD `REFINED_WEIGHTS[atom]`) — see §6.
+   - `off_<atom>_sigma` / `lacs_off_<atom>_ppm` / `total_off_<atom>_ppm` —
+     POTENCI/AIC residual and LACS offsets per backbone atom (C, CA, CB, H, HA,
+     HB, N), plus their ppm total. **Three different units**:
+     `lacs_off_<atom>_ppm` is ppm, `off_<atom>_sigma` is in sigma units
+     (multiples of the per-atom POTENCI RMSD `REFINED_WEIGHTS[atom]`), and
+     `total_off_<atom>_ppm = lacs_off_<atom>_ppm + off_<atom>_sigma ×
+     REFINED_WEIGHTS[atom]` is the ppm quantity to subtract from a deposited
+     shift — see §6.
    - conditions (`pH`, `temperature`, `ionic_strength`), counts, citation.
    - **sample-state annotation** (new): `physical_state` (the depositor's
-     `_Entity_assembly.Physical_state`), `denaturant_evidence` (does the entry
-     independently name a chemical denaturant?), `sample_state_evidence`
+     `_Entity_assembly.Physical_state`), `cosolvent_evidence` (does the entry
+     independently name a perturbing cosolvent?), `sample_state_evidence`
      (`solution` / `solid` / `unknown`) and `membrane_mimetic` (matched
      detergent/lipid tokens). Only `physical_state` participates in a filter;
      the rest are annotation. See `docs/filtering.md`.
@@ -64,16 +68,27 @@ Four layers are shipped:
    - `train_<tier>.fasta` — paper-faithful mmseqs cluster representatives.
    - `clusters_best.tsv` / `clusters.tsv` — cluster membership (`repr`,`member`).
 3. **Single-table Parquet** — `trizod_dataset.parquet`, one row per chain
-   (16,851 rows × 63 columns), encoding every published view through the
+   (16,851 rows × 70 columns), encoding every published view through the
    ordinal/categorical columns `split` (train 5,907 · excluded 8,131 ·
    redundant 2,334 · test_trizod 364 · test_chezod117 115), `train_tier`
    (strict 1,998 · moderate 2,627 · tolerant 965 · unfiltered 317),
    `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
    assembly-composition annotation columns.
-4. **Side-chain companion** — `trizod_sidechain_shifts.parquet`, 3,458,851
-   side-chain shifts (2,449,316 ¹H, 946,575 ¹³C, 62,960 ¹⁵N) over 12,643 of the
-   16,851 chains, joining on `id`. **As deposited** — not re-referenced: the
-   backbone offsets are not transferable to side-chain nuclei.
+4. **Chemical-shift companion** — `trizod_shifts.parquet`, **11,839,037**
+   assigned shifts **on canonical residues**, backbone *and* side chain, over
+   all 16,851 chains (12,643 of which have side-chain assignments), one row per
+   `(chain, residue, atom)` and joining on `id`. 8,380,186 rows are backbone
+   (3,789,493 ¹H, 3,263,875 ¹³C, 1,326,818 ¹⁵N) and 3,458,851 side chain
+   (2,449,316 ¹H, 946,575 ¹³C, 62,960 ¹⁵N). `val_ppm` is **exactly as
+   deposited**; `val_corrected_ppm` carries the re-referenced value where one
+   demonstrably transfers and is **NULL** — never a copy of `val_ppm` — where it
+   does not, with `offset_source` naming the regime (§6). Shifts on
+   **non-canonical** residues are **not** included: 16,502 values (0.139 % of
+   the 11,855,542 deposited values) on 290 distinct `Comp_ID`s across 1,050
+   chains, including every PTM (HYP, SEP, TPO, PTR, TYS, ALY, MLY, M3L),
+   non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA) and terminal/lipid
+   groups (ACE, NH2, MYR). They are dropped because `seq_id` would not index the
+   released `sequence`; read them from the BMRB entry if you need them.
 
 Held-out **test sets** (`test/`): `CheZOD117_test_set.fasta` (115 seq) and
 `TriZOD_test_set.fasta` (364 seq), with per-residue targets obtainable from the
@@ -87,7 +102,7 @@ corresponding score records by `ID`.
    length, backbone-shift coverage minima, non-canonical/X caps, experiment
    method (solution NMR only at strict, with a `sample_state_evidence` fallback
    for the ~24 % of entries that declare no method subtype), paramagnetic-sample
-   exclusion, keyword & chemical-denaturant blacklists, and an exact-match
+   exclusion, keyword & perturbing-cosolvent blacklists, and an exact-match
    `_Entity_assembly.Physical_state` deny list. Keyword matching is scoped to
    sample-descriptive fields, not the paper-topic metadata. See
    `docs/filtering.md` for the per-tier defaults and the measured per-filter
@@ -144,7 +159,7 @@ comparable while training sets move with the filters. In this release 364 of the
 
 - `19342_1_1_1` ("Transmembrane-cytosolic part of Trop2") is **dropped**: it
   lists a sample component `TFE` at 70 % (`_Sample.Solvent_system` reads
-  `30%H2O/70% trifluoroethanol`), now matched by the TFE denaturant token. At
+  `30%H2O/70% trifluoroethanol`), now matched by the TFE cosolvent token. At
   that concentration the shifts report a solvent-forced helical conformation
   rather than the aqueous state, so removing it is a correction, not collateral.
 - `50998_1_1_1` is **ID-substituted** to `5599_1_1_1`, a byte-identical
@@ -187,17 +202,45 @@ comparable while training sets move with the filters. In this release 364 of the
   filtered**, at every tier. Records under a membrane mimetic are 93.7 % ordered
   and contain no disordered chains, so removing them would bias the label
   distribution toward disorder.
-- Side-chain shifts in the companion Parquet are **as deposited**: the LACS and
-  POTENCI offsets are backbone-derived and are not applied to them.
+- **`trizod_shifts.parquet` is re-referenced in three different regimes**, and
+  `offset_source` is the column that tells you which one a row is in. `val_ppm`
+  is always as deposited; `val_corrected_ppm = val_ppm − offset_applied_ppm`.
+  1. **Backbone** (8,380,186 rows) — the full correction the scorer used,
+     `total_off_<atom>_ppm`. Degenerate partners (HB2/HB3, ALA HB1, GLY HA2/HA3)
+     carry the offset of the slot the scorer averages them into (HB, HA). Every
+     backbone row in this release has a corrected value.
+  2. **Side-chain ¹³C** (946,575 rows) — **LACS only**, `val_ppm −
+     lacs_off_CA_ppm`. The POTENCI residual is *not* propagated: it is a bias in
+     the backbone-vs-POTENCI comparison rather than a spectrometer referencing
+     error, and its transfer slope to side chains is only 0.093 (CA) / 0.081
+     (CB) / 0.050 (C). The LACS carbon offset transfers at β = 0.785
+     [0.767, 0.806] and lowers side-chain ¹³C MSE ×0.79 (RMSE 0.919 → 0.818
+     ppm); an offset helps iff β > 0.5.
+  3. **Side-chain ¹H and ¹⁵N** (2,512,276 rows) — **left RAW**, with
+     `val_corrected_ppm` NULL and `offset_source = 'not_transferable'`. Applying
+     the backbone offset measurably *inflates* the error (MSE ×1.131 for ¹H,
+     ×1.075 for ¹⁵N; β = 0.079 [0.057, 0.102] and 0.366 [0.330, 0.407] against a
+     0.5 break-even; PANAV and an IV disattenuation put ¹⁵N at 0.394 and 0.499
+     [0.430, 0.555], i.e. at the break-even, not above it). This is a positive
+     finding about *transfer*, not an absence of signal: a real per-chain
+     side-chain ¹H referencing constant exists (split-half reliability 0.812),
+     but the backbone amide offset explains only 1.3 % of its variance.
+
+  Side-chain ¹³C is additionally withheld (NULL, `not_transferable`) on the 13
+  chains with |`lacs_off_CA_ppm`| > 5 ppm — 927 rows over the 9 of them that
+  carry side-chain carbons — because only 5 of those 9 demonstrably transfer and
+  the difference cannot be adjudicated per chain.
 - `max-offset` filtering removes large post-LACS residuals (3/3/2 per tier).
-  The threshold is compared against `off_<atom>`, which is in **sigma units**
-  (multiples of the per-atom POTENCI RMSD), **not ppm**: `off_<atom>` is the
-  mean of `(observed − POTENCI) / REFINED_WEIGHTS[atom]`. A `max-offset` of 3
-  is therefore ~0.59 ppm for CA and ~0.08 ppm for HA. 1,433 of the 16,851
+  The threshold is compared against `off_<atom>_sigma`, which is in **sigma
+  units** (multiples of the per-atom POTENCI RMSD), **not ppm**:
+  `off_<atom>_sigma` is the mean of
+  `(observed − POTENCI) / REFINED_WEIGHTS[atom]`. A `max-offset` of 3 is
+  therefore ~0.59 ppm for CA and ~0.08 ppm for HA. 1,433 of the 16,851
   unfiltered records (8.5 %) exceed 3 sigma on some atom after LACS and are
   flagged.
-  `lacs_off_<atom>`, by contrast, **is** raw ppm — it is subtracted directly
-  from the deposited shifts. Do not add the two columns together.
+  `lacs_off_<atom>_ppm`, by contrast, **is** raw ppm — it is subtracted directly
+  from the deposited shifts. Do not add the two columns together (up to 21.2 ppm
+  of error); subtract the published `total_off_<atom>_ppm` instead.
 - Scores reflect the deposited shifts and conditions; re-referencing corrects
   systematic referencing errors but cannot fix fundamentally wrong depositions.
 
@@ -219,11 +262,12 @@ trizod-dataset-<version>/
 │                                 clusters_best.tsv, clusters.tsv
 ├── scores/<tier>/scores.json     per-residue Z/G/k + offsets (the labels)
 ├── test/                         CheZOD117_test_set.fasta, TriZOD_test_set.fasta
-├── trizod_dataset.parquet        the whole release as one table (63 columns)
-└── trizod_sidechain_shifts.parquet   side-chain shifts as deposited
+├── trizod_dataset.parquet        the whole release as one table (70 columns)
+└── trizod_shifts.parquet         every assigned shift on a canonical residue,
+                                  backbone + side chain, raw and re-referenced
 ```
 
-`MANIFEST.json` covers the FASTA/JSON layer (23 files, 139,765,222 bytes); the
+`MANIFEST.json` covers the FASTA/JSON layer (24 files, 139,790,629 bytes); the
 two Parquet files are built from it afterwards by
 `scripts/build_parquet_dataset.py`.
 
@@ -235,6 +279,8 @@ optional separate component for NMR users (`--include-str`).
 Release `2026-08` follows an external review of the filtering code by **Sandro
 Kuppel (Helmholtz Munich)**, with input from **Reid Alderson** and **Iva
 Pritisanac**. The full changelog — six filter-behaviour corrections, the policy
-changes, the new columns, the side-chain companion and the corrected `off_*`
-units — is in `bundle-README.md`, which ships as the bundle `README.md` and
-doubles as the Zenodo description.
+changes, the new columns, the complete chemical-shift companion and the offset
+columns renamed for unit safety (`off_<a>` → `off_<a>_sigma`, `lacs_off_<a>` →
+`lacs_off_<a>_ppm`, plus the new `total_off_<a>_ppm`) — is in
+`bundle-README.md`, which ships as the bundle `README.md` and doubles as the
+Zenodo description.

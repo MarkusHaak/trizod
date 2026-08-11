@@ -61,8 +61,11 @@ Columns populated at this stage:
   atom types are present), `bbshift_positions` (residues with at least one shift)
 - **Metadata**: `entity_name`, `exp_method`, `exp_method_subtype`,
   `citation_title`, `citation_DOI`
-- **Flags**: `paramagnetic`, keyword booleans, denaturant booleans
-- **Placeholders** (filled in Stage 4): `scores`, `k`, `off_C`..`off_HB`,
+- **Flags**: `paramagnetic`, keyword booleans, perturbing-cosolvent booleans
+  (one per token, named after the chemical: `urea`, `TFE`, `DMSO`, …)
+- **Placeholders** (filled in Stage 4): `scores`, `k`, the 21 offset columns
+  `off_<atom>_sigma` / `lacs_off_<atom>_ppm` / `total_off_<atom>_ppm` for the
+  seven backbone atoms (`trizod.offsets.OFFSET_COLUMNS`),
   `total_bbshifts_post`, `bbshift_types_post`, `bbshift_positions_post`
 
 The backbone shifts array (`seq_len x 7` float matrix + boolean mask) is not
@@ -102,7 +105,7 @@ Filter groups:
   residues (`CANONICAL_AA_MASK` counts canonical AAs in the sequence), maximum
   fraction of `X` residues.
 - **Content blacklists**: keyword blacklist (searched across title, entity name,
-  assembly name/details, citation keywords, sample names), chemical denaturant
+  assembly name/details, citation keywords, sample names), perturbing-cosolvent
   detection (searched in sample component names), paramagnetic flag.
 
 Note: the `unit-assumptions`, `unit-corrections`, and `default-conditions`
@@ -201,6 +204,19 @@ The procedure:
    offset. Otherwise the global offset is used.
 5. The final weighted SCS are recomputed with the selected offsets applied.
 
+The result is recorded in three columns per backbone atom, in **two different
+units** (`trizod/offsets.py`):
+
+| column | unit | what it is |
+|---|---|---|
+| `off_<atom>_sigma` | multiples of `REFINED_WEIGHTS[atom]` (per-atom POTENCI RMSD) | what `compute_offsets()` returns — the mean of `(observed − POTENCI) / REFINED_WEIGHTS[atom]`. `--max-offset` is compared against **this** |
+| `lacs_off_<atom>_ppm` | ppm | the §4b LACS offset, subtracted straight off the raw shift array |
+| `total_off_<atom>_ppm` | ppm | `lacs_off_<atom>_ppm + off_<atom>_sigma × REFINED_WEIGHTS[atom]` — the one number to subtract from a deposited shift to reproduce the shift TriZOD scored |
+
+Adding the first two together is a unit error worth up to 21.2 ppm; that is what
+the third column exists to prevent. The conversion is written down once, in
+`trizod.offsets.total_offset_ppm()`.
+
 ### 4d. Z-score and G-score
 
 The CheZOD **Z-score** uses a chi-squared CDF approximation (Wilson-Hilferty) to
@@ -227,7 +243,8 @@ scores comparable across entries with different data completeness.
 
 After scoring, entries may be rejected if:
 
-- The offset correction exceeds `--max-offset` (indicating unreliable data)
+- The offset correction exceeds `--max-offset` (indicating unreliable data).
+  The comparison is against `off_<atom>_sigma`, in sigma units — never ppm
 - With `--reject-shift-type-only`: only the problematic atom type is dropped
   rather than the entire entry
 
