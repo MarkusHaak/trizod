@@ -300,17 +300,16 @@ def test_all_pinned_sequences_resolve_against_the_tolerant_pool():
     recs, info = resolve_pinned_testset(
         pinned, tier_pools["tolerant"], tier_pools=tier_pools
     )
-    # One pinned chain is legitimately gone: bmr19342 ("Transmembrane-cytosolic
-    # part of Trop2") was measured in 70 % TFE, which the tolerant tier now
-    # excludes as a perturbing cosolvent. At that concentration the shifts report
-    # a solvent-forced helical conformation rather than the aqueous state, so
-    # losing it from the evaluation set is a correction, not collateral. Any
-    # OTHER drop is a regression against the D2 promise.
-    assert info["dropped"] == ["19342_1_1_1"], (
-        f"unexpected pinned sequences absent from tolerant: {info}"
+    # The invariant, not the count: every pinned sequence must resolve against
+    # the pool it is served from. Asserting a specific number here would make
+    # this test fail on every legitimate redraw while saying nothing about
+    # whether the pin is still honoured. The current pin was redrawn from the
+    # final strict pool, so nothing should drop; a drop means the pool moved
+    # under a pin that was supposed to be resolvable against it.
+    assert info["dropped"] == [], (
+        f"pinned sequences absent from the tolerant pool: {info}"
     )
-    assert len(pinned) == 365
-    assert len(recs) == 364
+    assert len(recs) == len(pinned)
 
 
 def test_write_pin_writes_fasta_and_provenance(tmp_path):
