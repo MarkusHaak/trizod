@@ -77,13 +77,13 @@ PHYSICAL_STATE_NEUTRAL = frozenset(
 #: disordered alpha-synuclein", is deposited as ``denatured``. Measured over the
 #: unfiltered tier -- the complete picture, since no deny list has run there --
 #: 238 rows carry one of these four values and **96 of them evidence no
-#: denaturant anywhere in the entry**. Those 96 include alpha-synuclein and its
-#: disease mutants (6968, 16300, 16342, 17648 A30P, 17649 A53T, 17654 E46K),
-#: Tau (19112), gamma-synuclein (7244) and the yeast SNAREs Snc1/Sso1
+#: perturbing cosolvent anywhere in the entry**. Those 96 include alpha-synuclein
+#: and its disease mutants (6968, 16300, 16342, 17648 A30P, 17649 A53T, 17654
+#: E46K), Tau (19112), gamma-synuclein (7244) and the yeast SNAREs Snc1/Sso1
 #: (4286/4287) -- precisely the signal this dataset exists to capture. So these
 #: four values are denied only when the entry independently evidences a
-#: denaturant (see ``has_denaturant_evidence``); every other denied value stands
-#: on the deposited tag alone, which is what still catches bmr5158.
+#: perturbing cosolvent (see ``has_cosolvent_evidence``); every other denied
+#: value stands on the deposited tag alone, which is what still catches bmr5158.
 PHYSICAL_STATE_AMBIGUOUS = frozenset(
     {
         "denatured",
@@ -93,30 +93,53 @@ PHYSICAL_STATE_AMBIGUOUS = frozenset(
     }
 )
 
-#: Tokens that evidence an actual chemical denaturant, searched in the sample
+#: Tokens that evidence a perturbing cosolvent, searched in the sample
 #: components and in the sample-descriptive free text. Deliberately
 #: tier-independent: this is evidence about what was in the tube, not a filter
 #: policy. Matched on word boundaries so ``urea`` cannot fire on ``urease``.
 #: Prefixes -- ``guanidin`` must reach ``guanidine`` and ``guanidinium``,
-#: ``gdm`` must reach ``GdmCl``.
-_DENATURANT_PREFIX_TOKENS = ("guanidin", "gdm")
-#: Whole words -- ``urea`` must NOT fire on ``urease``.
-_DENATURANT_WORD_TOKENS = (
+#: ``gdm`` must reach ``GdmCl``, ``hexafluoroisopropanol`` must reach the ``-d2``
+#: spelling.
+#:
+#: "Cosolvent", not "denaturant", because only urea and the guanidinium salts
+#: denature: TFE, HFIP and DMSO are helix inducers, so the two halves of this
+#: list bias the score in OPPOSITE directions (see the naming note beside
+#: ``COSOLVENT_TOKENS`` in ``trizod.trizod``). What every token here shares is
+#: that the sample is no longer aqueous buffer.
+#:
+#: This list is NOT the tier filter's token list (``COSOLVENT_TOKENS`` in
+#: ``trizod.trizod``); it answers a narrower question -- does the entry
+#: independently evidence that the sample was not aqueous buffer, so that an
+#: ambiguous deposited ``denatured``/``unfolded`` label can be believed? HFIP is
+#: exactly that evidence and was missing. Adding it flips **zero** rows today
+#: (no ambiguous-state row without other evidence names HFIP, measured over the
+#: full corpus at all three tiers); it is forward cover, like ``sds``.
+_COSOLVENT_PREFIX_TOKENS = (
+    "guanidin",
+    "gdm",
+    "hexafluoroisopropanol",
+    "hexafluoro-2-propanol",
+)
+#: Whole words -- ``urea`` must NOT fire on ``urease``, and ``hfip`` must not be
+#: reachable from inside a longer token. ``hexafluoro`` is deliberately absent:
+#: it would fire on bmr7375's copper(I) hexafluorophosphate.
+_COSOLVENT_WORD_TOKENS = (
     "urea",
     "tfe",
     "trifluoroethanol",
+    "hfip",
     "dmso",
     "sds",
     "gdn-hcl",
     "gdncl",
 )
 
-DENATURANT_EVIDENCE_TOKENS = _DENATURANT_PREFIX_TOKENS + _DENATURANT_WORD_TOKENS
+COSOLVENT_EVIDENCE_TOKENS = _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS
 
-_DENATURANT_EVIDENCE_RE = re.compile(
+_COSOLVENT_EVIDENCE_RE = re.compile(
     "|".join(
-        [rf"\b{re.escape(token)}" for token in _DENATURANT_PREFIX_TOKENS]
-        + [rf"\b{re.escape(token)}\b" for token in _DENATURANT_WORD_TOKENS]
+        [rf"\b{re.escape(token)}" for token in _COSOLVENT_PREFIX_TOKENS]
+        + [rf"\b{re.escape(token)}\b" for token in _COSOLVENT_WORD_TOKENS]
     ),
     re.IGNORECASE,
 )
@@ -179,15 +202,15 @@ def normalise_physical_state(value):
     return value or None
 
 
-def has_denaturant_evidence(texts):
-    """Does any of ``texts`` name a chemical denaturant?
+def has_cosolvent_evidence(texts):
+    """Does any of ``texts`` name a perturbing cosolvent?
 
     ``texts`` are sample-descriptive strings: ``_Sample_component.Mol_common_name``
     values plus the entry/assembly/entity/sample free text. Word-boundary matched,
     so ``urea`` does not fire on ``urease``.
     """
     return any(
-        text and _DENATURANT_EVIDENCE_RE.search(str(text)) is not None for text in texts
+        text and _COSOLVENT_EVIDENCE_RE.search(str(text)) is not None for text in texts
     )
 
 
@@ -195,7 +218,7 @@ def denied_physical_states(values, deny_list, corroborated=None):
     """Which of ``values`` are exact (case-insensitive, stripped) deny-list hits.
 
     ``corroborated`` is a parallel sequence of booleans saying whether the entry
-    independently evidences a denaturant. The values in
+    independently evidences a perturbing cosolvent. The values in
     ``PHYSICAL_STATE_AMBIGUOUS`` are denied only where it is true; every other
     denied value stands on the deposited tag alone. Omitting it means "no
     corroborating evidence", which keeps the ambiguous states.

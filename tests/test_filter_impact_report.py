@@ -43,7 +43,7 @@ report = _load_report()
 #: the report unions across tiers.
 NON_TIER_FRAME_PARAMS = {
     "bmrb_entries",
-    "chemical_denaturants",
+    "perturbing_cosolvents",
     "keywords",
     "include_shifts",
     "no_shift_averaging",
@@ -155,7 +155,7 @@ def _frame(tier, rows):
 
     Built by hand (not via ``fill_row_data``, which needs parsed BMRB entries)
     but with the same columns, including ``physical_state`` beside
-    ``denaturant_evidence`` — ``prefilter_dataframe`` raises if one is present
+    ``cosolvent_evidence`` — ``prefilter_dataframe`` raises if one is present
     without the other.
     """
     defaults = filter_defaults.loc[tier]
@@ -175,13 +175,13 @@ def _frame(tier, rows):
         "bbshift_positions": 20,
         "paramagnetic": False,
         "physical_state": "native",
-        "denaturant_evidence": False,
+        "cosolvent_evidence": False,
         "sample_state_evidence": "unknown",
     }
     for keyword in defaults["keywords-blacklist"]:
         base[keyword] = False
-    for denaturant in defaults["chemical-denaturants"]:
-        base[denaturant] = False
+    for token in defaults["perturbing-cosolvents"]:
+        base[token] = False
     df = pd.DataFrame([{**base, **row} for row in rows])
     # same dtypes create_peptide_dataframe() ends on: an object column of None
     # breaks ~str.contains(), the nullable "string" dtype yields pd.NA
@@ -221,17 +221,17 @@ def test_report_applies_the_physical_state_deny_list():
     assert any(label.startswith("physical state") for label in labels), labels
     row = next(r for r in results if r["filter"].startswith("physical state"))
     # 'molten globule' is denied outright; 'denatured' is ambiguous and needs
-    # independent denaturant evidence, which this row does not carry.
+    # independent perturbing-cosolvent evidence, which this row does not carry.
     assert (row["filtered"], row["unique"]) == (1, 1)
     assert (total, passing) == (3, 2)
 
 
-def test_ambiguous_state_is_denied_only_with_denaturant_evidence():
+def test_ambiguous_state_is_denied_only_with_cosolvent_evidence():
     df = _frame(
         "strict",
         [
-            {"physical_state": "denatured", "denaturant_evidence": False},
-            {"physical_state": "denatured", "denaturant_evidence": True},
+            {"physical_state": "denatured", "cosolvent_evidence": False},
+            {"physical_state": "denatured", "cosolvent_evidence": True},
         ],
     )
     _results, total, passing = report.analyse_tier(df, "strict")

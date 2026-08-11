@@ -189,10 +189,24 @@ def score(
         "--physical-state-blacklist",
         help="Exclude entries whose _Entity_assembly.Physical_state EXACTLY equals one of these values, case ignored.",
     ),
+    perturbing_cosolvents: Optional[list[str]] = typer.Option(
+        None,
+        "--perturbing-cosolvents",
+        help=(
+            "Exclude entries with any of these chemicals as substrings of sample "
+            "components, case ignored. Urea/GdmCl, TFE/HFIP and DMSO all take the "
+            "sample out of aqueous buffer, where POTENCI and the LACS reference "
+            "tables are parameterised; note the two halves bias in opposite "
+            "directions (denaturants toward apparent disorder, the alcohols and "
+            "DMSO toward apparent order). Stabilising osmolytes such as TMAO and "
+            "glycerol are deliberately not in this family."
+        ),
+    ),
     chemical_denaturants: Optional[list[str]] = typer.Option(
         None,
         "--chemical-denaturants",
-        help="Exclude entries with any of these chemicals as substrings of sample components, case ignored.",
+        hidden=True,
+        help="DEPRECATED alias of --perturbing-cosolvents. Will be removed after one release.",
     ),
     exp_method_whitelist: Optional[list[str]] = typer.Option(
         None,
@@ -242,7 +256,11 @@ def score(
     max_offset: Optional[float] = typer.Option(
         None,
         "--max-offset",
-        help="Maximum valid offset correction for any random coil chemical shift type.",
+        help=(
+            "Maximum valid offset correction for any random coil chemical shift "
+            "type, in SIGMA units (multiples of the per-atom POTENCI RMSD), not "
+            "ppm. Compared against the emitted off_<atom>_sigma column."
+        ),
     ),
     reject_shift_type_only: Optional[bool] = typer.Option(
         None,
@@ -277,6 +295,22 @@ def score(
 
     def resolve(value, key):
         return tier[key] if value is None else value
+
+    # `--chemical-denaturants` was renamed to `--perturbing-cosolvents` in
+    # 2026-08: the list is not (only) denaturants, and the two halves of it bias
+    # the score in opposite directions -- see the naming note in
+    # `trizod/trizod.py` beside COSOLVENT_TOKENS. Kept as a deprecated alias for
+    # one release. A separate parameter rather than a second option string on
+    # `--perturbing-cosolvents`, because Click reports which *parameter* was
+    # supplied, not which spelling, and the deprecation warning has to be able
+    # to tell.
+    if chemical_denaturants is not None:
+        _LOG.warning(
+            "--chemical-denaturants is deprecated and will be removed after one "
+            "release; use --perturbing-cosolvents instead."
+        )
+        if perturbing_cosolvents is None:
+            perturbing_cosolvents = chemical_denaturants
 
     args = SimpleNamespace(
         input_dir=input_dir,
@@ -321,8 +355,8 @@ def score(
         physical_state_blacklist=list(
             resolve(physical_state_blacklist, "physical-state-blacklist")
         ),
-        chemical_denaturants=list(
-            resolve(chemical_denaturants, "chemical-denaturants")
+        perturbing_cosolvents=list(
+            resolve(perturbing_cosolvents, "perturbing-cosolvents")
         ),
         exp_method_whitelist=list(
             resolve(exp_method_whitelist, "exp-method-whitelist")
@@ -444,6 +478,14 @@ def _dataset_testset(
         "--redraw",
         help="Redraw the seeded test set and overwrite the committed pin.",
     ),
+    confirm_redraw: bool = typer.Option(
+        False,
+        "--confirm-redraw",
+        help=(
+            "Required alongside --redraw. Redrawing breaks comparability with "
+            "every released version and with anything already trained on them."
+        ),
+    ),
 ):
     """Emit the pinned TriZOD test set (-> testset/); --redraw re-establishes the pin."""
     from trizod.dataset import testset
@@ -451,6 +493,11 @@ def _dataset_testset(
     argv = _wd_argv(work_dir, root)
     if redraw:
         argv.append("--redraw")
+    # Without this the guard in testset.main() is unreachable from the supported
+    # CLI: --redraw alone always aborts, so a deliberate redraw had to go around
+    # the CLI entirely.
+    if confirm_redraw:
+        argv.append("--confirm-redraw")
     testset.main(argv)
 
 

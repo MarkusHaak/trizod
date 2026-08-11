@@ -68,7 +68,7 @@ PREFILTER_ARGS = {
     "max-noncanonical-fraction": "max_noncanonical_fraction",
     "max-x-fraction": "max_x_fraction",
     "keywords-blacklist": "keywords",
-    "chemical-denaturants": "chemical_denaturants",
+    "perturbing-cosolvents": "perturbing_cosolvents",
     "exclude-paramagnetic": "exclude_paramagnetic",
     "physical-state-blacklist": "physical_state_blacklist",
     "method-fallback": "method_fallback",
@@ -124,7 +124,7 @@ def _union(tiers, key):
 def build_dataframes(input_dir, cache_dir, tiers):
     """Load entries once and build one peptide DataFrame per frame configuration.
 
-    Keyword and denaturant columns are built from the union over ``tiers`` so any
+    Keyword and cosolvent columns are built from the union over ``tiers`` so any
     frame carries the columns every tier's selections index; each tier still
     applies only its own lists.
     """
@@ -136,7 +136,7 @@ def build_dataframes(input_dir, cache_dir, tiers):
         logging.warning(f"Failed loading {len(failed)} of {len(bmrb_files)} files")
 
     keywords = _union(tiers, "keywords-blacklist")
-    denaturants = _union(tiers, "chemical-denaturants")
+    cosolvents = _union(tiers, "perturbing-cosolvents")
 
     frames = {}
     for tier in tiers:
@@ -147,7 +147,7 @@ def build_dataframes(input_dir, cache_dir, tiers):
         logging.info(f"Building peptide DataFrame for {dict(kwargs)} ...")
         frames[key] = create_peptide_dataframe(
             global_entries,
-            chemical_denaturants=denaturants,
+            perturbing_cosolvents=cosolvents,
             keywords=keywords,
             **kwargs,
         )
@@ -162,7 +162,7 @@ def analyse_tier(df, tier):
         missing_vals,
         sels_pre,
         sels_kws,
-        sels_denat,
+        sels_cosolvent,
         sels_paramag,
         sels_all,
     ) = _result
@@ -174,8 +174,8 @@ def analyse_tier(df, tier):
         all_filters[label] = sel
     for name, sel in sels_kws.items():
         all_filters[f"keyword: {name}"] = sel
-    for name, sel in sels_denat.items():
-        all_filters[f"denaturant: {name}"] = sel
+    for name, sel in sels_cosolvent.items():
+        all_filters[f"cosolvent: {name}"] = sel
     for name, sel in sels_paramag.items():
         all_filters[name] = sel
 

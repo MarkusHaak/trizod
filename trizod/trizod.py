@@ -14,7 +14,7 @@ from trizod.bmrb.sample_state import (
     PHYSICAL_STATE_STRICT_DENY,
     PHYSICAL_STATE_TOLERANT_DENY,
     entry_sample_state,
-    has_denaturant_evidence,
+    has_cosolvent_evidence,
     resolve_physical_state,
 )
 from trizod.cache import (
@@ -23,6 +23,13 @@ from trizod.cache import (
     save_potenci_cache,  # noqa: F401
 )
 from trizod.constants import BACKBONE_ATOMS
+from trizod.offsets import (
+    OFFSET_COLUMNS,
+    lacs_off_ppm_col,
+    off_sigma_col,
+    total_off_ppm_col,
+    total_offset_ppm,
+)
 from trizod.pipeline import (
     ZscoreComputationError,
     compute_scores,
@@ -56,9 +63,10 @@ class FilterException(Exception):
 WORD_BOUNDARY_KEYWORDS = frozenset({"bound"})
 
 #: Detergents/lipids that make a sample a membrane mimetic rather than a
-#: denaturant. Annotated as the ``membrane_mimetic`` column, never filtered:
-#: the rows they would remove are 93.7 % ordered and contain zero disordered
-#: chains, so filtering on them would be a one-sided removal of ordered examples.
+#: perturbing cosolvent. Annotated as the ``membrane_mimetic`` column, never
+#: filtered: the rows they would remove are 93.7 % ordered and contain zero
+#: disordered chains, so filtering on them would be a one-sided removal of
+#: ordered examples.
 MEMBRANE_MIMETIC_TOKENS = (
     "SDS",
     "DPC",
@@ -78,19 +86,137 @@ MEMBRANE_MIMETIC_TOKENS = (
     "nanodisc",
 )
 
-_KEYWORD_PATTERNS = {}
+#: Cosolvent tokens that must match as whole words rather than as substrings.
+#: ``urea`` is the fix: as a substring it fires on ``palmitate, laureate, and
+#: stearate`` (la-UREA-te, bmr50434) and on ``bis-pyridylurea inhibitor``
+#: (bmr26598), and word-boundary matching readmits exactly those two entries
+#: (+2 tolerant rows, +2 moderate, +1 strict). ``hfip`` is insurance rather than
+#: a fix -- all 14 corpus components containing it are genuine HFIP, so the
+#: boundary costs nothing -- but a four-letter acronym is precisely the token
+#: class where a substring match goes wrong. The rest stay substring matches:
+#: ``guanidin`` must reach ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
+WORD_BOUNDARY_COSOLVENTS = frozenset({"urea", "hfip"})
+
+_WORD_BOUNDARY_PATTERNS = {}
+
+
+def _word_boundary_pattern(token):
+    """Cached "not flanked by [a-z0-9]" pattern for a lower-cased ``token``.
+
+    Deliberately not ``\\b``: ``_`` is a word character to ``\\b`` but a separator
+    in deposited names (``dmso_d6``), while ``-`` must stay a boundary so that
+    ``urea-d4`` and ``HFIP-d2`` still match.
+    """
+    pattern = _WORD_BOUNDARY_PATTERNS.get(token)
+    if pattern is None:
+        pattern = _WORD_BOUNDARY_PATTERNS[token] = re.compile(
+            rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
+        )
+    return pattern
 
 
 def _keyword_matches(keyword, fields):
     """Does ``keyword`` occur in any of ``fields`` (all lower-cased already)?"""
     if keyword in WORD_BOUNDARY_KEYWORDS:
-        pattern = _KEYWORD_PATTERNS.get(keyword)
-        if pattern is None:
-            pattern = _KEYWORD_PATTERNS[keyword] = re.compile(
-                rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
-            )
+        pattern = _word_boundary_pattern(keyword)
         return any(pattern.search(field) for field in fields)
     return any(keyword in field for field in fields)
+
+
+def _cosolvent_matches(token, component_names):
+    """Does cosolvent ``token`` occur in any of ``component_names``?
+
+    Same discipline as ``_keyword_matches`` -- a separate code path only because
+    the cosolvent scan reads ``_Sample_component.Mol_common_name`` rather than
+    the sample-descriptive free text -- with its own word-boundary set.
+    """
+    if token in WORD_BOUNDARY_COSOLVENTS:
+        pattern = _word_boundary_pattern(token)
+        return any(pattern.search(name) for name in component_names)
+    return any(token in name for name in component_names)
+
+
+# WHY `perturbing-cosolvents` AND NOT `chemical-denaturants` (renamed 2026-08;
+# `--chemical-denaturants` survives as a deprecated CLI alias for one release,
+# the `filter_defaults` key and the `cosolvent_evidence` column do not).
+#
+# 1. The real predicate is not denaturation. What this list tests is "the sample
+#    is NOT aqueous buffer, so POTENCI and LACS are both out of domain":
+#    POTENCI is parameterised on aqueous random-coil data and the LACS reference
+#    tables are Wishart's aqueous random-coil shifts, so neither has anything to
+#    say about a peptide in 50 % TFE. Every token below satisfies that; only
+#    urea and the guanidinium salts are denaturants.
+# 2. The direction of the error is OPPOSITE within this one filter. Urea and
+#    GdmCl inflate apparent DISORDER; TFE, HFIP and DMSO drive helix formation
+#    and so inflate apparent ORDER -- a mislabelled positive, which is the worse
+#    failure for a disorder dataset. Calling the whole family "denaturants"
+#    invites the reader to assume every excluded entry would otherwise have
+#    scored spuriously disordered, which is wrong for three of the five.
+# 3. It removes a live name collision with `cosolvent_evidence` (formerly
+#    `denaturant_evidence`), the tier-independent column from
+#    `sample_state.has_cosolvent_evidence`, which corroborates an ambiguous
+#    deposited `denatured`/`unfolded` physical state. That is a different thing
+#    under what used to be a near-identical name.
+#
+# "Cosolvent" is the umbrella term the protein-folding literature already uses
+# for all five; "perturbing" is what separates them from the stabilising
+# osmolytes (TMAO, glycerol) this filter deliberately does NOT exclude. The
+# argument is emphatically NOT "TFE is not a denaturant" -- Buck 1998 (Q Rev
+# Biophys 31:297) opens by noting that alcohol cosolvents "have been used for
+# many decades to denature proteins".
+#
+#: Tokens searched in ``_Sample_component.Mol_common_name``, identical at
+#: tolerant, moderate and strict (``unfiltered`` filters nothing). Matched as
+#: substrings except for those in ``WORD_BOUNDARY_COSOLVENTS``.
+COSOLVENT_TOKENS = (
+    # Guanidinium. `guanidin` carries the filter: it uniquely removes 2 rows,
+    # bmr11329 ('Guanidine oxalate', 75 mM) and bmr6236 ('Guanidinium Chloride',
+    # 300 mM) -- both an order of magnitude below any denaturing concentration,
+    # i.e. both false positives. The two acronyms below remove ZERO rows that
+    # another filter does not already remove, at every tier (the entries that
+    # deposit them -- 15918/15934 at 4-6 M Gdn-Hcl, 27701-3 at 1.6-3.2 M GdmCl
+    # -- fail other criteria anyway). They are kept as insurance against a
+    # future deposition spelled without the word 'guanidine'; do not claim in
+    # print that this family removes denatured chains from the release, because
+    # at row level it currently removes nothing but two dilute additives.
+    "guanidin",
+    "GdmCl",
+    "Gdn-Hcl",
+    # Urea. Word-boundary matched -- see WORD_BOUNDARY_COSOLVENTS.
+    "urea",
+    # TFE. Ungated by concentration on purpose: Shiraki, Nishikawa & Goto 1995
+    # (JMB 245:180) put the cooperative helix transition at 10-20 % v/v, while
+    # Thanabal 1994 (J Biomol NMR 4:47) had to publish separate 13C random-coil
+    # tables for 10/20/30 % TFE -- the reference itself moves with [TFE], and
+    # dG(helix) is linear in TFE mole fraction, so no threshold is principled.
+    # `trifluoroethanol` does not contain `tfe`, and neither spelling contains
+    # `trifluoro ethanol`, which bmr15559/15579/15580 deposit at 50 % v/v.
+    "TFE",
+    "trifluoroethanol",
+    "trifluoro ethanol",
+    # HFIP -- a STRONGER helix inducer than TFE (Hirota, Mizuno & Goto 1998,
+    # JMB 275:365). 22 entries deposit it and not one is below 25 % v/v, so six
+    # strict rows were being admitted at 25-40 % HFIP while 5 % TFE was
+    # excluded. Three tokens rather than a bare `hexafluoro`, which also matches
+    # bmr7375's 'tetrakis(acetonitrile)copper(I) hexafluorophosphate' (1.8 mM,
+    # a Cu(I) source): -24 tolerant / -18 moderate / -7 strict rows, vs one more
+    # row each at tolerant and moderate for the false positive.
+    "hexafluoroisopropanol",
+    "hexafluoro-2-propanol",
+    "HFIP",
+    # DMSO, at tolerant and above rather than moderate and above. Not because of
+    # the ~10 % v/v threshold of Bhattacharjya & Balaram 1997 (Proteins 29:492)
+    # but because 46 % of the percent-unit DMSO components deposited corpus-wide
+    # (66/143) are >= 95 % v/v: neat DMSO, referenced against DMSO-d6 rather
+    # than DSS, of which 23 rows were shipping in the tolerant tier. Ungated by
+    # concentration all the same: only 16 tolerant rows sit below 5 % v/v, 11 of
+    # them already dropped as bound complexes at dataset-build time, so a 5 %
+    # gate would buy back 4/2/1 rows for a much more fragile rule. Never add a
+    # bare `dimethyl`: it matches DSS, the shift reference standard.
+    "DMSO",
+    "dimethyl sulfoxide",
+    "dimethylsulfoxide",
+)
 
 
 filter_defaults = pd.DataFrame(
@@ -137,11 +263,11 @@ filter_defaults = pd.DataFrame(
             list(PHYSICAL_STATE_MODERATE_DENY),
             list(PHYSICAL_STATE_STRICT_DENY),
         ],
-        "chemical-denaturants": [
+        "perturbing-cosolvents": [
             [],
-            ["guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol"],
-            ["guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol", "DMSO"],
-            ["guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol", "DMSO"],
+            list(COSOLVENT_TOKENS),
+            list(COSOLVENT_TOKENS),
+            list(COSOLVENT_TOKENS),
         ],
         # 'TFA' removed (57 percent-unit components, median 0.1 %, 56/57 <= 0.2 %:
         # an HPLC counterion, and its acidification pathway is already covered by
@@ -175,7 +301,7 @@ filter_defaults = pd.DataFrame(
 
 def fill_row_data(
     row,
-    chemical_denaturants,
+    perturbing_cosolvents,
     keywords,
     return_default=True,
     assume_si=True,
@@ -263,15 +389,15 @@ def fill_row_data(
     )
     row["physical_state"] = physical_state if physical_state else pd.NA
     # A shift table that references no sample is searched against every sample
-    # of the entry. Resolved once, here, so the denaturant evidence below and
+    # of the entry. Resolved once, here, so the cosolvent evidence below and
     # the component scan further down see the same sample set.
     if len(sampleIDs) == 0 and entry.samples:
         sampleIDs = list(entry.samples.keys())
     # `denatured`/`unfolded` are ambiguous depositor vocabulary -- alpha-synuclein
     # (bmr6968) is deposited as `denatured`. Those states are only denied when the
-    # entry independently names a denaturant, so record that evidence here, where
-    # the sample components are in reach. Tier-independent by design.
-    denaturant_texts = [
+    # entry independently names a perturbing cosolvent, so record that evidence
+    # here, where the sample components are in reach. Tier-independent by design.
+    cosolvent_texts = [
         entry.title,
         entry.details,
         assembly.name,
@@ -283,9 +409,9 @@ def fill_row_data(
         sample = entry.samples.get(sID)
         if sample is None:
             continue
-        denaturant_texts.extend([sample.name, sample.details])
-        denaturant_texts.extend(comp[3] for comp in sample.components)
-    row["denaturant_evidence"] = has_denaturant_evidence(denaturant_texts)
+        cosolvent_texts.extend([sample.name, sample.details])
+        cosolvent_texts.extend(comp[3] for comp in sample.components)
+    row["cosolvent_evidence"] = has_cosolvent_evidence(cosolvent_texts)
     # Is this solution NMR or solid-state NMR, judging by _Sample.Type,
     # _Experiment.Sample_state and the experiment names?
     row["sample_state_evidence"] = entry_sample_state(entry, sampleIDs)
@@ -342,9 +468,11 @@ def fill_row_data(
         component_names.extend(
             comp[3].lower() for comp in sample.components if comp[3] and not comp[2]
         )
-    # check if chemical detergents are present
-    for den_comp in chemical_denaturants:
-        row[den_comp] = any(den_comp.lower() in name for name in component_names)
+    # check if perturbing cosolvents are present. The column is named after the
+    # chemical itself (`urea`, `DMSO`, ...), which the rename deliberately left
+    # alone -- only the category name was wrong.
+    for token in perturbing_cosolvents:
+        row[token] = _cosolvent_matches(token.lower(), component_names)
     # Membrane mimetics are annotated, never filtered: the matched token(s), not
     # a bool, so an SDS micelle stays distinguishable from DDM solubilisation.
     matched = [
@@ -359,15 +487,14 @@ def fill_row_data(
     row["total_bbshifts_post"] = np.nan
     row["bbshift_types_post"] = np.nan
     row["bbshift_positions_post"] = np.nan
-    for atom_type in BACKBONE_ATOMS:
-        row[f"off_{atom_type}"] = pd.NA
-        row[f"lacs_off_{atom_type}"] = pd.NA
+    for column in OFFSET_COLUMNS:
+        row[column] = pd.NA
     return row
 
 
 def create_peptide_dataframe(
     bmrb_entries,
-    chemical_denaturants,
+    perturbing_cosolvents,
     keywords,
     return_default=True,
     assume_si=True,
@@ -396,7 +523,7 @@ def create_peptide_dataframe(
     df = df.parallel_apply(
         fill_row_data,
         axis=1,
-        args=(chemical_denaturants, keywords),
+        args=(perturbing_cosolvents, keywords),
         return_default=return_default,
         assume_si=assume_si,
         fix_outliers=fix_outliers,
@@ -462,8 +589,15 @@ def compute_scores_row(
         row["k"] = k
         # row['cmp_mask'] = cmp_mask
         for atom_type in BACKBONE_ATOMS:
-            row[f"off_{atom_type}"] = offsets[atom_type]
-            row[f"lacs_off_{atom_type}"] = lacs_offsets[atom_type]
+            # `offsets` is in sigma units, `lacs_offsets` in ppm -- the column
+            # names carry the difference, and total_offset_ppm() is the one
+            # place that combines them. Store the two raw values unconverted:
+            # --max-offset is compared against the sigma one.
+            row[off_sigma_col(atom_type)] = offsets[atom_type]
+            row[lacs_off_ppm_col(atom_type)] = lacs_offsets[atom_type]
+            row[total_off_ppm_col(atom_type)] = total_offset_ppm(
+                atom_type, lacs_offsets[atom_type], offsets[atom_type]
+            )
         row["total_bbshifts_post"] = np.sum(cmp_mask)
         row["bbshift_types_post"] = np.any(cmp_mask, axis=0).sum()
         row["bbshift_positions_post"] = np.any(cmp_mask, axis=1).sum()
@@ -564,27 +698,16 @@ def output_dataset(
                 "exp_method_subtype",
                 "sample_state_evidence",
                 "physical_state",
-                "denaturant_evidence",
+                "cosolvent_evidence",
                 "membrane_mimetic",
                 "citation_DOI",
                 "citation_title",
                 "ionic_strength",
                 "pH",
                 "temperature",
-                "off_C",
-                "off_CA",
-                "off_CB",
-                "off_H",
-                "off_HA",
-                "off_HB",
-                "off_N",
-                "lacs_off_C",
-                "lacs_off_CA",
-                "lacs_off_CB",
-                "lacs_off_H",
-                "lacs_off_HA",
-                "lacs_off_HB",
-                "lacs_off_N",
+            ]
+            + OFFSET_COLUMNS
+            + [
                 "bbshift_positions_post",
                 "bbshift_types_post",
                 "total_bbshifts",
@@ -627,7 +750,7 @@ def run_scoring_pipeline(args):
     logging.getLogger("trizod").info("Parsing and filtering relevant information.")
     df = create_peptide_dataframe(
         bmrb_entries,
-        chemical_denaturants=args.chemical_denaturants,
+        perturbing_cosolvents=args.perturbing_cosolvents,
         keywords=args.keywords_blacklist,
         return_default=args.default_conditions,
         assume_si=args.unit_assumptions,
@@ -637,7 +760,7 @@ def run_scoring_pipeline(args):
         keyword_search_scope=args.keyword_search_scope,
         progress=args.progress,
     )
-    df, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all_pre = (
+    df, missing_vals, sels_pre, sels_kws, sels_cosolvent, sels_paramag, sels_all_pre = (
         prefilter_dataframe(
             df,
             method_whitelist=args.exp_method_whitelist,
@@ -652,7 +775,7 @@ def run_scoring_pipeline(args):
             max_noncanonical_fraction=args.max_noncanonical_fraction,
             max_x_fraction=args.max_x_fraction,
             keywords=args.keywords_blacklist,
-            chemical_denaturants=args.chemical_denaturants,
+            perturbing_cosolvents=args.perturbing_cosolvents,
             exclude_paramagnetic=args.exclude_paramagnetic,
             physical_state_blacklist=args.physical_state_blacklist,
             method_fallback=args.method_fallback,
@@ -715,27 +838,24 @@ def run_scoring_pipeline(args):
             # LACS offsets so the file reflects the re-referenced state. The
             # POTENCI residual offsets live on the weighted-diff side and are
             # captured in the aux saveframe rather than subtracted from raw shifts.
-            for j, atom in enumerate(BACKBONE_ATOMS):
-                lacs_off = row.get(f"lacs_off_{atom}", 0.0)
-                if pd.isna(lacs_off):
-                    lacs_off = 0.0
-                bbshifts_arr[bbshifts_mask[:, j], j] -= float(lacs_off)
             lacs_offsets = {
                 atom: (
                     0.0
-                    if pd.isna(row.get(f"lacs_off_{atom}", 0.0))
-                    else float(row[f"lacs_off_{atom}"])
+                    if pd.isna(row.get(lacs_off_ppm_col(atom), 0.0))
+                    else float(row[lacs_off_ppm_col(atom)])
                 )
                 for atom in BACKBONE_ATOMS
             }
             potenci_offsets = {
                 atom: (
                     0.0
-                    if pd.isna(row.get(f"off_{atom}", 0.0))
-                    else float(row[f"off_{atom}"])
+                    if pd.isna(row.get(off_sigma_col(atom), 0.0))
+                    else float(row[off_sigma_col(atom)])
                 )
                 for atom in BACKBONE_ATOMS
             }
+            for j, atom in enumerate(BACKBONE_ATOMS):
+                bbshifts_arr[bbshifts_mask[:, j], j] -= lacs_offsets[atom]
             out_path = args.emit_str / (
                 f"bmr{row['entryID']}_{row['stID']}_{row['entity_assemID']}"
                 f"_{row['entityID']}_rereferenced.str"
@@ -746,8 +866,8 @@ def run_scoring_pipeline(args):
                 seq=seq,
                 bbshifts_arr=bbshifts_arr,
                 bbshifts_mask=bbshifts_mask,
-                lacs_offsets=lacs_offsets,
-                potenci_residual_offsets=potenci_offsets,
+                lacs_offsets_ppm=lacs_offsets,
+                potenci_residual_offsets_sigma=potenci_offsets,
                 rereference_mode=args.rereference_mode,
                 pipeline_version=pipeline_version(),
             )
@@ -758,7 +878,7 @@ def run_scoring_pipeline(args):
         missing_vals,
         sels_pre,
         sels_kws,
-        sels_denat,
+        sels_cosolvent,
         sels_paramag,
         sels_all_pre,
         sels_post,

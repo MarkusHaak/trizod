@@ -29,6 +29,7 @@ from trizod.bmrb.sample_state import (
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
 from trizod.io.atomic import atomic_write
+from trizod.offsets import off_sigma_col
 from trizod.provenance import scoring_cache_version
 
 
@@ -115,7 +116,7 @@ def prefilter_dataframe(
     max_noncanonical_fraction,
     max_x_fraction,
     keywords,
-    chemical_denaturants,
+    perturbing_cosolvents,
     exclude_paramagnetic=False,
     physical_state_blacklist=(),
     method_fallback="off",
@@ -228,19 +229,19 @@ def prefilter_dataframe(
         # protected by never appearing in any deny list.
         warn_unseen_physical_states(df.physical_state)
         # The ambiguous states (`denatured`, `unfolded`, ...) are denied only
-        # where the entry independently names a denaturant; see
+        # where the entry independently names a perturbing cosolvent; see
         # trizod.bmrb.sample_state.PHYSICAL_STATE_AMBIGUOUS.
         # Absent evidence would silently KEEP every ambiguous state, quietly
         # weakening a filter that gates a published dataset. fill_row_data always
         # sets the column beside `physical_state`, so its absence is a bug in the
         # caller, not a case to tolerate.
-        if "denaturant_evidence" not in df:
+        if "cosolvent_evidence" not in df:
             raise ValueError(
-                "physical_state is present but denaturant_evidence is missing; "
+                "physical_state is present but cosolvent_evidence is missing; "
                 "the ambiguous states (denatured/unfolded/...) cannot be judged "
                 "without it. Build the frame with fill_row_data()."
             )
-        corroborated = df.denaturant_evidence.fillna(False).astype(bool)
+        corroborated = df.cosolvent_evidence.fillna(False).astype(bool)
         denied = pd.Series(
             denied_physical_states(
                 df.physical_state, physical_state_blacklist, corroborated=corroborated
@@ -251,12 +252,15 @@ def prefilter_dataframe(
             ("physical state", f"[{len(physical_state_blacklist)} denied]")
         ] = ~denied
     sels_kws = {keyword: ~df[keyword] for keyword in keywords}
-    sels_denat = {denaturant: ~df[denaturant] for denaturant in chemical_denaturants}
+    sels_cosolvent = {token: ~df[token] for token in perturbing_cosolvents}
     sels_paramag = {}
     if exclude_paramagnetic:
         sels_paramag = {"paramagnetic": ~df["paramagnetic"].astype(bool)}
     sels_all_pre = (
-        {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat | sels_paramag
+        {k[0]: v for k, v in sels_pre.items()}
+        | sels_kws
+        | sels_cosolvent
+        | sels_paramag
     )
 
     passing = missing_vals.copy()
@@ -265,7 +269,15 @@ def prefilter_dataframe(
 
     df["pass_pre"] = False
     df.loc[passing, "pass_pre"] = True
-    return df, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all_pre
+    return (
+        df,
+        missing_vals,
+        sels_pre,
+        sels_kws,
+        sels_cosolvent,
+        sels_paramag,
+        sels_all_pre,
+    )
 
 
 def postfilter_dataframe(
@@ -299,11 +311,15 @@ def postfilter_dataframe(
             np.full((df.shape[0],), False), index=df.index
         )
         for atom_type in scoring.BACKBONE_ATOMS:
-            any_offsets_too_large |= pd.isna(df[f"off_{atom_type}"])
+            # off_<atom>_sigma, not the ppm column: --max-offset (3/3/2) is a
+            # threshold in sigma units, applied in compute_scores() which NaNs
+            # the offset it rejects. Reading the ppm column here would silently
+            # change what the filter means.
+            any_offsets_too_large |= pd.isna(df[off_sigma_col(atom_type)])
         sels_post.update({("rejected due to any offset", ""): ~any_offsets_too_large})
 
     sels_off = {
-        f"off_{atom_type}": ~pd.isna(df[f"off_{atom_type}"])
+        off_sigma_col(atom_type): ~pd.isna(df[off_sigma_col(atom_type)])
         for atom_type in BACKBONE_ATOMS
     }
     sels_all_post = {k[0]: v for k, v in sels_post.items()}  # | sels_off
@@ -323,7 +339,7 @@ def print_filter_losses(
     missing_vals,
     sels_pre,
     sels_kws,
-    sels_denat,
+    sels_cosolvent,
     sels_paramag,
     sels_all_pre,
     sels_post,
@@ -366,12 +382,12 @@ def print_filter_losses(
             print(
                 f"{'.*' + filter + '.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}"
             )
-    if sels_denat:
+    if sels_cosolvent:
         print()
         print(
-            f"{'chemical denaturant':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}"
+            f"{'perturbing cosolvent':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}"
         )
-        for filter, sel in sels_denat.items():
+        for filter, sel in sels_cosolvent.items():
             uniq = pd.Series(np.full((len(sel),), False))
             for other_filter, other_sel in sels_all_pre.items():
                 if other_filter != filter:
@@ -412,8 +428,11 @@ def print_filter_losses(
             if other_filter != filter:
                 uniq |= ~other_sel
         uniq = ~sel & ~uniq & passing_pre
+        # sels_off is keyed by column name (off_<atom>_sigma); the report wants
+        # the bare atom, so strip both the prefix and the unit suffix.
+        atom = filter.removeprefix("off_").removesuffix("_sigma")
         print(
-            f"{filter[4:]:<{w_str}} : {(~sel & passing_pre).sum():>{w_num}} {uniq.sum():>{w_num}}"
+            f"{atom:<{w_str}} : {(~sel & passing_pre).sum():>{w_num}} {uniq.sum():>{w_num}}"
         )
     print("=" * total_width)
     print()

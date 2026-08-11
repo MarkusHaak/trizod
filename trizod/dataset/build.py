@@ -24,8 +24,11 @@ Steps
 2. For every row in the per-tier scores.json, attach the bound flag and
    compute a per-row quality score:
        quality = (bbshift_positions_post * bbshift_types_post)
-                  − (max |POTENCI residual offset|)
+                  − (max |POTENCI residual offset|, in sigma)
    Higher is better.  In ties, prefer the strictest tier.
+   The offsets come out of ``off_<atom>_sigma`` (sigma) and
+   ``total_off_<atom>_ppm`` (ppm) via :mod:`trizod.offsets`; the two are in
+   different units and are never mixed.
 3. Drop rows that are flagged "bound" and rows with no sequence /
    sequence < 20 residues.
 4. Within each tier, group by exact ``seq`` and pick the highest-quality
@@ -54,10 +57,19 @@ import pandas as pd
 
 from trizod.dataset.composition import detect_bound
 from trizod.dataset.paths import resolve_paths
+from trizod.offsets import max_abs_offset, off_sigma_col, total_off_ppm_col
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 TIER_RANK = {"strict": 4, "moderate": 3, "tolerant": 2, "unfiltered": 1}
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
+
+#: Offset columns read out of ``scores.json``, built from the shared helpers so
+#: a rename cannot desynchronise this reader from the emitter (it did once: the
+#: reader kept the pre-rename spelling, ``.get()`` returned None, ``or 0.0``
+#: turned every offset into a perfect zero, and 58 of 12,745 exact-sequence
+#: groups silently elected a different representative).
+POTENCI_SIGMA_COLS = [off_sigma_col(a) for a in ATOMS]
+TOTAL_PPM_COLS = [total_off_ppm_col(a) for a in ATOMS]
 
 MIN_SEQ_LEN = 20
 
@@ -105,8 +117,13 @@ def load_tier_scores(tier: str, release: Path) -> pd.DataFrame:
             if not line.strip():
                 continue
             r = json.loads(line)
-            offs_pot = [abs(r.get(f"off_{a}") or 0.0) for a in ATOMS]
-            offs_lac = [abs(r.get(f"lacs_off_{a}") or 0.0) for a in ATOMS]
+            # Both raise if the column is absent -- a scores.json without it is
+            # schema drift, and the only safe reaction is to stop. They return
+            # None only when every atom's offset is null (nothing measurable),
+            # which is a real "no penalty" and is spelled out below rather than
+            # arrived at by coercing a missing key.
+            max_potenci_off = max_abs_offset(r, POTENCI_SIGMA_COLS)
+            max_total_off_ppm = max_abs_offset(r, TOTAL_PPM_COLS)
             rows.append(
                 {
                     "ID": r["ID"],
@@ -119,8 +136,16 @@ def load_tier_scores(tier: str, release: Path) -> pd.DataFrame:
                     "n_bb_pos": r["bbshift_positions_post"] or 0,
                     "n_bb_types": r["bbshift_types_post"] or 0,
                     "total_bbshifts": r["total_bbshifts"] or 0,
-                    "max_potenci_off": max(offs_pot) if offs_pot else 0.0,
-                    "max_lacs_off": max(offs_lac) if offs_lac else 0.0,
+                    # sigma, and the tie-break term of quality_score below.
+                    "max_potenci_off": (
+                        0.0 if max_potenci_off is None else max_potenci_off
+                    ),
+                    # ppm, and the honest answer to "how badly was this chain
+                    # re-referenced": the POTENCI residual is part of the
+                    # correction too, so the LACS term alone understates it.
+                    "max_total_off_ppm": (
+                        0.0 if max_total_off_ppm is None else max_total_off_ppm
+                    ),
                     "entity_name": r.get("entity_name") or "",
                     "ionic_strength": r.get("ionic_strength"),
                     "pH": r.get("pH"),
@@ -296,7 +321,7 @@ def main(argv=None):
             "ID", "entryID", "stID", "entity_assemID", "entityID",
             "tier", "tier_rank", "len", "n_bb_pos", "n_bb_types",
             "total_bbshifts", "shift_volume", "max_potenci_off",
-            "max_lacs_off", "quality_score",
+            "max_total_off_ppm", "quality_score",
             "seq_rank_tier", "is_seq_repr_tier",
             "global_repr_ID", "global_repr_tier",
             "is_bound", "has_non_polymer", "has_nucleic",

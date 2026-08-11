@@ -238,7 +238,7 @@ def _prefilter(rows, tier, frame=None):
         max_noncanonical_fraction=1.0,
         max_x_fraction=1.0,
         keywords=[],
-        chemical_denaturants=[],
+        perturbing_cosolvents=[],
         method_fallback=filter_defaults.loc[tier, "method-fallback"],
     )
 
@@ -325,7 +325,7 @@ def test_unknown_method_fallback_is_rejected():
             max_noncanonical_fraction=1.0,
             max_x_fraction=1.0,
             keywords=[],
-            chemical_denaturants=[],
+            perturbing_cosolvents=[],
             method_fallback="reject-everything",
         )
 

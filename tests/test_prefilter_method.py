@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from trizod.constants import BACKBONE_ATOMS
+from trizod.offsets import off_sigma_col
 from trizod.pipeline import postfilter_dataframe, prefilter_dataframe
 
 METHOD_KEY = ("method (sub-)type", "")
@@ -58,7 +59,7 @@ def _method_selection(subtypes, whitelist, blacklist):
         max_noncanonical_fraction=1.0,
         max_x_fraction=1.0,
         keywords=[],
-        chemical_denaturants=[],
+        perturbing_cosolvents=[],
     )
     return [bool(v) for v in sels_pre[METHOD_KEY]]
 
@@ -120,8 +121,12 @@ def _post_frame(n):
         "bbshift_positions_post": [18] * n,
         "pass_pre": [True] * n,
     }
+    # off_sigma_col(), not a literal: the offset-rejection mask reads the sigma
+    # column, and building the frame from the same helper the production code
+    # calls is what keeps this test testing index alignment rather than the
+    # column spelling.
     for atom_type in BACKBONE_ATOMS:
-        data[f"off_{atom_type}"] = [0.0] * n
+        data[off_sigma_col(atom_type)] = [0.0] * n
     return pd.DataFrame(data)
 
 
@@ -135,7 +140,7 @@ def test_postfilter_uses_the_frame_index_not_positions():
 
 def test_postfilter_still_rejects_large_offsets_in_a_subset():
     df = _post_frame(6)
-    df.loc[3, "off_CA"] = np.nan  # offset rejected during scoring
+    df.loc[3, off_sigma_col("CA")] = np.nan  # offset rejected during scoring
     subset = df.loc[[1, 2, 3, 5]].copy()
     postfilter_dataframe(subset, 1, 1, 0.0, False, ["zscores"])
     assert subset["pass_post"].tolist() == [True, True, False, True]

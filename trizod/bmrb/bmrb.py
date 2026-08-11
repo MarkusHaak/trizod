@@ -654,7 +654,7 @@ class BmrbEntry:
                 continue
             sampleIDs = [sID.strip() for sID in set(sampleIDs) if sID in self.samples]
             if not sampleIDs:
-                # do not require link to samples - only necessary if filtered for denaturants
+                # do not require link to samples - only necessary if filtered for cosolvents
                 logging.getLogger("trizod.bmrb").warning(
                     f"sample ID(s) unknown for shift table {stID}."
                 )
@@ -873,28 +873,44 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
     return bbshifts_arr, bbshifts_mask
 
 
-# Atom IDs consumed by get_valid_bbshifts(); the side-chain view below is their
-# complement, so the two never overlap.
+# Atom IDs consumed by get_valid_bbshifts(). Everything else in a deposition is
+# side chain, so `is_backbone` below partitions the table on this set exactly.
 BB_ATOM_IDS = frozenset(BACKBONE_ATOMS + ["HA2", "HA3", "HB1", "HB2", "HB3"])
 
-SIDECHAIN_COLUMNS = [
+SHIFT_COLUMNS = [
     "seq_id",
     "comp_id",
     "atom_id",
     "atom_type",
-    "val",
-    "val_err",
+    "val_ppm",
+    "val_err_ppm",
     "ambiguity_code",
+    "is_backbone",
 ]
 
+#: The side-chain-only view: the same columns minus the partition flag.
+SIDECHAIN_COLUMNS = [c for c in SHIFT_COLUMNS if c != "is_backbone"]
 
-def get_sidechain_shifts(shifts, seq):
-    """Return the side-chain shifts that :func:`get_valid_bbshifts` discards.
 
-    A parallel read of the same ``ShiftTable.shifts`` tuples that keeps the
-    complement of the backbone atom whitelist — every side-chain carbon, methyl,
-    aromatic ring atom and side-chain nitrogen (~3.5 M values corpus-wide).
-    The backbone read is untouched, so scoring is unaffected.
+def get_deposited_shifts(shifts, seq):
+    """Return every assigned chemical shift **on a canonical residue** of one
+    chain, as deposited.
+
+    A parallel read of the same ``ShiftTable.shifts`` tuples
+    :func:`get_valid_bbshifts` consumes, keeping backbone *and* side-chain
+    values (11,839,037 over the 16,851 chains of release 2026-08, of which
+    8,380,186 are backbone). The backbone read is untouched, so scoring is
+    unaffected.
+
+    Not **every** deposited value: the ``Comp_ID in AA3TO1`` guard below drops
+    shifts on non-canonical residues and groups, because ``seq_id`` is only a
+    usable join key into the released ``sequence`` for a residue that sequence
+    actually names. Measured on release 2026-08 that is 16,502 of 11,855,542
+    values (0.139 %), on 290 distinct ``Comp_ID``s across 1,050 chains, and it
+    is systematic rather than random: the PTMs (SEP, TPO, PTR, TYS, HYP, ALY,
+    MLY, M3L), the non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA, MLE,
+    DAL) and the terminal or lipid groups (ACE, NH2, MYR) — i.e. exactly what a
+    PTM-interested consumer would come looking for.
 
     The sequence-consistency guards are the same as the backbone read's (Seq_ID
     convertible and in range, canonical Comp_ID matching the polymer sequence,
@@ -902,14 +918,16 @@ def get_sidechain_shifts(shifts, seq):
     ``seq[seq_id - 1]`` really is the residue named by ``comp_id``. The three
     backbone *quality* filters are deliberately **not** applied:
 
-    * no atom whitelist — that is the point of this function;
-    * no ``max_err <= 1.3`` cut — the deposited error ships as a column instead;
+    * no atom whitelist — the whitelist is published as the ``is_backbone``
+      column instead of as a deletion, so a consumer filters in one line;
+    * no ``max_err <= 1.3`` cut — the deposited error ships as a column;
     * no ambiguity whitelist — the backbone rule (``1``/``2``/empty) would drop
-      102,425 of these values (2.96 %), including all 85,466 aromatic
-      ring-degenerate (code 3) ones. ``ambiguity_code`` ships as data.
+      85,831 aromatic ring-degenerate (code 3) values alone.
+      ``ambiguity_code`` ships as data.
 
     Values are **as deposited**: no re-referencing or offset correction of any
-    kind is applied (see docs/dataset/datasheet.md).
+    kind is applied here. :func:`trizod.shifts.annotate_offsets` adds the
+    corrected column beside them.
 
     Args:
         shifts: list of ``ShiftTable.shifts`` tuples for one chain.
@@ -917,9 +935,10 @@ def get_sidechain_shifts(shifts, seq):
 
     Returns:
         ``DataFrame`` with columns ``seq_id`` (1-based, as deposited),
-        ``comp_id``, ``atom_id``, ``atom_type``, ``val``, ``val_err``,
-        ``ambiguity_code`` (nullable ``Int8``), sorted by ``(seq_id, atom_id)``;
-        or ``None`` when the table fails a sequence-consistency guard.
+        ``comp_id``, ``atom_id``, ``atom_type``, ``val_ppm``, ``val_err_ppm``,
+        ``ambiguity_code`` (nullable ``Int8``) and ``is_backbone``, sorted by
+        ``(seq_id, atom_id)``; or ``None`` when the table fails a
+        sequence-consistency guard.
     """
     df = pd.DataFrame(
         shifts,
@@ -930,8 +949,8 @@ def get_sidechain_shifts(shifts, seq):
             "comp_id",
             "atom_id",
             "atom_type",
-            "val",
-            "val_err",
+            "val_ppm",
+            "val_err_ppm",
             "ambiguity_code",
         ],
     )
@@ -958,7 +977,7 @@ def get_sidechain_shifts(shifts, seq):
         )
         return
     try:
-        df["val"] = df["val"].astype(float)  # will throw error on failed conversion
+        df["val_ppm"] = df["val_ppm"].astype(float)  # throws on failed conversion
     except ValueError:
         logging.getLogger("trizod.bmrb").error(
             "conversion to float failed for at least one shift value"
@@ -967,24 +986,36 @@ def get_sidechain_shifts(shifts, seq):
     # non-numeric errors and codes become NaN/NA, which is intended: they are
     # carried as metadata, they must never abort the extraction. Codes outside
     # the BMRB dictionary domain (1-9) are dropped rather than cast blindly.
-    df["val_err"] = pd.to_numeric(df["val_err"], errors="coerce")
+    df["val_err_ppm"] = pd.to_numeric(df["val_err_ppm"], errors="coerce")
     ambc = pd.to_numeric(df["ambiguity_code"], errors="coerce")
     df["ambiguity_code"] = ambc.where(ambc.isin(range(1, 10))).astype("Int8")
-    # drop the atoms the backbone read consumes
-    df = df.loc[~df["atom_id"].isin(BB_ATOM_IDS)]
+    df["is_backbone"] = df["atom_id"].isin(BB_ATOM_IDS)
     # identical rows are redundant re-statements of one measurement; rows that
     # differ in any field are kept (3 corpus-wide, all in one chain, same value
     # deposited twice under different ambiguity codes) -- the long table can
     # represent them and rejecting the chain outright would lose far more
-    dupl = df[SIDECHAIN_COLUMNS].duplicated()
+    dupl = df[SHIFT_COLUMNS].duplicated()
     if np.any(dupl):
         logging.getLogger("trizod.bmrb").warning(
-            "multiple identical side-chain shifts found for the same position and atom_id"
+            "multiple identical shifts found for the same position and atom_id"
         )
         df = df.loc[~dupl]
     if np.any(df[["seq_id", "atom_id"]].duplicated(keep=False)):
         logging.getLogger("trizod.bmrb").warning(
-            "conflicting side-chain shifts found for the same position and atom_id"
+            "conflicting shifts found for the same position and atom_id"
         )
-    df = df[SIDECHAIN_COLUMNS].sort_values(["seq_id", "atom_id"], kind="stable")
+    df = df[SHIFT_COLUMNS].sort_values(["seq_id", "atom_id"], kind="stable")
     return df.reset_index(drop=True)
+
+
+def get_sidechain_shifts(shifts, seq):
+    """The ``~is_backbone`` slice of :func:`get_deposited_shifts`.
+
+    Kept as its own entry point for the side-chain coverage analysis, which
+    counts assignments against a per-residue side-chain atom inventory; the
+    released table carries both halves and the flag instead.
+    """
+    df = get_deposited_shifts(shifts, seq)
+    if df is None:
+        return None
+    return df.loc[~df["is_backbone"], SIDECHAIN_COLUMNS].reset_index(drop=True)

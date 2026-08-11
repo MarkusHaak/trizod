@@ -42,7 +42,7 @@ def _prefilter_kwargs(tier="unfiltered"):
         "max_noncanonical_fraction": d["max-noncanonical-fraction"],
         "max_x_fraction": d["max-x-fraction"],
         "keywords": d["keywords-blacklist"],
-        "chemical_denaturants": d["chemical-denaturants"],
+        "perturbing_cosolvents": d["perturbing-cosolvents"],
         "exclude_paramagnetic": d["exclude-paramagnetic"],
     }
 
@@ -72,7 +72,7 @@ def test_entries_passed_explicitly_and_scored(tmp_path):
     # create_peptide_dataframe -> fill_row_data reads `bmrb_entries` (the arg).
     df = trizod_mod.create_peptide_dataframe(
         entries,
-        chemical_denaturants=tier["chemical-denaturants"],
+        perturbing_cosolvents=tier["perturbing-cosolvents"],
         keywords=tier["keywords-blacklist"],
     )
     assert len(df) > 0

@@ -71,7 +71,7 @@ def _fill(entry, keywords):
     bmrb_entries = pd.DataFrame({"entry": [entry]}, index=["1"])
     return fill_row_data(
         row,
-        chemical_denaturants=[],
+        perturbing_cosolvents=[],
         keywords=keywords,
         bmrb_entries=bmrb_entries,
     )

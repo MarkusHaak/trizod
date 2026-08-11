@@ -112,7 +112,7 @@ def _fill(entry, keywords, entity_assemID="1", **kwargs):
     bmrb_entries = pd.DataFrame({"entry": [entry]}, index=["1"])
     return fill_row_data(
         row,
-        chemical_denaturants=[],
+        perturbing_cosolvents=[],
         keywords=keywords,
         bmrb_entries=bmrb_entries,
         **kwargs,
@@ -265,7 +265,7 @@ def test_physical_state_deny_is_exact_not_substring():
 
 def test_unfolded_denied_from_moderate_up_only():
     # `unfolded` is ambiguous vocabulary, so it is denied only where the entry
-    # also names a denaturant -- above moderate, and never at tolerant.
+    # also names a perturbing cosolvent -- above moderate, and never at tolerant.
     assert (
         is_physical_state_denied("unfolded", TOLERANT_DENY, corroborated=True) is False
     )
@@ -296,7 +296,7 @@ def test_unfolded_denied_from_moderate_up_only():
     ],
 )
 def test_tolerant_deny_covers_the_deposited_spelling_variants(value):
-    # Ambiguous values need corroborating denaturant evidence; the rest do not.
+    # Ambiguous values need corroborating cosolvent evidence; the rest do not.
     corroborated = value.strip().lower() in sample_state.PHYSICAL_STATE_AMBIGUOUS
     assert (
         is_physical_state_denied(value, TOLERANT_DENY, corroborated=corroborated)
@@ -385,12 +385,12 @@ def test_known_physical_states_do_not_warn(caplog):
 # --------------------------------------------------------------------------- #
 
 
-def _state_frame(states, denaturant_evidence=None):
+def _state_frame(states, cosolvent_evidence=None):
     n = len(states)
     return pd.DataFrame(
         {
-            "denaturant_evidence": (
-                [False] * n if denaturant_evidence is None else denaturant_evidence
+            "cosolvent_evidence": (
+                [False] * n if cosolvent_evidence is None else cosolvent_evidence
             ),
             "exp_method": ["NMR"] * n,
             "exp_method_subtype": ["solution"] * n,
@@ -407,9 +407,9 @@ def _state_frame(states, denaturant_evidence=None):
     )
 
 
-def _pass_pre(states, deny, denaturant_evidence=None):
+def _pass_pre(states, deny, cosolvent_evidence=None):
     df, *_rest = prefilter_dataframe(
-        _state_frame(states, denaturant_evidence),
+        _state_frame(states, cosolvent_evidence),
         method_whitelist=["solution"],
         method_blacklist=["solid"],
         temperature_range=[-float("inf"), float("inf")],
@@ -422,7 +422,7 @@ def _pass_pre(states, deny, denaturant_evidence=None):
         max_noncanonical_fraction=1.0,
         max_x_fraction=1.0,
         keywords=[],
-        chemical_denaturants=[],
+        perturbing_cosolvents=[],
         physical_state_blacklist=deny,
     )
     return df["pass_pre"].tolist()
@@ -431,10 +431,10 @@ def _pass_pre(states, deny, denaturant_evidence=None):
 def test_prefilter_drops_denied_physical_states():
     states = ["native", "molten globule", "intrinsically disordered", "denatured", None]
     # `molten globule` is denied on the deposited tag alone; `denatured` is
-    # ambiguous vocabulary and survives unless the entry names a denaturant.
+    # ambiguous vocabulary and survives unless the entry names a perturbing cosolvent.
     assert _pass_pre(states, TOLERANT_DENY) == [True, False, True, True, True]
     assert _pass_pre(
-        states, TOLERANT_DENY, denaturant_evidence=[False, False, False, True, False]
+        states, TOLERANT_DENY, cosolvent_evidence=[False, False, False, True, False]
     ) == [True, False, True, False, True]
 
 
@@ -464,11 +464,11 @@ def test_real_non_native_entries_are_denied_from_tolerant_up(entry_id, state):
     values = {row[3] for row in entry.assemblies["1"].entities}
     assert values == {state}
     # 16948 (dynamin GED in DMSO) carries the ambiguous value `denatured`, so it
-    # is denied on its real denaturant evidence, not on the tag alone.
+    # is denied on its real cosolvent evidence, not on the tag alone.
     texts = [entry.title, entry.details] + [
         c[3] for s_ in entry.samples.values() for c in s_.components
     ]
-    corroborated = sample_state.has_denaturant_evidence(texts)
+    corroborated = sample_state.has_cosolvent_evidence(texts)
     assert corroborated is (state in sample_state.PHYSICAL_STATE_AMBIGUOUS)
     for deny in (TOLERANT_DENY, MODERATE_DENY, STRICT_DENY):
         assert is_physical_state_denied(state, deny, corroborated=corroborated) is True
@@ -487,7 +487,7 @@ def test_real_non_native_entries_are_denied_from_tolerant_up(entry_id, state):
         [
             fill_row_data(
                 row,
-                chemical_denaturants=[],
+                perturbing_cosolvents=[],
                 keywords=[],
                 bmrb_entries=pd.DataFrame({"entry": [entry]}, index=[entry_id]),
             )
@@ -508,7 +508,7 @@ def test_real_non_native_entries_are_denied_from_tolerant_up(entry_id, state):
         max_noncanonical_fraction=1.0,
         max_x_fraction=1.0,
         keywords=[],
-        chemical_denaturants=[],
+        perturbing_cosolvents=[],
         physical_state_blacklist=MODERATE_DENY,
     )
     state_key = ("physical state", f"[{len(MODERATE_DENY)} denied]")
@@ -524,12 +524,13 @@ def test_real_non_native_entries_are_denied_from_tolerant_up(entry_id, state):
 # sample and for a natively unfolded IDP. bmr6968 -- alpha-synuclein, titled
 # "... of intrinsically disordered alpha-synuclein" -- is deposited as
 # `denatured`. Measured over the released tolerant tier: of 101 rows carrying
-# one of these four values, 69 have no denaturant anywhere in the entry, and
+# one of these four values, 69 have no perturbing cosolvent anywhere in the entry,
+# and
 # they are dominated by alpha-synuclein (6968/16300/16301), Tau (52309/52401),
 # gamma-synuclein, endosulfine alpha and the yeast SNAREs (4286/4287).
 # Denying on the tag alone deletes the signal the dataset exists to capture, so
-# these four are denied only when the entry independently evidences a
-# denaturant. The unambiguous states (molten globule, fibril, aggregated, ...)
+# these four are denied only when the entry independently evidences a perturbing
+# cosolvent. The unambiguous states (molten globule, fibril, aggregated, ...)
 # are denied on the tag alone.
 
 
@@ -575,26 +576,37 @@ def test_corroboration_defaults_to_absent():
         (["6 M guanidinium chloride"], True),
         (["GdmCl"], True),
         (["30% TFE"], True),
+        # HFIP is a stronger helix inducer than TFE and is exactly the "not
+        # aqueous buffer" evidence this rule tests for. Zero corpus rows flip
+        # today (no ambiguous-state row names it); the tokens are forward cover.
+        (["25 % HFIP"], True),
+        (["hexafluoroisopropanol"], True),
+        (["hexafluoroisopropanol-d2"], True),
+        (["1,1,1,3,3,3-hexafluoro-2-propanol"], True),
+        # ... but not the Cu(I) counterion sharing the `hexafluoro` prefix
+        (["tetrakis(acetonitrile)copper(I) hexafluorophosphate"], False),
         (["urease"], False),  # `urea` must not fire on `urease`
         (["Urease from jack bean"], False),
+        (["bis-pyridylurea inhibitor"], False),  # bmr26598
+        (["palmitate, laureate, and stearate"], False),  # bmr50434
         (["phosphate buffer"], False),
         ([None, ""], False),
     ],
 )
-def test_denaturant_evidence_in_free_text(texts, expected):
-    assert sample_state.has_denaturant_evidence(texts) is expected
+def test_cosolvent_evidence_in_free_text(texts, expected):
+    assert sample_state.has_cosolvent_evidence(texts) is expected
 
 
 @requires_bmrb_data
 def test_alpha_synuclein_survives_the_tolerant_deny_list():
-    """bmr6968 is alpha-synuclein deposited as `denatured` with no denaturant."""
+    """bmr6968 is alpha-synuclein deposited as `denatured` with no cosolvent."""
     entry = bmrb.BmrbEntry("6968", str(BMRB_DIR))
     assembly = next(iter(entry.assemblies.values()))
     state = sample_state.resolve_physical_state(assembly, "1", "1")
     assert state == "denatured"
     names = [c[3] for s in entry.samples.values() for c in s.components]
     texts = [entry.title, entry.details] + names
-    assert sample_state.has_denaturant_evidence(texts) is False
+    assert sample_state.has_cosolvent_evidence(texts) is False
     assert sample_state.denied_physical_states(
         [state], sample_state.PHYSICAL_STATE_TOLERANT_DENY, corroborated=[False]
     ) == [False]
