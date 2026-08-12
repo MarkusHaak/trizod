@@ -36,7 +36,7 @@ correction, `--rereference-mode both`), and scored (per-residue Z-score and the
 
 | | strict | moderate | tolerant | unfiltered |
 |---|--:|--:|--:|--:|
-| **scored records** | 4,113 | 11,175 | 15,193 | 16,851 |
+| **scored records** | 4,108 | 11,159 | 15,080 | 16,851 |
 
 → `data/interim/scored/<tier>/scores.json`. (`trizod dataset build` reads these.)
 
@@ -44,10 +44,10 @@ Compared record-for-record against the `2026-07` (v0.3.0) release, by `ID`:
 
 | | strict | moderate | tolerant | unfiltered |
 |---|--:|--:|--:|--:|
-| v0.3.0 | 3,514 | 11,306 | 15,446 | 16,851 |
-| in both | 3,229 | 11,108 | 15,173 | 16,851 |
-| removed | 285 | 198 | 273 | 0 |
-| added | 884 | 67 | 20 | 0 |
+| v0.3.0 | 3,271 | 10,941 | 15,440 | 16,851 |
+| in both | 2,891 | 10,624 | 15,050 | 16,851 |
+| removed | 380 | 317 | 390 | 0 |
+| added | 1,217 | 535 | 30 | 0 |
 | **net** | **+599** | **−131** | **−253** | **0** |
 
 `unfiltered` is the identical record set: every new filter policy is empty or
@@ -92,7 +92,8 @@ The seeded recipe (fixed seed = 42) is:
    test-set representatives.
 
 **The test set is pinned**, so that recipe only runs on a deliberate redraw. The
-pin holds **365** sequences at `trizod/dataset/pinned/TriZOD_test_set.fasta`;
+pin holds **460** sequences at `trizod/dataset/pinned/TriZOD_test_set.fasta`
+(redrawn 2026-08-11, seed 42, sample fraction 0.25, from the final strict pool);
 `trizod dataset test-set` resolves each pinned sequence against the **current
 tolerant pool** and writes `TriZOD_test_set.fasta` plus
 `TriZOD_test_set_labels.tsv` (`test_id`, `pinned_id`, `substituted`,
@@ -103,11 +104,11 @@ For the `2026-08` build (`build_test_set_summary.json`):
 
 | | |
 |---|--:|
-| pinned | 365 |
-| **resolved** | **364** |
-| dropped | 1 — `19342_1_1_1` |
-| ID-substituted | 1 — `50998_1_1_1` → `5599_1_1_1` |
-| `label_tier` = strict / moderate / tolerant | 347 / 10 / 7 |
+| pinned | 460 |
+| **resolved** | **460** |
+| dropped | 0 |
+| ID-substituted | 0 |
+| `label_tier` = strict / moderate / tolerant | 460 / 0 / 0 |
 
 `19342_1_1_1` ("Transmembrane-cytosolic part of Trop2") is dropped because it
 lists a sample component `TFE` at **70 %** (`_Sample.Solvent_system` reads
@@ -132,7 +133,7 @@ the same seed, so a redraw invalidates comparison with every previous release.
 ## 4. Redundancy reduction (two-stage leakage removal + clustering)
 
 `trizod dataset redundancy`, against the held-out test sets **CheZOD117 (115) +
-TriZOD test (364)**, 479 sequences in total — CheZOD1325 is *not* a
+TriZOD test (460)**, 575 sequences in total — CheZOD1325 is *not* a
 training-leakage target. Common mmseqs options throughout:
 `--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0 --mask 0`.
 
@@ -148,12 +149,12 @@ training-leakage target. Common mmseqs options throughout:
 
 | | strict | moderate | tolerant | unfiltered |
 |---|--:|--:|--:|--:|
-| input (unique sequences, §2) | 3,050 | 7,225 | 8,934 | 9,482 |
-| leakage dropped (total) | 618 | 1,067 | 1,214 | 1,241 |
-| — of which stage-2 `easy-search` hits | 567 | 919 | 1,038 | 1,062 |
-| — of which stage-1-only (transitive) | 51 | 148 | 176 | 179 |
-| **non-redundant** (after leakage) | **2,432** | **6,158** | **7,720** | **8,241** |
-| **training reps** (cluster representatives) | **1,998** | **4,625** | **5,590** | **5,907** |
+| input (unique sequences, §2) | 3,048 | 7,221 | 8,901 | 9,482 |
+| leakage dropped (total) | 714 | 1,183 | 1,341 | 1,381 |
+| — of which stage-2 `easy-search` hits | 660 | 1,054 | 1,189 | 1,222 |
+| — of which stage-1-only (transitive) | 54 | 129 | 152 | 159 |
+| **non-redundant** (after leakage) | **2,334** | **6,038** | **7,560** | **8,101** |
+| **training reps** (cluster representatives) | **1,895** | **4,520** | **5,466** | **5,803** |
 
 → `data/interim/build/mmseqs/`.
 
@@ -161,9 +162,9 @@ training-leakage target. Common mmseqs options throughout:
 
 `trizod dataset representatives` replaces each mmseqs cluster representative
 with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
-**canonical** training FASTA). The cluster count is unchanged (1,998 / 4,625 /
-5,590 / 5,907); only which member represents each cluster moves — 171 / 401 /
-457 / 472 clusters (8.6 / 8.7 / 8.2 / 8.0 %), listed in
+**canonical** training FASTA). The cluster count is unchanged (1,895 / 4,520 /
+5,466 / 5,803); only which member represents each cluster moves — 175 / 408 /
+464 / 480 clusters (9.2 / 9.0 / 8.5 / 8.3 %), listed in
 `cluster_repr_overrides_<tier>.tsv`.
 
 ## 6. Package + leakage gate
@@ -171,10 +172,10 @@ with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
 `trizod dataset package --version 2026-08` stages the bundle and runs a hard
 **leakage gate**: it fails if any test ID or exact test sequence appears in any
 training set. It passes with **0 shared IDs and 0 exact-sequence matches**
-against the 479 test sequences.
+against the 575 test sequences.
 
 → `data/interim/build/release_bundle/trizod-dataset-2026-08/` (train/ + scores/
-+ test/ + README + MANIFEST — 24 files, 139,790,629 bytes). The single-table
++ test/ + README + MANIFEST — 24 files, 150,570,282 bytes). The single-table
 `trizod_dataset.parquet` (16,851 rows × 70 columns) and the chemical-shift
 companion `trizod_shifts.parquet` (11,839,037 assigned shifts on canonical
 residues over all 16,851 chains — 8,380,186 backbone, 3,458,851 side chain, of
@@ -184,7 +185,7 @@ bundle by `scripts/build_parquet_dataset.py`.
 ## 7. The leakage guarantee
 
 Every `train_<tier>` set is redundancy-reduced (two stages, 30/80) against
-**CheZOD117 + the 364-sequence TriZOD test set**, which are themselves disjoint
+**CheZOD117 + the 460-sequence TriZOD test set**, which are themselves disjoint
 (the TriZOD set excludes CheZOD clusters). So a model can train on any
 `train_<tier>` set and be evaluated on **CheZOD117** (the established
 hand-balanced benchmark, comparable to ODiNPred/SETH) and on the TriZOD test set

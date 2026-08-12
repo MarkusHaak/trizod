@@ -22,12 +22,12 @@ moderate ⊃ strict`) so users can trade quantity for quality.
 
 | tier | scored records | unique-seq training reps |
 |---|---:|---:|
-| unfiltered | 16,851 | 5,907 |
-| tolerant | 15,193 | 5,590 |
-| moderate | 11,175 | 4,625 |
-| strict | 4,113 | 1,998 |
+| unfiltered | 16,851 | 5,803 |
+| tolerant | 15,080 | 5,466 |
+| moderate | 11,159 | 4,520 |
+| strict | 4,108 | 1,895 |
 
-Pipeline version: `trizod-28be333`, `--rereference-mode both`. Dataset
+Pipeline version: `trizod-09340c7`, `--rereference-mode both`. Dataset
 release: `2026-08`.
 
 > Tier membership is **not** comparable to release `2026-07` (v0.3.0)
@@ -69,9 +69,9 @@ Four layers are shipped:
    - `clusters_best.tsv` / `clusters.tsv` — cluster membership (`repr`,`member`).
 3. **Single-table Parquet** — `trizod_dataset.parquet`, one row per chain
    (16,851 rows × 70 columns), encoding every published view through the
-   ordinal/categorical columns `split` (train 5,907 · excluded 8,131 ·
-   redundant 2,334 · test_trizod 364 · test_chezod117 115), `train_tier`
-   (strict 1,998 · moderate 2,627 · tolerant 965 · unfiltered 317),
+   ordinal/categorical columns `split` (train 5,803 · excluded 8,175 ·
+   redundant 2,298 · test_trizod 460 · test_chezod117 115), `train_tier`
+   (strict 1,895 · moderate 2,625 · tolerant 946 · unfiltered 337),
    `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
    assembly-composition annotation columns.
 4. **Chemical-shift companion** — `trizod_shifts.parquet`, **11,839,037**
@@ -91,7 +91,7 @@ Four layers are shipped:
    released `sequence`; read them from the BMRB entry if you need them.
 
 Held-out **test sets** (`test/`): `CheZOD117_test_set.fasta` (115 seq) and
-`TriZOD_test_set.fasta` (364 seq), with per-residue targets obtainable from the
+`TriZOD_test_set.fasta` (460 seq), with per-residue targets obtainable from the
 corresponding score records by `ID`.
 
 ## 3. How it was built (provenance)
@@ -120,7 +120,7 @@ corresponding score records by `ID`.
    `quality_score = tier_rank·10⁶ + (n_bb_pos × n_bb_types) − max|POTENCI residual|`.
 8. **Redundancy reduction (mmseqs2)**, verbatim from the original TriZOD report
    (common options `--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0
-   --mask 0`): test-set leakage removal against CheZOD117 + TriZOD-364 in **two
+   --mask 0`): test-set leakage removal against CheZOD117 + TriZOD-460 in **two
    stages** — stage-1 cluster-membership removal (cluster the superset with the
    test sequences and drop any training sequence sharing a cluster with a test
    sequence) then stage-2 `easy-search`, both at 30% id / 80% cov — followed by
@@ -138,9 +138,9 @@ overwrites the pin). Reproduce the whole release with `scripts/build_dataset.sh`
 ## 4. Splits and the leakage guarantee
 
 Every `train_<tier>` set is **redundancy-reduced against CheZOD117 + the
-TriZOD-364 test set** at 30% identity / 80% coverage, in two stages
-(cluster-membership removal + `easy-search`); 1,241 / 1,214 / 1,067 / 618
-training sequences are dropped per tier (of which 179 / 176 / 148 / 51 are
+TriZOD-460 test set** at 30% identity / 80% coverage, in two stages
+(cluster-membership removal + `easy-search`); 1,381 / 1,341 / 1,183 / 714
+training sequences are dropped per tier (of which 159 / 152 / 129 / 54 are
 transitive leaks caught only by stage-1). The TriZOD test set is itself
 constructed (with a fixed seed) from strict-tier clusters containing no CheZOD
 sequence (CheZOD117 and CheZOD1325). Therefore a model trained on any
@@ -150,26 +150,26 @@ training sets are *not* reduced against the larger CheZOD1325 set, which enters
 only the test-set selection; evaluating on CheZOD1325 is therefore not
 leakage-free. A release-time gate in `package_release.py` asserts that no test
 ID or exact test sequence appears in any training set; it passes with **0 shared
-IDs and 0 exact-sequence matches** against 479 test sequences.
+IDs and 0 exact-sequence matches** against 575 test sequences.
 
-**Test-set stability across releases.** The TriZOD test set is a pin of 365
-chains re-resolved against the current tolerant pool, so that test numbers stay
-comparable while training sets move with the filters. In this release 364 of the
-365 resolve:
+**Test-set stability across releases.** The TriZOD test set was **redrawn**
+for this release, so it is NOT ID-comparable with v0.3.0's 365-chain set —
+numbers computed against that set must be regenerated. v0.3.0's pin came from a
+strict pool the filter corrections dissolved; resolving it forward left 364
+chains of which 17 no longer met strict criteria, one needed an ID substitution
+and one was dropped at 70 % TFE, so it was redrawn by the original seeded recipe
+once the filter policy was final: **460 sequences**, all strict.
 
-- `19342_1_1_1` ("Transmembrane-cytosolic part of Trop2") is **dropped**: it
-  lists a sample component `TFE` at 70 % (`_Sample.Solvent_system` reads
-  `30%H2O/70% trifluoroethanol`), now matched by the TFE cosolvent token. At
-  that concentration the shifts report a solvent-forced helical conformation
-  rather than the aqueous state, so removing it is a correction, not collateral.
-- `50998_1_1_1` is **ID-substituted** to `5599_1_1_1`, a byte-identical
-  199-residue sequence under a lower entry number. ID-based joins against
-  v0.3.0 must go through `TriZOD_test_set_labels.tsv` (`test_id`, `pinned_id`,
-  `substituted`, `label_tier`, `length`), written next to the test FASTA.
-- **17 retained chains no longer meet strict criteria** — 10 `moderate`, 7
-  `tolerant` — recorded in the `label_tier` column. They are kept deliberately:
-  a benchmark that shrinks whenever a filter changes cannot be compared across
-  releases.
+The result is pinned at `trizod/dataset/pinned/TriZOD_test_set.fasta` (seed 42,
+sample fraction 0.25, redrawn 2026-08-11) and re-resolved **by sequence**
+against the current tolerant pool at every rebuild, so entry IDs stay valid as
+the snapshot evolves. In this release all 460 resolve, 0 are dropped, 0 are
+ID-substituted and all 460 still satisfy `strict`. `TriZOD_test_set_labels.tsv`
+(`test_id`, `pinned_id`, `substituted`, `label_tier`, `length`) ships beside the
+test FASTA: `label_tier` records the strictest tier each test chain still
+passes, so a later filter change that demotes a chain is visible rather than
+silent, and any ID-based join against another release can be repaired through
+it.
 
 ## 5. Recommended use
 

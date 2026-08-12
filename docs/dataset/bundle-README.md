@@ -10,13 +10,13 @@ and held-out test sets are removed.
 
 | tier | training proteins | scored records |
 |---|--:|--:|
-| unfiltered | 5,907 | 16,851 |
-| tolerant | 5,590 | 15,193 |
-| moderate | 4,625 | 11,175 |
-| strict | 1,998 | 4,113 |
+| unfiltered | 5,803 | 16,851 |
+| tolerant | 5,466 | 15,080 |
+| moderate | 4,520 | 11,159 |
+| strict | 1,895 | 4,108 |
 
 Held-out **test sets** (disjoint from every training set): CheZOD117 (115) and
-TriZOD (364).
+TriZOD (460).
 
 ## Layout
 
@@ -270,39 +270,53 @@ three re-referencing regimes and for what the table does not cover.
 | tier | 2026-07 (v0.3.0) | 2026-08 | removed | added |
 |---|--:|--:|--:|--:|
 | unfiltered | 16,851 | 16,851 | 0 | 0 |
-| tolerant | 15,446 | 15,193 | 273 | 20 |
-| moderate | 11,306 | 11,175 | 198 | 67 |
-| strict | 3,514 | 4,113 | 285 | 884 |
+| tolerant | 15,440 | 15,080 | 390 | 30 |
+| moderate | 10,941 | 11,159 | 317 | 535 |
+| strict | 3,271 | 4,108 | 380 | 1,217 |
 
-The unfiltered tier is the **identical record set**, ID for ID. Training
-representatives move with the tiers: 5,907 / 5,590 / 4,625 / 1,998
-(unfiltered / tolerant / moderate / strict).
+`removed`/`added` are exact ID-set differences against the published v0.3.0
+release, not net changes. The unfiltered tier is the **identical record set**,
+ID for ID. Training representatives move with the tiers: 5,900 → 5,803,
+5,660 → 5,466, 4,491 → 4,520 and 1,381 → 1,895 (unfiltered / tolerant /
+moderate / strict).
 
-### 6. The test sets stay comparable
+### 6. The TriZOD test set was redrawn
 
-The TriZOD test set is a **pin**, not a fresh draw, and is re-resolved against
-the tolerant pool at every rebuild. Of the 365 pinned chains:
+**This release breaks ID-level comparability with the v0.3.0 test set, on
+purpose.** Numbers computed against the old 365-chain set are not comparable to
+numbers computed against this one; regenerate them.
 
-- **364 resolve.** The one drop is `19342_1_1_1` ("Transmembrane-cytosolic part
-  of Trop2"), which lists a sample component `TFE` at **70 %**
-  (`_Sample.Solvent_system` reads `30%H2O/70% trifluoroethanol`) and is now
-  caught by the new TFE cosolvent token. At that concentration the shifts
-  report a solvent-forced helical conformation rather than the aqueous state,
-  so its removal is a correction, not collateral.
-- `50998_1_1_1` was **ID-substituted** to `5599_1_1_1` — a byte-identical
-  199-residue sequence under a lower entry number. ID-based joins against v0.3.0
-  must therefore go through `TriZOD_test_set_labels.tsv`
-  (`test_id`, `pinned_id`, `substituted`, `label_tier`, `length`), which
-  `trizod dataset test-set` writes next to the test FASTA.
-- **17 retained chains no longer meet strict criteria** (10 `moderate`, 7
-  `tolerant`); the new `label_tier` column records the strictest tier whose
-  criteria each test chain still passes. They were kept deliberately: the test
-  set is a fixed benchmark, and shrinking it on every filter change would make
-  results incomparable across releases.
+v0.3.0's test set was drawn from a strict pool of 2,232 unique sequences that
+the filter corrections above dissolved. Resolving that pin against the current
+pool still worked — 364 of its 365 chains survived — but 17 of them no longer
+met strict criteria, one had to be ID-substituted, and one was dropped for
+listing `TFE` at 70 %. That is a patched artefact whose lineage is harder to
+explain than a clean draw, and whose comparability argument had already lapsed:
+every evaluation number needs regenerating against the corrected scores anyway.
+
+So the set was redrawn once the filter policy was final, by the original recipe
+(Senoner & Heinzinger 2024) with a fixed seed: 3,048 unique strict sequences →
+2,915 clusters at 30 % identity / 80 % coverage → 1,646 with no CheZOD
+neighbour → 412 sampled at 25 % → **460 sequences** after a 50 %/80 % pass.
+Larger than the old 364, and drawn from a pool that no longer holds solid-state
+depositions, 25 % HFIP peptides or molten globules.
+
+The result is pinned at `trizod/dataset/pinned/TriZOD_test_set.fasta` (seed 42,
+sample fraction 0.25) and re-resolved by sequence against the tolerant pool on
+every rebuild, so entry IDs stay valid as the snapshot evolves. In this release
+all **460 resolve, none are dropped, none are ID-substituted, and all 460 still
+satisfy `strict`**. `TriZOD_test_set_labels.tsv` (`test_id`, `pinned_id`,
+`substituted`, `label_tier`, `length`) ships beside the FASTA and records the
+strictest tier each test chain still passes, so a future filter change that
+demotes a chain is visible rather than silent — and any ID-based join against
+another release can be repaired through it.
+
+Redrawing again is deliberately hard: `--redraw` alone refuses and additionally
+requires `--confirm-redraw`.
 
 CheZOD117 is unchanged at 115 BMRB-mapped sequences. The release-time leakage
 gate passes with **0 shared IDs and 0 exact-sequence matches** between any
-training set and either test set.
+training set and either of the two test sets (575 sequences in total).
 
 ### 7. Offset columns renamed, and a ppm total added
 
