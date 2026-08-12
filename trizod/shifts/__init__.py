@@ -29,7 +29,6 @@ from .extract import (
     SHIFTS_PARQUET_NAME,
     chain_id,
     entry_chains,
-    entry_shift_frames,
     iter_chains,
     iter_shift_frames,
 )
@@ -54,7 +53,6 @@ __all__ = [
     "chain_id",
     "chain_offsets",
     "entry_chains",
-    "entry_shift_frames",
     "iter_chains",
     "iter_shift_frames",
     "shift_schema",

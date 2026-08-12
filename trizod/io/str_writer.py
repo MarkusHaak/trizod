@@ -4,10 +4,20 @@ from pathlib import Path
 
 import pynmrstar
 
-from trizod.constants import AA1TO3, BACKBONE_ATOMS, REFINED_WEIGHTS
-from trizod.offsets import total_offset_ppm
+from trizod.constants import AA1TO3, BACKBONE_ATOMS
+from trizod.offsets import sigma_to_ppm, total_offset_ppm
 
 _AMBIGUITY_NOT_SET = "."
+
+#: NMR-STAR null. Written for an atom whose offset was never determined or was
+#: rejected by ``--max-offset``, which is NOT the same statement as a measured
+#: offset of 0.000000.
+_NULL = "."
+
+
+def _fmt(value):
+    """``f"{value:.6f}"``, or the NMR-STAR null when there is no value."""
+    return _NULL if value is None else f"{value:.6f}"
 
 
 def _atom_type_for(atom_id):
@@ -41,11 +51,14 @@ def write_rereferenced_str(
         bbshifts_mask: (N, len(BACKBONE_ATOMS)) boolean mask.
         lacs_offsets_ppm: dict atom -> ppm, i.e. the `lacs_off_<atom>_ppm`
             columns. LACS offsets are subtracted from the raw shift array, so
-            they are genuine ppm.
+            they are genuine ppm. A `None` value (or a missing key) is written
+            as the NMR-STAR null `.`, never as 0.000000: an offset that was
+            never determined, or was rejected by `--max-offset`, is not a
+            measurement of zero.
         potenci_residual_offsets_sigma: dict atom -> sigma units, i.e. the
             `off_<atom>_sigma` columns. `scoring.compute_offsets()` averages
             `diff_arr / REFINED_WEIGHTS`, so these are multiples of the
-            per-atom POTENCI RMSD, NOT ppm.
+            per-atom POTENCI RMSD, NOT ppm. `None` is handled as above.
         rereference_mode: which mode produced the shifts; copied to metadata.
         pipeline_version: free-form string copied to metadata.
 
@@ -121,7 +134,7 @@ def write_rereferenced_str(
     lacs_loop.set_category("LACS_offsets")
     lacs_loop.add_tag(["Atom_ID", "Offset_ppm"])
     for atom in BACKBONE_ATOMS:
-        lacs_loop.add_data([atom, f"{lacs_offsets_ppm.get(atom, 0.0):.6f}"])
+        lacs_loop.add_data([atom, _fmt(lacs_offsets_ppm.get(atom))])
     aux.add_loop(lacs_loop)
 
     # The POTENCI/AIC offsets come in as sigma units (see docstring). Feeding
@@ -132,9 +145,9 @@ def write_rereferenced_str(
     potenci_loop.set_category("POTENCI_residual_offsets")
     potenci_loop.add_tag(["Atom_ID", "Offset_sigma", "Offset_ppm"])
     for atom in BACKBONE_ATOMS:
-        offset_sigma = potenci_residual_offsets_sigma.get(atom, 0.0)
-        offset_ppm = offset_sigma * REFINED_WEIGHTS[atom]
-        potenci_loop.add_data([atom, f"{offset_sigma:.6f}", f"{offset_ppm:.6f}"])
+        offset_sigma = potenci_residual_offsets_sigma.get(atom)
+        offset_ppm = None if offset_sigma is None else sigma_to_ppm(atom, offset_sigma)
+        potenci_loop.add_data([atom, _fmt(offset_sigma), _fmt(offset_ppm)])
     aux.add_loop(potenci_loop)
 
     # The one loop a reader needs: total ppm to subtract from a deposited shift.
@@ -142,12 +155,16 @@ def write_rereferenced_str(
     total_loop.set_category("Total_offsets")
     total_loop.add_tag(["Atom_ID", "Offset_ppm"])
     for atom in BACKBONE_ATOMS:
-        total_ppm = total_offset_ppm(
-            atom,
-            lacs_offsets_ppm.get(atom, 0.0),
-            potenci_residual_offsets_sigma.get(atom, 0.0),
+        lacs = lacs_offsets_ppm.get(atom)
+        sigma = potenci_residual_offsets_sigma.get(atom)
+        # A missing term makes the TOTAL unknown, not smaller: an atom whose
+        # POTENCI offset was rejected has no total to publish.
+        total_ppm = (
+            None
+            if lacs is None or sigma is None
+            else total_offset_ppm(atom, lacs, sigma)
         )
-        total_loop.add_data([atom, f"{total_ppm:.6f}"])
+        total_loop.add_data([atom, _fmt(total_ppm)])
     aux.add_loop(total_loop)
 
     entry.add_saveframe(aux)

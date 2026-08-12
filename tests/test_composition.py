@@ -149,6 +149,29 @@ def test_magnetic_equivalence_group_wins_over_row_count():
     assert comp.derive_copy_count(rows) == 2
 
 
+def test_all_singleton_magnetic_equivalence_groups_are_not_one_copy():
+    """Distinct codes on every row mean the chains are magnetically INEQUIVALENT
+    -- an asymmetric multimer (bmr26708 'NEMO 1'/'NEMO 2') -- not a monomer. The
+    tag never states a count, so rule (a) has to fall through to the row count."""
+    rows = [_row(1, "NEMO 1", meq="1"), _row(2, "NEMO 2", meq="2")]
+    assert comp.derive_copy_count(rows) == 2
+
+
+def test_conformer_replicates_report_the_group_size_not_the_group_count():
+    """bmr6743 CcdA — 3 conformers x 2 chains, codes 1/1/2/2/3/3: a dimer, so the
+    largest group (2) is the answer. Guards the fall-through above against the
+    tempting `len(set(groups))` reading, which would invent a trimer here."""
+    rows = [
+        _row(i, f"CcdA conformer {c}, chain {n}", meq=m)
+        for i, (c, n, m) in enumerate(
+            [("a", 1, "1"), ("a", 2, "1"), ("b", 1, "2"),
+             ("b", 2, "2"), ("c", 1, "3"), ("c", 2, "3")],
+            start=1,
+        )
+    ]  # fmt: skip
+    assert comp.derive_copy_count(rows) == 2
+
+
 def test_partial_magnetic_equivalence_group_is_ignored():
     """Rule (a) needs the code on EVERY row; a half-filled column proves nothing."""
     rows = [_row(1, "chain A", meq="1"), _row(2, "chain B", meq="")]

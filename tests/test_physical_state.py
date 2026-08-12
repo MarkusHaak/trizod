@@ -591,6 +591,17 @@ def test_corroboration_defaults_to_absent():
         (["palmitate, laureate, and stearate"], False),  # bmr50434
         (["phosphate buffer"], False),
         ([None, ""], False),
+        # Underscore is a SEPARATOR in deposited names, not a word character:
+        # these are real Mol_common_name / Sf_framecode spellings (SDS_d25 in
+        # bmr15268, dmso_d6 in bmr18629, Urea_8M in bmr25255) and `\b` would
+        # miss every one of them. Zero rows flip today -- all of them are
+        # corroborated by another field -- so this is forward cover.
+        (["SDS_d25"], True),
+        (["dmso_d6"], True),
+        (["Urea_8M"], True),
+        (["8M_guanidine"], True),
+        # ... and the boundary still holds on the other side of the underscore
+        (["urease_from_jack_bean"], False),
     ],
 )
 def test_cosolvent_evidence_in_free_text(texts, expected):

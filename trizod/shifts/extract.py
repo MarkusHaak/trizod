@@ -38,19 +38,6 @@ def entry_chains(entry, keep_ids=None):
         yield cid, seq, shifts
 
 
-def entry_shift_frames(entry, keep_ids=None):
-    """Yield ``(chain_id, DataFrame)`` for every polypeptide chain of ``entry``.
-
-    Chains whose shift table fails the sequence-consistency guards are skipped —
-    the same chains the backbone read rejects.
-    """
-    for cid, seq, shifts in entry_chains(entry, keep_ids):
-        df = get_deposited_shifts(shifts, seq)
-        if df is None or df.empty:
-            continue
-        yield cid, df
-
-
 def load_entry(entry_id: str, pkl_dir: Path, bmrb_dir: Path | None = None):
     """Load one ``BmrbEntry`` from the pickle cache, re-parsing if necessary."""
     pkl = Path(pkl_dir) / f"{entry_id}.pkl"

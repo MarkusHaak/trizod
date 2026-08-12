@@ -27,6 +27,7 @@ from trizod.offsets import (
     OFFSET_COLUMNS,
     lacs_off_ppm_col,
     off_sigma_col,
+    offset_value,
     total_off_ppm_col,
     total_offset_ppm,
 )
@@ -115,25 +116,19 @@ def _word_boundary_pattern(token):
     return pattern
 
 
-def _keyword_matches(keyword, fields):
-    """Does ``keyword`` occur in any of ``fields`` (all lower-cased already)?"""
-    if keyword in WORD_BOUNDARY_KEYWORDS:
-        pattern = _word_boundary_pattern(keyword)
-        return any(pattern.search(field) for field in fields)
-    return any(keyword in field for field in fields)
+def _token_matches(token, texts, word_boundary):
+    """Does ``token`` occur in any of ``texts`` (all lower-cased already)?
 
-
-def _cosolvent_matches(token, component_names):
-    """Does cosolvent ``token`` occur in any of ``component_names``?
-
-    Same discipline as ``_keyword_matches`` -- a separate code path only because
-    the cosolvent scan reads ``_Sample_component.Mol_common_name`` rather than
-    the sample-descriptive free text -- with its own word-boundary set.
+    ``word_boundary`` is the set of tokens that must match as whole words --
+    ``WORD_BOUNDARY_KEYWORDS`` for the state keywords scanned over the
+    sample-descriptive free text, ``WORD_BOUNDARY_COSOLVENTS`` for the cosolvent
+    tokens scanned over ``_Sample_component.Mol_common_name``. Which fields are
+    searched is the caller's business; the matching rule is the same one.
     """
-    if token in WORD_BOUNDARY_COSOLVENTS:
+    if token in word_boundary:
         pattern = _word_boundary_pattern(token)
-        return any(pattern.search(name) for name in component_names)
-    return any(token in name for name in component_names)
+        return any(pattern.search(text) for text in texts)
+    return any(token in text for text in texts)
 
 
 # WHY `perturbing-cosolvents` AND NOT `chemical-denaturants` (renamed 2026-08;
@@ -397,7 +392,11 @@ def fill_row_data(
     # (bmr6968) is deposited as `denatured`. Those states are only denied when the
     # entry independently names a perturbing cosolvent, so record that evidence
     # here, where the sample components are in reach. Tier-independent by design.
-    cosolvent_texts = [
+    #
+    # One walk over the samples for all three consumers below. `.get()`: bmrb.py
+    # strips sample IDs only AFTER the membership test, so a whitespace-padded ID
+    # yields a key that is no longer in entry.samples.
+    base_fields = [
         entry.title,
         entry.details,
         assembly.name,
@@ -405,13 +404,24 @@ def fill_row_data(
         entity.name,
         entity.details,
     ]
+    sample_texts, framecodes = [], []
+    all_component_names, component_names = [], []
     for sID in sampleIDs:
         sample = entry.samples.get(sID)
         if sample is None:
             continue
-        cosolvent_texts.extend([sample.name, sample.details])
-        cosolvent_texts.extend(comp[3] for comp in sample.components)
-    row["cosolvent_evidence"] = has_cosolvent_evidence(cosolvent_texts)
+        sample_texts.extend([sample.name, sample.details])
+        framecodes.append(sample.framecode)
+        for comp in sample.components:
+            all_component_names.append(comp[3])
+            # _Sample_component.Mol_common_name (comp[3]) is only meaningful for
+            # components that are not the studied polymer itself
+            # (_Sample_component.Entity_ID, comp[2], unset).
+            if comp[3] and not comp[2]:
+                component_names.append(comp[3].lower())
+    row["cosolvent_evidence"] = has_cosolvent_evidence(
+        base_fields + sample_texts + all_component_names
+    )
     # Is this solution NMR or solid-state NMR, judging by _Sample.Type,
     # _Experiment.Sample_state and the experiment names?
     row["sample_state_evidence"] = entry_sample_state(entry, sampleIDs)
@@ -421,19 +431,7 @@ def fill_row_data(
     # *publication* is about. Matching a state keyword on the latter drops good
     # data -- e.g. bmr51322, an Abeta(1-42) deposition whose own Physical_state
     # is 'intrinsically disordered', on a citation title about amyloid fibrils.
-    sample_fields = [
-        entry.title,
-        entry.details,
-        assembly.name,
-        assembly.details,
-        entity.name,
-        entity.details,
-    ]
-    for sID in sampleIDs:
-        sample = entry.samples.get(sID)
-        if sample is None:
-            continue
-        sample_fields.extend([sample.name, sample.details, sample.framecode])
+    sample_fields = base_fields + sample_texts + framecodes
     topic_fields = [entry.citation_title]
     # issue #23: these are lists of STRINGS. The former `fields.extend(el)` on a
     # str exploded it into single characters, so no multi-character keyword could
@@ -452,27 +450,14 @@ def fill_row_data(
     )
     fields = [field.lower() for field in fields if field]  # field can be None
     for keyword in keywords:
-        row[keyword] = _keyword_matches(keyword.lower(), fields)
-    # Sample components, once. _Sample_component.Mol_common_name (comp[3]) is
-    # only meaningful for components that are not the studied polymer itself
-    # (_Sample_component.Entity_ID, comp[2], unset).
-    component_names = []
-    for sID in sampleIDs:
-        # .get(): bmrb.py strips sample IDs only AFTER the membership test, so a
-        # whitespace-padded ID yields a key that is no longer in entry.samples.
-        # The KeyError that used to raise here was not caught by the surrounding
-        # `except Found`.
-        sample = entry.samples.get(sID)
-        if sample is None:
-            continue
-        component_names.extend(
-            comp[3].lower() for comp in sample.components if comp[3] and not comp[2]
-        )
+        row[keyword] = _token_matches(keyword.lower(), fields, WORD_BOUNDARY_KEYWORDS)
     # check if perturbing cosolvents are present. The column is named after the
     # chemical itself (`urea`, `DMSO`, ...), which the rename deliberately left
     # alone -- only the category name was wrong.
     for token in perturbing_cosolvents:
-        row[token] = _cosolvent_matches(token.lower(), component_names)
+        row[token] = _token_matches(
+            token.lower(), component_names, WORD_BOUNDARY_COSOLVENTS
+        )
     # Membrane mimetics are annotated, never filtered: the matched token(s), not
     # a bool, so an SDS micelle stays distinguishable from DDM solubilisation.
     matched = [
@@ -639,7 +624,7 @@ def output_dataset(
         # when not. Copy the list -- BACKBONE_ATOMS is a module global.
         shifts = list(BACKBONE_ATOMS)
         if no_shift_averaging:
-            shifts += ["HA2", "HA3", "HB1", "HB2", "HB3"]
+            shifts += bmrb.BB_EXTRA_ATOM_IDS
         for i, atom_type in enumerate(shifts):
             df.loc[df.pass_post, atom_type] = df.loc[df.pass_post, "bbshifts"].apply(
                 lambda x, i=i: x[:, i]
@@ -838,24 +823,23 @@ def run_scoring_pipeline(args):
             # LACS offsets so the file reflects the re-referenced state. The
             # POTENCI residual offsets live on the weighted-diff side and are
             # captured in the aux saveframe rather than subtracted from raw shifts.
+            # offset_value(), not `row.get(col) or 0.0`: an offset rejected by
+            # --max-offset arrives as NaN, and with --reject-shift-type-only the
+            # row still passes, so the zero default published "measured, and
+            # perfectly referenced" for an atom TriZOD had thrown out. None
+            # keeps the two apart all the way into the emitted file, where it
+            # becomes an NMR-STAR null.
             lacs_offsets = {
-                atom: (
-                    0.0
-                    if pd.isna(row.get(lacs_off_ppm_col(atom), 0.0))
-                    else float(row[lacs_off_ppm_col(atom)])
-                )
+                atom: offset_value(row, lacs_off_ppm_col(atom))
                 for atom in BACKBONE_ATOMS
             }
             potenci_offsets = {
-                atom: (
-                    0.0
-                    if pd.isna(row.get(off_sigma_col(atom), 0.0))
-                    else float(row[off_sigma_col(atom)])
-                )
-                for atom in BACKBONE_ATOMS
+                atom: offset_value(row, off_sigma_col(atom)) for atom in BACKBONE_ATOMS
             }
             for j, atom in enumerate(BACKBONE_ATOMS):
-                bbshifts_arr[bbshifts_mask[:, j], j] -= lacs_offsets[atom]
+                # Only the LACS term was ever subtracted from the raw array; a
+                # null one means nothing was, which is a subtraction of zero.
+                bbshifts_arr[bbshifts_mask[:, j], j] -= lacs_offsets[atom] or 0.0
             out_path = args.emit_str / (
                 f"bmr{row['entryID']}_{row['stID']}_{row['entity_assemID']}"
                 f"_{row['entityID']}_rereferenced.str"

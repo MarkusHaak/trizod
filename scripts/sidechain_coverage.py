@@ -458,14 +458,34 @@ def main(argv=None) -> None:
     if args.cache and args.cache.exists():
         print(f"reusing per-chain counters from {args.cache}")
         cached = np.load(args.cache, allow_pickle=False)
+        # `report()` drops any chain the cache does not know (`if c in idx`), so
+        # a cache predating a rescore silently shrinks every denominator -- and
+        # this script is the stated source for the manuscript's side-chain
+        # numbers. The input set is stamped on write and compared here rather
+        # than the output ids, which legitimately omit chains with no usable
+        # shift table.
+        source_ids = (
+            set(cached["source_ids"].tolist()) if "source_ids" in cached.files else None
+        )
+        if source_ids != set(tier_ids["unfiltered"]):
+            raise SystemExit(
+                f"{args.cache} was built from a different scored set "
+                f"({'unstamped' if source_ids is None else len(source_ids)} vs "
+                f"{len(tier_ids['unfiltered'])} chains). Delete it and re-run."
+            )
         ids = cached["ids"]
-        arrays = {k: cached[k] for k in cached.files if k != "ids"}
+        arrays = {k: cached[k] for k in cached.files if k not in ("ids", "source_ids")}
     else:
         ids, arrays = collect(tier_ids["unfiltered"], args.pkl_dir)
         print(f"collected counters for {len(ids)} chains")
         if args.cache:
             args.cache.parent.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(args.cache, ids=ids, **arrays)
+            np.savez_compressed(
+                args.cache,
+                ids=ids,
+                source_ids=np.array(sorted(tier_ids["unfiltered"])),
+                **arrays,
+            )
             print(f"cached per-chain counters -> {args.cache}")
 
     md = report(ids, arrays, tier_ids)

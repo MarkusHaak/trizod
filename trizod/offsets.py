@@ -93,6 +93,17 @@ def _as_float(value):
         return float("nan")
 
 
+def sigma_to_ppm(atom, off_sigma):
+    """The POTENCI/AIC residual offset of `atom`, converted from sigma to ppm.
+
+    ``off_<atom>_sigma`` is a multiple of the per-atom POTENCI RMSD, so the ppm
+    equivalent is that multiple times ``REFINED_WEIGHTS[atom]``. Every emitter
+    of a ppm offset goes through here or through :func:`total_offset_ppm`;
+    nobody writes the multiplication out again.
+    """
+    return _as_float(off_sigma) * REFINED_WEIGHTS[atom]
+
+
 def total_offset_ppm(atom, lacs_off_ppm, off_sigma):
     """Total ppm subtracted from the deposited shift of `atom` during scoring.
 
@@ -109,7 +120,7 @@ def total_offset_ppm(atom, lacs_off_ppm, off_sigma):
     Missing inputs (None, NaN, pandas.NA) propagate as NaN: an offset that was
     never computed, or was rejected by `--max-offset`, has no ppm equivalent.
     """
-    return _as_float(lacs_off_ppm) + _as_float(off_sigma) * REFINED_WEIGHTS[atom]
+    return _as_float(lacs_off_ppm) + sigma_to_ppm(atom, off_sigma)
 
 
 class MissingOffsetColumn(KeyError):

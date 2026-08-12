@@ -211,3 +211,42 @@ def test_every_emitted_offset_tag_names_its_unit(tmp_path):
             assert tag.endswith("_ppm") or tag.endswith("_sigma"), (
                 f"{category}.{tag} does not name its unit"
             )
+
+
+def _raw_loop_value(loop, atom, tag):
+    """Value of `tag` for `atom` as the literal string in the file."""
+    atom_col = loop.tag_index("Atom_ID")
+    val_col = loop.tag_index(tag)
+    for row in loop.data:
+        if row[atom_col] == atom:
+            return row[val_col]
+    raise AssertionError(f"atom {atom} not found in loop")
+
+
+def test_a_rejected_offset_is_null_not_a_measured_zero(tmp_path):
+    """`--max-offset` NaNs the offset it rejects, and with
+    `--reject-shift-type-only` the chain is still published. Writing 0.000000
+    there would assert "measured, and perfectly referenced" for exactly the atom
+    TriZOD threw out, which is indistinguishable from a real zero offset."""
+    lacs_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+    potenci_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+    potenci_offsets["CB"] = None  # rejected by --max-offset
+    lacs_offsets["N"] = None  # never determined
+    parsed = _write_minimal(
+        tmp_path / "bmr00001_rereferenced.str", lacs_offsets, potenci_offsets
+    )
+    potenci = parsed.get_loops_by_category("POTENCI_residual_offsets")[0]
+    assert _raw_loop_value(potenci, "CB", "Offset_sigma") == "."
+    assert _raw_loop_value(potenci, "CB", "Offset_ppm") == "."
+    assert (
+        _raw_loop_value(
+            parsed.get_loops_by_category("LACS_offsets")[0], "N", "Offset_ppm"
+        )
+        == "."
+    )
+    # a null in EITHER term makes the total unknown, not smaller
+    total = parsed.get_loops_by_category("Total_offsets")[0]
+    assert _raw_loop_value(total, "CB", "Offset_ppm") == "."
+    assert _raw_loop_value(total, "N", "Offset_ppm") == "."
+    # ... while a genuine zero still reports as a measured zero
+    assert _loop_value(total, "CA", "Offset_ppm") == pytest.approx(0.0)

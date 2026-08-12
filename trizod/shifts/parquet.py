@@ -225,7 +225,13 @@ PARQUET_METADATA = {
 }
 
 
-def _import_pyarrow():
+def import_pyarrow():
+    """Import pyarrow, or exit with the invocation that would have it.
+
+    Public within the package (``scripts/build_parquet_dataset.py`` needs the
+    same guard) but deliberately not in ``trizod.shifts.__all__``: a build-time
+    import shim is not part of the released API surface.
+    """
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -239,7 +245,7 @@ def _import_pyarrow():
 
 def shift_schema():
     """Arrow schema of ``trizod_shifts.parquet``, units and all."""
-    pa, _ = _import_pyarrow()
+    pa, _ = import_pyarrow()
     fields = [
         pa.field(
             name,
@@ -267,13 +273,20 @@ def write_shift_parquet(
     Each frame must already carry the correction columns
     (:func:`trizod.shifts.correct.annotate_offsets`).
 
+    Written to a sibling temp file and promoted only on success. ``frames`` is a
+    lazy generator doing unguarded per-chain work, and closing a ParquetWriter
+    mid-stream still writes a valid footer — so writing in place would leave a
+    structurally perfect, silently truncated table that ``package_release``
+    picks up and whose ``n_records`` is read back out of the file itself.
+
     Returns:
         ``(out_path, n_rows)``.
     """
-    pa, pq = _import_pyarrow()
+    pa, pq = import_pyarrow()
     schema = shift_schema()
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_name(out_path.name + ".partial")
 
     buffered: list[pd.DataFrame] = []
     buffered_rows = 0
@@ -290,24 +303,32 @@ def write_shift_parquet(
         )
         buffered, buffered_rows = [], 0
 
-    with pq.ParquetWriter(
-        out_path, schema, compression="zstd", compression_level=compression_level
-    ) as writer:
-        for cid, df in frames:
-            if prev_id is not None and cid < prev_id:
-                raise ValueError(
-                    f"frames must arrive in sorted id order, got {cid!r} after {prev_id!r}"
-                )
-            prev_id = cid
-            missing = set(SHIFT_PARQUET_COLUMNS) - {"id"} - set(df.columns)
-            if missing:
-                raise ValueError(f"frame {cid!r} is missing columns {sorted(missing)}")
-            df = df.copy()
-            df.insert(0, "id", cid)
-            buffered.append(df[SHIFT_PARQUET_COLUMNS])
-            buffered_rows += len(df)
-            n_rows += len(df)
-            if buffered_rows >= batch_rows:
-                flush(writer)
-        flush(writer)
+    try:
+        with pq.ParquetWriter(
+            tmp_path, schema, compression="zstd", compression_level=compression_level
+        ) as writer:
+            for cid, df in frames:
+                if prev_id is not None and cid < prev_id:
+                    raise ValueError(
+                        f"frames must arrive in sorted id order, got {cid!r} after {prev_id!r}"
+                    )
+                prev_id = cid
+                missing = set(SHIFT_PARQUET_COLUMNS) - {"id"} - set(df.columns)
+                if missing:
+                    raise ValueError(
+                        f"frame {cid!r} is missing columns {sorted(missing)}"
+                    )
+                df = df.copy()
+                df.insert(0, "id", cid)
+                buffered.append(df[SHIFT_PARQUET_COLUMNS])
+                buffered_rows += len(df)
+                n_rows += len(df)
+                if buffered_rows >= batch_rows:
+                    flush(writer)
+            flush(writer)
+        tmp_path.replace(out_path)
+    finally:
+        # Covers KeyboardInterrupt/SystemExit too, and is a no-op once the
+        # promote above has moved the file.
+        tmp_path.unlink(missing_ok=True)
     return out_path, n_rows

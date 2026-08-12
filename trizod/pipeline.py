@@ -168,7 +168,19 @@ def prefilter_dataframe(
         )
     else:
         readmitted = pd.Series(False, index=df.index)
-    if "" in whitelist_lower and "" not in blacklist_lower:
+    # `require-solution` OUTRANKS the "" sentinel, which is the contradictory
+    # half of the same question: "" says admit ANY missing subtype, the fallback
+    # says admit one only on positive solution evidence. Taking the sentinel
+    # branch there admits every null-subtype NMR row regardless of evidence and
+    # leaves `readmitted` dead, so the flag silently degraded to `reject-solid`.
+    # Routing to the else branch instead is a no-op for every shipped tier
+    # (strict, the only require-solution tier, has no "" in its whitelist) and
+    # is the NA-safe path that also tightens `missing_vals`.
+    if (
+        "" in whitelist_lower
+        and "" not in blacklist_lower
+        and method_fallback != "require-solution"
+    ):
         method_sel |= df.exp_method.str.lower().str.contains("nmr") & subtype_missing
     else:
         # method_sel = sels_pre["method (sub-)type"].fillna(False)

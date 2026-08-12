@@ -266,7 +266,16 @@ def derive_copy_count(rows):
 
     groups = [_clean(r.magnetic_equivalence_group) for r in rows]
     if all(groups):
-        return max(Counter(groups).values())
+        largest = max(Counter(groups).values())
+        # Only when the code actually GROUPS rows. The tag says which chains are
+        # magnetically equivalent, never how many there are, so every row in its
+        # own group means the chains are inequivalent -- an asymmetric multimer
+        # (bmr26708 NEMO 1/2, bmr5606 'HI0719 homotrimer 1/2/3') -- not a
+        # monomer. Reading the largest group there returns 1 and overrides the
+        # raw row count that is right. Falling through also keeps bmr6743
+        # (codes 1,1,2,2,3,3 = a dimer in three conformers) at 2 via (c).
+        if largest > 1:
+            return largest
 
     if len({_clean(r.physical_state).lower() for r in rows}) > 1:
         return 1

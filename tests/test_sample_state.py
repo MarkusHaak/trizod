@@ -303,6 +303,42 @@ def test_tolerant_rejects_solid_evidence_only_for_a_null_subtype():
     assert _method_selection(rows, "tolerant") == [False, True, True, False, True]
 
 
+def test_require_solution_outranks_the_missing_subtype_sentinel():
+    """`--filter-defaults tolerant --method-fallback require-solution`.
+
+    The "" sentinel ("accept a MISSING subtype") and `require-solution` ("accept
+    one only on positive solution evidence") answer the same question with
+    contradictory answers. The explicit flag has to win, or it silently degrades
+    to `reject-solid` and the UNKNOWN-evidence row walks in.
+    """
+    rows = [(None, SOLUTION), (None, UNKNOWN), (None, SOLID), ("solution", SOLUTION)]
+    df, _missing, sels_pre, *_rest = prefilter_dataframe(
+        _frame(rows),
+        method_whitelist=list(filter_defaults.loc["tolerant", "exp-method-whitelist"]),
+        method_blacklist=list(filter_defaults.loc["tolerant", "exp-method-blacklist"]),
+        temperature_range=[-np.inf, np.inf],
+        ionic_strength_range=[0.0, np.inf],
+        pH_range=[-np.inf, np.inf],
+        peptide_length_range=[5, np.inf],
+        min_backbone_shift_types=1,
+        min_backbone_shift_positions=1,
+        min_backbone_shift_fraction=0.0,
+        max_noncanonical_fraction=1.0,
+        max_x_fraction=1.0,
+        keywords=[],
+        perturbing_cosolvents=[],
+        method_fallback="require-solution",
+    )
+    assert [bool(v) for v in sels_pre[("method (sub-)type", "")]] == [
+        True,
+        False,
+        False,
+        True,
+    ]
+    # ... and no pd.NA leaks into the selection, which `bool()` would raise on
+    assert df["pass_pre"].tolist() == [True, False, False, True]
+
+
 def test_unfiltered_keeps_the_raw_corpus():
     rows = [(None, SOLID), (None, SOLUTION), ("SOLID-STATE", SOLID)]
     assert _method_selection(rows, "unfiltered") == [True, True, True]

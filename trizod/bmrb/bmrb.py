@@ -759,6 +759,14 @@ class BmrbEntry:
         return f"<bmr{self.id}>"
 
 
+#: The stereo-split partners of the ``BACKBONE_ATOMS`` slots: deposited
+#: separately, averaged into ``HA``/``HB`` by ``get_valid_bbshifts`` below. One
+#: definition because five call sites have to agree on it -- the shift-array
+#: column order under ``--no-shift-averaging``, the published ``is_backbone``
+#: partition, and the Parquet atom list all read from here.
+BB_EXTRA_ATOM_IDS = ["HA2", "HA3", "HB1", "HB2", "HB3"]
+
+
 def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True):
     bb_atm_ids = BACKBONE_ATOMS[:]
     # 0: '_Atom_chem_shift.Entity_assembly_ID'
@@ -824,7 +832,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
     df = df.loc[df["ambc"].isin(["1", "2", "", "."])]
     # filter non-backbone atoms
     # TODO: maybe move this up to fasten processing
-    df = df.loc[df["atm_id"].isin(bb_atm_ids + ["HA2", "HA3", "HB1", "HB2", "HB3"])]
+    df = df.loc[df["atm_id"].isin(bb_atm_ids + BB_EXTRA_ATOM_IDS)]
     df["atm_id_single"] = df["atm_id"]
     # look for non-standard shifts
     df.loc[
@@ -862,7 +870,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
         df = df.groupby(["pos", "atm_id_single"])[["val"]].agg("mean").reset_index()
     else:
         df["atm_id_single"] = df["atm_id"]
-        bb_atm_ids = bb_atm_ids + ["HA2", "HA3", "HB1", "HB2", "HB3"]
+        bb_atm_ids = bb_atm_ids + BB_EXTRA_ATOM_IDS
     bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
     bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)
     for i, atm_id in enumerate(bb_atm_ids):
@@ -875,7 +883,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
 
 # Atom IDs consumed by get_valid_bbshifts(). Everything else in a deposition is
 # side chain, so `is_backbone` below partitions the table on this set exactly.
-BB_ATOM_IDS = frozenset(BACKBONE_ATOMS + ["HA2", "HA3", "HB1", "HB2", "HB3"])
+BB_ATOM_IDS = frozenset(BACKBONE_ATOMS + BB_EXTRA_ATOM_IDS)
 
 SHIFT_COLUMNS = [
     "seq_id",
@@ -970,8 +978,15 @@ def get_deposited_shifts(shifts, seq):
         return
     # only process canonical bases, check if AAs match sequence
     df = df.loc[df["comp_id"].isin(AA3TO1.keys())]
-    aa1 = df["comp_id"].replace(AA3TO1)
-    if np.any(aa1 != (df["seq_id"] - 1).replace(dict(enumerate(seq)))):
+    # .map()/positional take, not .replace(dict): pandas runs one full masked
+    # pass per dict key, so .replace(dict(enumerate(seq))) is O(rows x len(seq))
+    # -- ~11x slower here over the whole deposited table. Neither lookup can
+    # miss: comp_id was just filtered to AA3TO1 keys and seq_id is pinned to
+    # [1, len(seq)] above, so .map cannot introduce a NaN that .replace would
+    # have passed through unchanged.
+    aa1 = df["comp_id"].map(AA3TO1)
+    seq_arr = np.array(list(seq))
+    if np.any(aa1.to_numpy() != seq_arr[df["seq_id"].to_numpy() - 1]):
         logging.getLogger("trizod.bmrb").error(
             "canonical amino acid mismatch between sequence and shift array"
         )

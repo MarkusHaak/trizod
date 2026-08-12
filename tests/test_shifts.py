@@ -52,6 +52,7 @@ TOY_SHIFTS = [
     ("1", "1", "2", "LEU", "H", "H", "8.21", "0.02", "1"),
     ("1", "1", "2", "LEU", "HB2", "H", "1.60", "0.02", "2"),
     ("1", "1", "2", "LEU", "HB3", "H", "1.70", "0.02", "2"),
+    ("1", "1", "2", "LEU", "C", "C", "176.20", "0.10", "1"),
     ("1", "1", "3", "PHE", "N", "N", "120.40", "0.20", "1"),
     ("1", "1", "4", "GLY", "HA2", "H", "3.95", "0.02", "2"),
     ("1", "1", "4", "GLY", "HA3", "H", "4.05", "0.02", "2"),
@@ -257,12 +258,17 @@ def test_offset_source_names_the_estimators_that_contributed():
     assert _row(df, 2, "CA")["offset_source"] == "lacs_only"
     # HB: LACS does not cover HB (always 0.0), POTENCI -1.42 sigma
     assert _row(df, 2, "HB2")["offset_source"] == "potenci_only"
-    # C: both zero -> nothing was subtracted, and the row says so
+    # C: both estimators ran and both returned zero -> nothing was subtracted,
+    # and the row says so with a MEASURED 0.0, not a null. This is the
+    # "measured no-op" case _OFFSET_SOURCE_VALUES documents, and it is the one
+    # backbone branch of _backbone_offset that nothing else exercises.
     record = dict(TOY_RECORD, off_C_sigma=0.0)
     zero = _toy_table(record)
-    c = zero[zero["atom_id"] == "CA"]
+    c = _row(zero, 2, "C")
+    assert c["offset_source"] == "none"
+    assert c["offset_applied_ppm"] == pytest.approx(0.0)
+    assert c["val_corrected_ppm"] == pytest.approx(c["val_ppm"])
     assert set(zero.loc[zero["offset_source"] == "none", "offset_applied_ppm"]) <= {0.0}
-    assert len(c) > 0
 
 
 def test_side_chain_protons_and_nitrogens_are_never_corrected():
@@ -547,3 +553,23 @@ def test_scoring_is_bit_identical_with_and_without_the_shift_table():
     assert off0 == off1
     assert lacs0 == lacs1
     assert shifts == shifts_before, "get_deposited_shifts mutated the shift tuples"
+
+
+def test_a_crashing_frame_generator_leaves_no_truncated_parquet(tmp_path):
+    """Closing a ParquetWriter mid-stream still writes a valid footer, so an
+    in-place write would leave a structurally perfect, silently SHORT table --
+    which package_release stages automatically and whose n_records it reads back
+    out of the file itself. Nothing may survive at the destination."""
+    pytest.importorskip("pyarrow.parquet")
+
+    from trizod.shifts import write_shift_parquet
+
+    def frames():
+        yield "17665_1_1_1", _toy_table()
+        raise RuntimeError("entry 99999 blew up mid-corpus")
+
+    out = tmp_path / "trizod_shifts.parquet"
+    with pytest.raises(RuntimeError, match="blew up"):
+        write_shift_parquet(frames(), out)
+    assert not out.exists()
+    assert list(tmp_path.iterdir()) == []

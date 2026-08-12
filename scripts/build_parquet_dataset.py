@@ -56,6 +56,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from trizod import paths
+from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
 from trizod.offsets import (
@@ -71,6 +72,7 @@ from trizod.shifts import (
     iter_shift_frames,
     write_shift_parquet,
 )
+from trizod.shifts.parquet import import_pyarrow
 
 # Tiers ordered loosest -> strictest. "strictest membership" = last match.
 TIER_ORDER = ["unfiltered", "tolerant", "moderate", "strict"]
@@ -417,9 +419,7 @@ COMPOSITION_SOURCES = frozenset(c.source for c in COLUMNS if c.origin == "compos
 #: column per backbone atom holding re-referenced shifts, while the deposit ships
 #: every shift, raw and corrected, in ``trizod_shifts.parquet``. The release is
 #: generated without that flag, so these keys are normally absent entirely.
-SCORES_JSON_NOT_CARRIED = frozenset(
-    BACKBONE + ["HA2", "HA3", "HB1", "HB2", "HB3"]
-)  # fmt: skip
+SCORES_JSON_NOT_CARRIED = frozenset(BACKBONE + BB_EXTRA_ATOM_IDS)
 
 #: Pre-rename offset keys. A ``scores.json`` staged before the offset columns
 #: were renamed for unit safety spells them ``off_CA`` / ``lacs_off_CA``; those
@@ -451,18 +451,6 @@ def normalize_offset_keys(record: dict) -> dict:
 def arrow_schema(pa):
     """The Parquet schema, built from ``COLUMNS`` (needs an imported pyarrow)."""
     return pa.schema([(c.name, ARROW_TYPES[c.arrow](pa)) for c in COLUMNS])
-
-
-def _import_pyarrow():
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-    except ImportError as exc:  # pragma: no cover - environment-dependent
-        raise SystemExit(
-            "pyarrow is required to write Parquet but is not a project "
-            "dependency. Re-run with:  uv run --with pyarrow python ..."
-        ) from exc
-    return pa, pq
 
 
 def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dict:
@@ -581,7 +569,7 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
 def build(in_bundle: Path, out_path: Path, composition_csv: Path | None = None) -> None:
     cols = collect_columns(in_bundle, composition_csv)
 
-    pa, pq = _import_pyarrow()
+    pa, pq = import_pyarrow()
     schema = arrow_schema(pa)
     table = pa.table({name: cols[name] for name in schema.names}, schema=schema)
 
@@ -642,18 +630,26 @@ def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
     )
     path, n_rows = write_shift_parquet(frames, out_path)
 
-    _, pq = _import_pyarrow()
+    _, pq = import_pyarrow()
+    # Aggregate inside Arrow. `.to_pylist()` on the two string columns would
+    # allocate ~12 M Python str objects each -- ~1 GB of transient heap for four
+    # print lines, in the one function that streams its output precisely so the
+    # whole table is never resident.
+    import pyarrow.compute as pc
+
     table = pq.read_table(path, columns=["id", "is_backbone", "offset_source"])
-    n_chains = len(set(table.column("id").to_pylist()))
-    is_bb = table.column("is_backbone").to_pylist()
-    sources = table.column("offset_source").to_pylist()
-    n_bb = sum(is_bb)
-    withheld = sum(1 for s in sources if s == "not_transferable")
+    n_chains = pc.count_distinct(table.column("id")).as_py()
+    n_bb = pc.sum(table.column("is_backbone")).as_py()
+    source_counts = {
+        row["values"]: row["counts"]
+        for row in table.column("offset_source").value_counts().to_pylist()
+    }
+    withheld = source_counts.get("not_transferable", 0)
     print(f"wrote {path}  ({path.stat().st_size / 1e6:.2f} MB)")
     print(f"rows: {n_rows}   chains: {n_chains} / {len(offsets)}")
     print(f"  backbone: {n_bb}   side chain: {n_rows - n_bb}")
     print(f"  corrected: {n_rows - withheld}   raw only (NULL): {withheld}")
-    print("  offset_source:", dict(Counter(sources)))
+    print("  offset_source:", source_counts)
 
 
 def main() -> None:

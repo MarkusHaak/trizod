@@ -136,10 +136,22 @@ _COSOLVENT_WORD_TOKENS = (
 
 COSOLVENT_EVIDENCE_TOKENS = _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS
 
+# Lookarounds rather than `\b`, matching the convention of the sibling matcher
+# `trizod.trizod._word_boundary_pattern`: `_` is a word character to `\b`, so
+# `\burea\b` does not match the deposited `Urea_8M` and `\bdmso\b` misses the
+# `DMSO_d6` / `SDS_d25` spellings that really occur in
+# _Sample_component.Mol_common_name -- while `-` must stay a boundary so that
+# `urea-d4` and `HFIP-d2` still match. Kept a separate compiled alternation
+# rather than shared with trizod.trizod: that module already imports from this
+# one, and this pattern is IGNORECASE over raw text where the other is
+# per-token over already-lower-cased fields.
 _COSOLVENT_EVIDENCE_RE = re.compile(
     "|".join(
-        [rf"\b{re.escape(token)}" for token in _COSOLVENT_PREFIX_TOKENS]
-        + [rf"\b{re.escape(token)}\b" for token in _COSOLVENT_WORD_TOKENS]
+        [rf"(?<![a-z0-9]){re.escape(token)}" for token in _COSOLVENT_PREFIX_TOKENS]
+        + [
+            rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
+            for token in _COSOLVENT_WORD_TOKENS
+        ]
     ),
     re.IGNORECASE,
 )
