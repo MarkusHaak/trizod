@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trizod"
+version = "0.2.0"
+description = "Modern disorder scores for BMRB data"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Markus Haak", email = "markus.haak@tum.de" },
+    { name = "Tobias Senoner", email = "tobias.senoner@tum.de" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "numpy>=2.0.2",
+    "pandarallel>=1.6.5",
+    "pandas>=2.3.3",
+    "pynmrstar>=3.5.0",
+    "scipy>=1.13.1",
+    "tqdm>=4.67.3",
+    "typer>=0.12,<0.24",
+]
+
+# matplotlib is imported only by trizod/figures/ (manuscript figure generators);
+# neither the scoring pipeline, the CLI, nor the dataset build depend on it, so
+# it is an opt-in extra: `pip install trizod` stays lean for downstream ML use,
+# `pip install trizod[figures]` adds figure regeneration.
+[project.optional-dependencies]
+figures = ["matplotlib>=3.9.4"]
+
+[project.urls]
+Repository = "https://github.com/tsenoner/trizod"
+
+[project.scripts]
+trizod = "trizod.cli.main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests that run the full dataset pipeline (deselect with '-m \"not slow\"')",
+]
+addopts = "-m 'not slow'"
+
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = [
+    "N803",   # argument name should be lowercase (scientific convention: T, Ion, pH, etc.)
+    "N806",   # variable name should be lowercase (scientific convention: N, I, E, etc.)
+    "N802",   # function name should be lowercase (POTENCI naming: predPentShift, etc.)
+    "N816",   # mixed-case variable in global scope (AAstandard, CENTSHIFTS, etc.)
+    "N818",   # exception name should end in Error (legacy naming: Found, etc.)
+    "E741",   # ambiguous variable name (l, I, E — standard in scientific code)
+    "E501",   # line too long (formatter handles what it can; remaining are data/strings)
+    "SIM115", # open file with context handler (POTENCI CSV I/O)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["trizod"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's API intentionally calls typer.Option()/typer.Argument() in defaults.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "ruff>=0.15.5",
+    # pulls in the figures extra so the figure-generator tests run under the
+    # standard `uv sync` / `uv run pytest` dev workflow (matplotlib is optional
+    # for consumers but required to exercise trizod/figures/).
+    "trizod[figures]",
+]

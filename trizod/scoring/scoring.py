@@ -1,189 +1,376 @@
+import logging
+import warnings
+
 import numpy as np
 import pandas as pd
-import logging
-import trizod.bmrb.bmrb as bmrb
 import scipy
-import warnings
-from trizod.constants import BBATNS, REFINED_WEIGHTS #, Z_CORRECTION
 
-def convChi2CDF(rss,k):
-    with np.errstate(divide='ignore', invalid='ignore'):
-        # I expect to see RuntimeWarnings in this block
-        # k can be 0 at some 
-        res = ((((rss/k)**(1.0/6))-0.50*((rss/k)**(1.0/3))+1.0/3*((rss/k)**(1.0/2)))\
-            - (5.0/6-1.0/9/k-7.0/648/(k**2)+25.0/2187/(k**3)))\
-            / np.sqrt(1.0/18/k+1.0/162/(k**2)-37.0/11664/(k**3))
-    return res
+import trizod.bmrb.bmrb as bmrb
+from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
+from trizod.lacs import compute_lacs_offsets
 
-def comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask):
-    #cmparr = np.zeros(shape=(len(seq), len(BBATNS)))
-    # convert predshift dict to np array (TODO: do this in potenci...)
+
+def chi2_cdf_approx(rss, k):
+    """Wilson-Hilferty approximation to the chi-squared CDF."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # RuntimeWarnings expected: k can be 0
+        result = (
+            (
+                ((rss / k) ** (1.0 / 6))
+                - 0.50 * ((rss / k) ** (1.0 / 3))
+                + 1.0 / 3 * ((rss / k) ** (1.0 / 2))
+            )
+            - (5.0 / 6 - 1.0 / 9 / k - 7.0 / 648 / (k**2) + 25.0 / 2187 / (k**3))
+        ) / np.sqrt(1.0 / 18 / k + 1.0 / 162 / (k**2) - 37.0 / 11664 / (k**3))
+    return result
+
+
+def compare_to_predicted(predshiftdct, bbshifts_arr, bbshifts_mask):
+    """Compute observed - predicted shift differences."""
     predshift_arr = np.zeros(shape=bbshifts_arr.shape)
     predshift_mask = np.full(shape=bbshifts_mask.shape, fill_value=False)
-    for res,aa in predshiftdct:
+    for res, aa in predshiftdct:
         i = res - 1
-        for j,at in enumerate(BBATNS):
-            if at in predshiftdct[(res,aa)]:
-                if predshiftdct[(res,aa)][at] is not None:
-                    predshift_arr[i, j] = predshiftdct[(res,aa)][at]
-                    predshift_mask[i, j] = True
-    cmparr =  np.subtract(bbshifts_arr, predshift_arr, where=bbshifts_mask & predshift_mask, out=bbshifts_arr)
-    return cmparr, BBATNS, bbshifts_mask & predshift_mask
+        for j, atom_type in enumerate(BACKBONE_ATOMS):
+            if (
+                atom_type in predshiftdct[(res, aa)]
+                and predshiftdct[(res, aa)][atom_type] is not None
+            ):
+                predshift_arr[i, j] = predshiftdct[(res, aa)][atom_type]
+                predshift_mask[i, j] = True
+    diff_arr = np.subtract(
+        bbshifts_arr,
+        predshift_arr,
+        where=bbshifts_mask & predshift_mask,
+        out=bbshifts_arr,
+    )
+    return diff_arr, BACKBONE_ATOMS, bbshifts_mask & predshift_mask
 
-def compute_running_offsets(cmparr, mask, minAIC=999.):
-    w_ = np.array([REFINED_WEIGHTS[at] for at in BBATNS]) # ensure same order
-    shw_ = cmparr / w_
-    df = pd.DataFrame(shw_).mask(~mask)
-    # compute rolling stadard deviation over detected shifts (missing values are ignored and streched by rolling window)
-    at_stdc = []
-    at_roff = []
-    at_std0 = []
-    for i in range(7): # TODO: not necessary to compute anything but at_stdc for all values. Only the selected position would suffice
+
+def compute_running_offsets(diff_arr, mask, min_AIC=999.0):
+    weights = np.array([REFINED_WEIGHTS[atom_type] for atom_type in BACKBONE_ATOMS])
+    weighted_diffs = diff_arr / weights
+    df = pd.DataFrame(weighted_diffs).mask(~mask)
+    # compute rolling standard deviation over detected shifts
+    # (missing values are ignored and stretched by rolling window)
+    per_atom_rolling_stds = []
+    per_atom_rolling_offsets = []
+    per_atom_rolling_stds_raw = []
+    for i in range(
+        7
+    ):  # TODO: only the selected position would suffice for per_atom_rolling_stds
         roll = df[i].dropna().rolling(9, center=True)
-        at_stdc.append(roll.std(ddof=0))
-        at_roff.append(roll.mean())
-        at_std0.append(roll.apply(lambda x : np.sqrt(x.pow(2).mean())))
-    runstds_ = pd.concat(at_stdc, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
-    runoffs_ = pd.concat(at_roff, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
-    runstd0s_ = pd.concat(at_std0, axis=1).reindex(pd.Index([i for i in range(len(cmparr))]))
-    # get index with the lowest mean rolling stddev for which all ats were detected (all that were detected anywhere for this sample)
-    runstds_val = runstds_[runstds_.columns[mask.any(axis=0)]].dropna(axis=0).mean(axis=1)
+        per_atom_rolling_stds.append(roll.std(ddof=0))
+        per_atom_rolling_offsets.append(roll.mean())
+        per_atom_rolling_stds_raw.append(
+            np.sqrt(per_atom_rolling_stds[-1] ** 2 + per_atom_rolling_offsets[-1] ** 2)
+        )
+    rolling_stds = pd.concat(per_atom_rolling_stds, axis=1).reindex(
+        pd.Index(list(range(len(diff_arr))))
+    )
+    rolling_offsets = pd.concat(per_atom_rolling_offsets, axis=1).reindex(
+        pd.Index(list(range(len(diff_arr))))
+    )
+    rolling_stds_raw = pd.concat(per_atom_rolling_stds_raw, axis=1).reindex(
+        pd.Index(list(range(len(diff_arr))))
+    )
+    # get index with the lowest mean rolling stddev
+    # for which all atom types were detected anywhere in this sample
+    mean_rolling_stds = (
+        rolling_stds[rolling_stds.columns[mask.any(axis=0)]].dropna(axis=0).mean(axis=1)
+    )
     try:
-        min_idx_ = runstds_val.idxmin()
+        best_idx = mean_rolling_stds.idxmin()
     except ValueError:
-        return None # still not found
-    
-    offdct_ = {}
-    for col in runstds_.dropna(how='all', axis=1).columns: # for all at shifts that were detected anywhere in this sample
-        at = BBATNS[col]
-        roff = runoffs_.loc[min_idx_][col]
-        std0 = runstd0s_.loc[min_idx_][col]
-        stdc = runstds_.loc[min_idx_][col]
-        dAIC = np.log(std0/stdc) * 9 - 1 # difference in Akaike’s information criterion, 9 is width of window
-        logging.getLogger('trizod.scoring').info(f'minimum running average: {at} {roff} {dAIC}')
-        if dAIC > minAIC:
-            logging.getLogger('trizod.scoring').info(f'using offset correction: {at} {roff} {dAIC}')
-            offdct_[at] = roff
+        return None  # still not found
+
+    offset_dict = {}
+    for col in rolling_stds.dropna(how="all", axis=1).columns:
+        atom_type = BACKBONE_ATOMS[col]
+        rolling_offset = rolling_offsets.loc[best_idx][col]
+        std_raw = rolling_stds_raw.loc[best_idx][col]
+        std_corrected = rolling_stds.loc[best_idx][col]
+        # difference in Akaike's information criterion, 9 is width of window
+        delta_AIC = np.log(std_raw / std_corrected) * 9 - 1
+        logging.getLogger("trizod.scoring").info(
+            f"minimum running average: {atom_type} {rolling_offset} {delta_AIC}"
+        )
+        if delta_AIC > min_AIC:
+            logging.getLogger("trizod.scoring").info(
+                f"using offset correction: {atom_type} {rolling_offset} {delta_AIC}"
+            )
+            offset_dict[atom_type] = rolling_offset
         else:
-            logging.getLogger('trizod.scoring').info(f'rejecting offset correction due to low dAIC: {at} {roff} {dAIC}')
-            #offdct_[at] = 0.0
+            logging.getLogger("trizod.scoring").info(
+                f"rejecting offset correction due to low delta_AIC: {atom_type} {rolling_offset} {delta_AIC}"
+            )
 
-    return offdct_ #with the running offsets
+    return offset_dict
 
-def compute_offsets(shw_, accdct_, minAIC=999.):
-    anum_ = np.sum(accdct_, axis=0)
-    # I expect to see RuntimeWarnings in this block
-    # accdct_ can contain fully-False columns
+
+def compute_offsets(weighted_diffs, accepted_mask, min_AIC=999.0):
+    atom_counts = np.sum(accepted_mask, axis=0)
+    # RuntimeWarnings expected: accepted_mask can contain fully-False columns
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        newoffdct_ = np.nanmean(shw_, axis=0, where=accdct_)
-        astd0_ = np.sqrt(np.nanmean(shw_ ** 2, axis=0, where=accdct_))
-        astdc_ = np.nanstd(shw_, axis=0, where=accdct_)
-        with np.errstate(divide='ignore'):
-            # for anum_ == 1, astdc_ is 0. resulting in an adAIC_ of inf as consequence of division-by-zero
-            # this would be problematic if not all offsets with anum_ < 4 were rejected anyways
-            adAIC_ = np.log(astd0_ / astdc_) * anum_ - 1
-    reject_mask = (adAIC_ < minAIC) | (anum_ < 4)
-    astdc_[reject_mask] = astd0_[reject_mask]
-    newoffdct_[reject_mask] = 0.
-    newoffdct_ = {at:val for at,val in zip(BBATNS,newoffdct_)}
-    return newoffdct_
+        new_offsets = np.nanmean(weighted_diffs, axis=0, where=accepted_mask)
+        std_uncorrected = np.sqrt(
+            np.nanmean(weighted_diffs**2, axis=0, where=accepted_mask)
+        )
+        std_corrected = np.nanstd(weighted_diffs, axis=0, where=accepted_mask)
+        with np.errstate(divide="ignore"):
+            # for atom_counts == 1, std_corrected is 0, resulting in inf delta_AIC;
+            # not problematic since all offsets with atom_counts < 4 are rejected anyway
+            delta_AIC = np.log(std_uncorrected / std_corrected) * atom_counts - 1
+    reject_mask = (delta_AIC < min_AIC) | (atom_counts < 4)
+    std_corrected[reject_mask] = std_uncorrected[reject_mask]
+    new_offsets[reject_mask] = 0.0
+    new_offsets = dict(zip(BACKBONE_ATOMS, new_offsets))
+    return new_offsets
 
-def get_outlier_mask(cdfs3_, cdfs_, ashwi_, mask, cdfthr=6.0):
-    oldct_ = ashwi_ > cdfthr
-    totnum_ = mask.sum(axis=1)
-    finaloutli_ = (cdfs_ > cdfthr) | ((cdfs3_ > cdfthr) & (cdfs_ > 0.0) & (totnum_ > 0))
-    ol_ = mask & (np.bitwise_or(np.expand_dims(finaloutli_, axis=1), oldct_)) # mask for the outliers
-    return ol_
 
-def get_std_norm_diffs(cmparr, mask, offdct={}):
-    w_ = np.array([REFINED_WEIGHTS[at] for at in BBATNS]) # ensure same order
-    off_ = np.array([offdct.get(at, 0.) for at in BBATNS])
-    shw_ = cmparr / w_
-    ashwi_ = shw_.copy() # need to do the copy here, because shw_ is reused later and would otherwise be partially overwritten due to the out=
-    ashwi_ = np.abs(np.subtract(shw_, off_, where=mask, out=ashwi_))
-    return shw_, ashwi_
+def get_outlier_mask(
+    zscores_triplet, zscores, abs_weighted_diffs, mask, cdf_threshold=6.0
+):
+    atom_outliers = abs_weighted_diffs > cdf_threshold
+    shift_counts = mask.sum(axis=1)
+    final_outliers = (zscores > cdf_threshold) | (
+        (zscores_triplet > cdf_threshold) & (zscores > 0.0) & (shift_counts > 0)
+    )
+    outlier_mask = mask & (
+        np.bitwise_or(np.expand_dims(final_outliers, axis=1), atom_outliers)
+    )
+    return outlier_mask
 
-def compute_zscores(ashwi3, k3, mask, corr=False):
-    indices = np.where(np.any(mask,axis=1))
-    mini, maxi = indices[0][0], indices[0][-1]
-    tot3f_ = (np.minimum(ashwi3, 4.0) ** 2).sum(axis=1)
-    totn3f_ = k3
-    cdfs3_ = convChi2CDF(tot3f_, totn3f_)
-    if corr:
-        raise ValueError("Z_CORRECTION is not supported")
-        # for k in range(1,22):
-        #     m = totn3f_ == k
-        #     cdfs3_[m] += cdfs3_[m] * Z_CORRECTION[k]
-    cdfs3_[:mini] = np.nan
-    cdfs3_[maxi+1:] = np.nan
-    return cdfs3_
 
-def compute_pscores(ashwi3, k3, mask, quotient=2.0, limit=4.0):
-    indices = np.where(np.any(mask,axis=1))
-    mini, maxi = indices[0][0], indices[0][-1]
+def compute_weighted_diffs(diff_arr, mask, offset_dict=None):
+    if offset_dict is None:
+        offset_dict = {}
+    weights = np.array([REFINED_WEIGHTS[atom_type] for atom_type in BACKBONE_ATOMS])
+    offsets = np.array(
+        [offset_dict.get(atom_type, 0.0) for atom_type in BACKBONE_ATOMS]
+    )
+    weighted_diffs = diff_arr / weights
+    # copy needed: weighted_diffs is reused later, subtract with out= would overwrite it
+    abs_weighted_diffs = weighted_diffs.copy()
+    abs_weighted_diffs = np.abs(
+        np.subtract(weighted_diffs, offsets, where=mask, out=abs_weighted_diffs)
+    )
+    return weighted_diffs, abs_weighted_diffs
+
+
+def compute_zscores(diffs, dof, mask):
+    indices = np.where(np.any(mask, axis=1))
+    first_idx, last_idx = indices[0][0], indices[0][-1]
+    rss = (np.minimum(diffs, 4.0) ** 2).sum(axis=1)
+    zscores = chi2_cdf_approx(rss, dof)
+    zscores[:first_idx] = np.nan
+    zscores[last_idx + 1 :] = np.nan
+    return zscores
+
+
+def compute_gscores(diffs, dof, mask, quotient=2.0, limit=4.0):
+    indices = np.where(np.any(mask, axis=1))
+    first_idx, last_idx = indices[0][0], indices[0][-1]
 
     if limit:
-        p = np.prod(scipy.stats.norm.pdf(np.minimum(ashwi3, limit) / quotient) / scipy.stats.norm.pdf(0.), axis=1)
-        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are ok
-            p = p ** (1/k3)
-        minimum = scipy.stats.norm.pdf(limit / quotient) / scipy.stats.norm.pdf(0.)
-        p = (p - minimum) / (1. - minimum)
+        p = np.prod(
+            scipy.stats.norm.pdf(np.minimum(diffs, limit) / quotient)
+            / scipy.stats.norm.pdf(0.0),
+            axis=1,
+        )
+        with np.errstate(
+            divide="ignore"
+        ):  # zeros are to be expected; resulting NANs are ok
+            p = p ** (1 / dof)
+        minimum = scipy.stats.norm.pdf(limit / quotient) / scipy.stats.norm.pdf(0.0)
+        p = (p - minimum) / (1.0 - minimum)
     else:
-        p = np.prod(scipy.stats.norm.pdf(ashwi3 / quotient) / scipy.stats.norm.pdf(0.), axis=1)
-        with np.errstate(divide='ignore'): # zeros are to be expected; resulting NANs are ok
-            p = p ** (1/k3)
-    p[k3 == 0] = np.nan
-    p[:mini] = np.nan
-    p[maxi+1:] = np.nan
+        p = np.prod(
+            scipy.stats.norm.pdf(diffs / quotient) / scipy.stats.norm.pdf(0.0), axis=1
+        )
+        with np.errstate(
+            divide="ignore"
+        ):  # zeros are to be expected; resulting NANs are ok
+            p = p ** (1 / dof)
+    p[dof == 0] = np.nan
+    p[:first_idx] = np.nan
+    p[last_idx + 1 :] = np.nan
     return p
 
-def convert_to_triplet_data(ashwi_, mask):
-    ashwi3 = ashwi_.copy()
-    ashwi3[~mask] = 0.
-    ashwi3 = np.column_stack([np.pad(ashwi3, ((1,1),(0,0)))[2:],   ashwi3,   np.pad(ashwi3, ((1,1),(0,0)))[:-2]])
-    k3     = np.column_stack([np.pad(mask, ((1,1),(0,0)))[2:],mask,np.pad(mask, ((1,1),(0,0)))[:-2]]).sum(axis=1)
-    return ashwi3, k3
 
-def get_offset_corrected_wSCS(seq, shifts, predshiftdct):
-    # get polymer sequence and chemical backbone shifts
+def convert_to_triplet_data(abs_weighted_diffs, mask):
+    triplet_diffs = abs_weighted_diffs.copy()
+    triplet_diffs[~mask] = 0.0
+    triplet_diffs = np.column_stack(
+        [
+            np.pad(triplet_diffs, ((1, 1), (0, 0)))[2:],
+            triplet_diffs,
+            np.pad(triplet_diffs, ((1, 1), (0, 0)))[:-2],
+        ]
+    )
+    triplet_dof = np.column_stack(
+        [np.pad(mask, ((1, 1), (0, 0)))[2:], mask, np.pad(mask, ((1, 1), (0, 0)))[:-2]]
+    ).sum(axis=1)
+    return triplet_diffs, triplet_dof
+
+
+# Atoms LACS computes offsets for. HB is intentionally absent — LACS uses
+# Wishart random-coil tables that don't cover HB; POTENCI/AIC handles HB
+# residual bias.
+_LACS_ATOMS = ["C", "CA", "CB", "HA", "H", "N"]
+
+
+def apply_lacs_correction(bbshifts_arr, bbshifts_mask, seq):
+    """Run LACS on observed shifts; return (corrected_arr, offsets_dict).
+
+    Args:
+        bbshifts_arr: (N, 7) observed shift array, columns = BACKBONE_ATOMS.
+        bbshifts_mask: (N, 7) boolean mask of populated entries.
+        seq: 1-letter amino-acid sequence of length N.
+
+    Returns:
+        (corrected_arr, offsets_dict):
+          corrected_arr is a copy of bbshifts_arr with per-atom LACS offsets
+          subtracted (corrected_arr[:, j] = bbshifts_arr[:, j] - offsets[atom]).
+          Atoms not covered by LACS (HB) are unchanged.
+          offsets_dict has all 7 BACKBONE_ATOMS as keys; values are the LACS
+          offset in ppm, or 0.0 if LACS returned None (no offset detected) or
+          the atom is outside _LACS_ATOMS.
+    """
+    n = len(seq)
+    seq_nums = np.arange(1, n + 1)
+
+    atom_col = {atom: i for i, atom in enumerate(BACKBONE_ATOMS)}
+
+    obs_shifts = {}
+    for atom in _LACS_ATOMS:
+        col = atom_col[atom]
+        arr = np.full(n, np.nan)
+        valid = bbshifts_mask[:, col]
+        arr[valid] = bbshifts_arr[valid, col]
+        obs_shifts[atom] = arr
+
+    raw_offsets = compute_lacs_offsets(seq, seq_nums, obs_shifts)
+
+    corrected_arr = bbshifts_arr.copy()
+    offsets_dict = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+    for atom, offset in raw_offsets.items():
+        if offset is None or atom not in _LACS_ATOMS:
+            continue
+        col = atom_col[atom]
+        valid = bbshifts_mask[:, col]
+        corrected_arr[valid, col] -= offset
+        offsets_dict[atom] = float(offset)
+
+    return corrected_arr, offsets_dict
+
+
+def get_offset_corrected_shifts(seq, shifts, predshiftdct, rereference_mode="both"):
     ret = bmrb.get_valid_bbshifts(shifts, seq)
     if ret is None:
-        logging.getLogger('trizod.scoring').error(f'retrieving backbone shifts failed')
+        logging.getLogger("trizod.scoring").error("retrieving backbone shifts failed")
         return
     bbshifts_arr, bbshifts_mask = ret
-    
-    # compare predicted to actual shifts
-    cmparr, _, cmp_mask = comp2pred_arr(predshiftdct, bbshifts_arr, bbshifts_mask)
-    totbbsh = np.sum(cmp_mask)
-    if totbbsh == 0:
-        logging.getLogger('trizod.scoring').error(f'no comparable backbone shifts')
+
+    if rereference_mode in ("lacs", "both"):
+        bbshifts_arr, lacs_offsets = apply_lacs_correction(
+            bbshifts_arr, bbshifts_mask, seq
+        )
+    else:
+        lacs_offsets = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+
+    diff_arr, _, cmp_mask = compare_to_predicted(
+        predshiftdct, bbshifts_arr, bbshifts_mask
+    )
+    total_backbone_shifts = np.sum(cmp_mask)
+    if total_backbone_shifts == 0:
+        logging.getLogger("trizod.scoring").error("no comparable backbone shifts")
         return
-    logging.getLogger('trizod.scoring').info(f"total number of backbone shifts: {totbbsh}")
+    logging.getLogger("trizod.scoring").info(
+        f"total number of backbone shifts: {total_backbone_shifts}"
+    )
 
-    off0 = {at:0.0 for at in BBATNS}
-    shw0, ashwi0 = get_std_norm_diffs(cmparr, cmp_mask, off0)
-    cdfs0 = compute_zscores(ashwi0, cmp_mask.sum(axis=1), cmp_mask)
-    cdfs30 = compute_zscores(*convert_to_triplet_data(ashwi0, cmp_mask), cmp_mask)
-    ol0 = get_outlier_mask(cdfs30, cdfs0, ashwi0, cmp_mask, cdfthr=6.0)
-    noff0 = compute_offsets(shw0, cmp_mask & ~ol0, minAIC=6.0)
-    av0 = np.nanmean(cdfs30)
-    offf = noff0
-    olf = ol0
+    offsets_initial = dict.fromkeys(BACKBONE_ATOMS, 0.0)
+    weighted_diffs_initial, abs_weighted_diffs_initial = compute_weighted_diffs(
+        diff_arr, cmp_mask, offsets_initial
+    )
 
-    offr = compute_running_offsets(cmparr, cmp_mask, minAIC=6.0)
-    if offr is None:
-        logging.getLogger('trizod.scoring').warning(f'no running offset could be estimated')
-    elif np.any([v != 0. for v in offr.values()]):
-        shwc, ashwic = get_std_norm_diffs(cmparr, cmp_mask, offr)
-        cdfsc = compute_zscores(ashwic, cmp_mask.sum(axis=1), cmp_mask)
-        cdfs3c = compute_zscores(*convert_to_triplet_data(ashwic, cmp_mask), cmp_mask)
-        avc = np.nanmean(cdfs3c)
-        if av0 >= avc: # use offset correction only if it leads to, in average, better accordance with the POTENCI model (more disordered)
-            olc = get_outlier_mask(cdfs3c, cdfsc, ashwic, cmp_mask, cdfthr=6.0)
-            noffc = compute_offsets(shwc, cmp_mask & ~olc, minAIC=6.)
-            offf = noffc
-            olf = olc
+    if rereference_mode in ("none", "lacs"):
+        outlier_mask_initial = np.zeros_like(cmp_mask)
+        offsets_final = offsets_initial
+        outlier_mask_final = outlier_mask_initial
+        weighted_diffs_final, abs_weighted_diffs_final = (
+            weighted_diffs_initial,
+            abs_weighted_diffs_initial,
+        )
+    else:
+        zscores_initial = compute_zscores(
+            abs_weighted_diffs_initial, cmp_mask.sum(axis=1), cmp_mask
+        )
+        zscores_triplet_initial = compute_zscores(
+            *convert_to_triplet_data(abs_weighted_diffs_initial, cmp_mask), cmp_mask
+        )
+        outlier_mask_initial = get_outlier_mask(
+            zscores_triplet_initial,
+            zscores_initial,
+            abs_weighted_diffs_initial,
+            cmp_mask,
+            cdf_threshold=6.0,
+        )
+        new_offsets_initial = compute_offsets(
+            weighted_diffs_initial, cmp_mask & ~outlier_mask_initial, min_AIC=6.0
+        )
+        mean_zscore_initial = np.nanmean(zscores_triplet_initial)
+        offsets_final = new_offsets_initial
+        outlier_mask_final = outlier_mask_initial
 
-    shwf, ashwif = get_std_norm_diffs(cmparr, cmp_mask, offf)
-    return shwf, ashwif, cmp_mask, olf, offf, shw0, ashwi0, ol0, off0
+        offsets_running = compute_running_offsets(diff_arr, cmp_mask, min_AIC=6.0)
+        if offsets_running is None:
+            logging.getLogger("trizod.scoring").warning(
+                "no running offset could be estimated"
+            )
+        elif np.any([v != 0.0 for v in offsets_running.values()]):
+            weighted_diffs_corrected, abs_weighted_diffs_corrected = (
+                compute_weighted_diffs(diff_arr, cmp_mask, offsets_running)
+            )
+            zscores_corrected = compute_zscores(
+                abs_weighted_diffs_corrected, cmp_mask.sum(axis=1), cmp_mask
+            )
+            zscores_triplet_corrected = compute_zscores(
+                *convert_to_triplet_data(abs_weighted_diffs_corrected, cmp_mask),
+                cmp_mask,
+            )
+            mean_zscore_corrected = np.nanmean(zscores_triplet_corrected)
+            if mean_zscore_initial >= mean_zscore_corrected:
+                outlier_mask_corrected = get_outlier_mask(
+                    zscores_triplet_corrected,
+                    zscores_corrected,
+                    abs_weighted_diffs_corrected,
+                    cmp_mask,
+                    cdf_threshold=6.0,
+                )
+                new_offsets_corrected = compute_offsets(
+                    weighted_diffs_corrected,
+                    cmp_mask & ~outlier_mask_corrected,
+                    min_AIC=6.0,
+                )
+                offsets_final = new_offsets_corrected
+                outlier_mask_final = outlier_mask_corrected
+
+        weighted_diffs_final, abs_weighted_diffs_final = compute_weighted_diffs(
+            diff_arr, cmp_mask, offsets_final
+        )
+
+    return (
+        weighted_diffs_final,
+        abs_weighted_diffs_final,
+        cmp_mask,
+        outlier_mask_final,
+        offsets_final,
+        weighted_diffs_initial,
+        abs_weighted_diffs_initial,
+        outlier_mask_initial,
+        offsets_initial,
+        lacs_offsets,
+    )
