@@ -15,11 +15,16 @@ Core bundle (~115 MB):
   MANIFEST.json
 
 Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
+Optional (~50 MB): shifts/trizod_shifts.parquet — every assigned chemical
+shift of every released chain, backbone and side chain, as deposited, beside the
+re-referenced value where one transfers. Staged automatically when it exists;
+build it with ``scripts/build_parquet_dataset.py --shifts-out``.
 
 Usage
 -----
     uv run python -m trizod.dataset.package_release [--version VER]
-        [--include-str] [--out DIR] [--work-dir DIR] [--root DIR]
+        [--include-str] [--shifts-parquet PATH] [--out DIR]
+        [--work-dir DIR] [--root DIR]
 
 The output directory defaults under the work dir (gitignored). Nothing is
 uploaded; this only stages files locally for a manual Zenodo deposit.
@@ -33,9 +38,11 @@ import json
 import shutil
 from pathlib import Path
 
+from trizod import paths as repo_paths
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, read_fasta
 from trizod.provenance import pipeline_version
+from trizod.shifts import SHIFTS_PARQUET_NAME
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 DEFAULT_VERSION = "2026-07"
@@ -99,12 +106,30 @@ def assert_no_leakage(bundle: Path) -> None:
     print(msg)
 
 
+def count_parquet_rows(path: Path):
+    """Row count of a Parquet file, or None when pyarrow is unavailable.
+
+    pyarrow is not a project dependency (nothing in the pipeline needs it), so
+    the manifest records bytes + checksum either way and the row count only
+    when the packaging run happens to have it: ``uv run --with pyarrow ...``.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return None
+    return pq.ParquetFile(path).metadata.num_rows
+
+
 def record_entry(rel: str, abs_path: Path) -> dict:
     entry = {"bytes": abs_path.stat().st_size, "sha256": sha256(abs_path)}
     if abs_path.suffix == ".fasta":
         entry["n_sequences"] = count_fasta(abs_path)
     elif abs_path.name == "scores.json":
         entry["n_records"] = count_jsonl(abs_path)
+    elif abs_path.suffix == ".parquet":
+        n_rows = count_parquet_rows(abs_path)
+        if n_rows is not None:
+            entry["n_records"] = n_rows
     return {rel: entry}
 
 
@@ -115,6 +140,15 @@ def main(argv=None) -> None:
         "--include-str",
         action="store_true",
         help="also bundle the ~1.4 GB re-referenced .str files",
+    )
+    ap.add_argument(
+        "--shifts-parquet",
+        type=Path,
+        default=None,
+        help=(
+            "chemical-shift table to stage under shifts/ "
+            "(default: <root>/data/processed/" + SHIFTS_PARQUET_NAME + " if it exists)"
+        ),
     )
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument(
@@ -173,6 +207,32 @@ def main(argv=None) -> None:
             raise SystemExit(f"missing test set: {src}")
         planned.append((src, f"test/{src.name}"))
 
+    # The label table records, per pinned test chain, the strictest tier it still
+    # satisfies and any ID substituted since the pin was drawn. Without it an
+    # ID-based join against an earlier release is silently wrong, so it ships
+    # beside the FASTA rather than staying an intermediate.
+    test_labels = paths.testset / "TriZOD_test_set_labels.tsv"
+    if not test_labels.exists():
+        raise SystemExit(f"missing test-set labels: {test_labels}")
+    planned.append((test_labels, f"test/{test_labels.name}"))
+
+    # Chemical-shift table: explicit path is required to exist, the default
+    # location is best-effort so a release can be staged before it has been
+    # built (scripts/build_parquet_dataset.py --shifts-out).
+    shifts = args.shifts_parquet
+    if shifts is None:
+        default_shifts = repo_paths.layout(args.root).processed / SHIFTS_PARQUET_NAME
+        shifts = default_shifts if default_shifts.exists() else None
+    elif not shifts.exists():
+        raise SystemExit(f"missing chemical-shift table: {shifts}")
+    if shifts is not None:
+        planned.append((shifts, f"shifts/{SHIFTS_PARQUET_NAME}"))
+    else:
+        print(
+            "  note: no chemical-shift table staged (build it with "
+            "scripts/build_parquet_dataset.py --shifts-out)"
+        )
+
     manifest: dict[str, dict] = {}
     total = 0
     print(f"Staging {len(planned)} files into {bundle} ...")
@@ -208,6 +268,19 @@ def main(argv=None) -> None:
         "n_files": len(planned),
         "files": dict(sorted(manifest.items())),
     }
+    if shifts is not None:
+        rel = f"shifts/{SHIFTS_PARQUET_NAME}"
+        summary["chemical_shifts"] = {
+            "path": rel,
+            "n_records": manifest[rel].get("n_records"),
+            # stated in the manifest as well as the datasheet: val_ppm is always
+            # the deposited value, and val_corrected_ppm is null wherever no
+            # trustworthy offset transfers rather than a copy of it
+            "raw_column": "val_ppm",
+            "rereferenced_column": "val_corrected_ppm",
+            "rereferenced_nuclei": "backbone (all), side-chain 13C",
+            "raw_only_nuclei": "side-chain 1H, side-chain 15N",
+        }
     (bundle / "MANIFEST.json").write_text(json.dumps(summary, indent=2))
 
     print(f"\nBundle: {bundle}")
@@ -222,6 +295,13 @@ def main(argv=None) -> None:
         f"  test: CheZOD117={summary['test_sets']['CheZOD117']}, "
         f"TriZOD={summary['test_sets']['TriZOD_test']}"
     )
+    if shifts is not None:
+        n_shifts = summary["chemical_shifts"]["n_records"]
+        print(
+            f"  shifts: shifts/{SHIFTS_PARQUET_NAME} "
+            f"({n_shifts if n_shifts is not None else 'unknown'} values, "
+            "backbone + side chain)"
+        )
     print("\nNothing uploaded. Review the bundle, then deposit to Zenodo manually.")
 
 

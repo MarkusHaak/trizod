@@ -5,8 +5,19 @@ from pathlib import Path
 import pynmrstar
 
 from trizod.constants import AA1TO3, BACKBONE_ATOMS
+from trizod.offsets import sigma_to_ppm, total_offset_ppm
 
 _AMBIGUITY_NOT_SET = "."
+
+#: NMR-STAR null. Written for an atom whose offset was never determined or was
+#: rejected by ``--max-offset``, which is NOT the same statement as a measured
+#: offset of 0.000000.
+_NULL = "."
+
+
+def _fmt(value):
+    """``f"{value:.6f}"``, or the NMR-STAR null when there is no value."""
+    return _NULL if value is None else f"{value:.6f}"
 
 
 def _atom_type_for(atom_id):
@@ -24,8 +35,8 @@ def write_rereferenced_str(
     seq,
     bbshifts_arr,
     bbshifts_mask,
-    lacs_offsets,
-    potenci_residual_offsets,
+    lacs_offsets_ppm,
+    potenci_residual_offsets_sigma,
     rereference_mode,
     pipeline_version,
 ):
@@ -38,10 +49,24 @@ def write_rereferenced_str(
         bbshifts_arr: (N, len(BACKBONE_ATOMS)) corrected shifts (already
             LACS-corrected if rereference_mode applied LACS).
         bbshifts_mask: (N, len(BACKBONE_ATOMS)) boolean mask.
-        lacs_offsets: dict atom -> ppm.
-        potenci_residual_offsets: dict atom -> ppm.
+        lacs_offsets_ppm: dict atom -> ppm, i.e. the `lacs_off_<atom>_ppm`
+            columns. LACS offsets are subtracted from the raw shift array, so
+            they are genuine ppm. A `None` value (or a missing key) is written
+            as the NMR-STAR null `.`, never as 0.000000: an offset that was
+            never determined, or was rejected by `--max-offset`, is not a
+            measurement of zero.
+        potenci_residual_offsets_sigma: dict atom -> sigma units, i.e. the
+            `off_<atom>_sigma` columns. `scoring.compute_offsets()` averages
+            `diff_arr / REFINED_WEIGHTS`, so these are multiples of the
+            per-atom POTENCI RMSD, NOT ppm. `None` is handled as above.
         rereference_mode: which mode produced the shifts; copied to metadata.
         pipeline_version: free-form string copied to metadata.
+
+    Three per-atom offset loops are written, and every tag names its unit:
+    `LACS_offsets` (ppm), `POTENCI_residual_offsets` (sigma plus its ppm
+    equivalent), and `Total_offsets` -- the ready-to-use ppm quantity from
+    `offsets.total_offset_ppm()`, which is what a reader subtracts from a
+    deposited shift to reproduce the shift TriZOD scored.
     """
     out_path = Path(out_path)
     entry = pynmrstar.Entry.from_scratch(f"bmr{entry_id}_rereferenced")
@@ -103,19 +128,44 @@ def write_rereferenced_str(
     aux.add_tag("Pipeline_version", pipeline_version)
     aux.add_tag("Re_referencing_mode", rereference_mode)
 
+    # `Offset_ppm` is the right tag name here and only here: LACS offsets are
+    # subtracted from the raw ppm shift array, so the number really is ppm.
     lacs_loop = pynmrstar.Loop.from_scratch("LACS_offsets")
     lacs_loop.set_category("LACS_offsets")
     lacs_loop.add_tag(["Atom_ID", "Offset_ppm"])
     for atom in BACKBONE_ATOMS:
-        lacs_loop.add_data([atom, f"{lacs_offsets.get(atom, 0.0):.6f}"])
+        lacs_loop.add_data([atom, _fmt(lacs_offsets_ppm.get(atom))])
     aux.add_loop(lacs_loop)
 
+    # The POTENCI/AIC offsets come in as sigma units (see docstring). Feeding
+    # them to a bare `Offset_ppm` tag -- as this loop once did -- is the unit
+    # error the whole column rename exists to prevent, so the sigma value gets
+    # a tag that says sigma and the ppm equivalent is written alongside.
     potenci_loop = pynmrstar.Loop.from_scratch("POTENCI_residual_offsets")
     potenci_loop.set_category("POTENCI_residual_offsets")
-    potenci_loop.add_tag(["Atom_ID", "Offset_ppm"])
+    potenci_loop.add_tag(["Atom_ID", "Offset_sigma", "Offset_ppm"])
     for atom in BACKBONE_ATOMS:
-        potenci_loop.add_data([atom, f"{potenci_residual_offsets.get(atom, 0.0):.6f}"])
+        offset_sigma = potenci_residual_offsets_sigma.get(atom)
+        offset_ppm = None if offset_sigma is None else sigma_to_ppm(atom, offset_sigma)
+        potenci_loop.add_data([atom, _fmt(offset_sigma), _fmt(offset_ppm)])
     aux.add_loop(potenci_loop)
+
+    # The one loop a reader needs: total ppm to subtract from a deposited shift.
+    total_loop = pynmrstar.Loop.from_scratch("Total_offsets")
+    total_loop.set_category("Total_offsets")
+    total_loop.add_tag(["Atom_ID", "Offset_ppm"])
+    for atom in BACKBONE_ATOMS:
+        lacs = lacs_offsets_ppm.get(atom)
+        sigma = potenci_residual_offsets_sigma.get(atom)
+        # A missing term makes the TOTAL unknown, not smaller: an atom whose
+        # POTENCI offset was rejected has no total to publish.
+        total_ppm = (
+            None
+            if lacs is None or sigma is None
+            else total_offset_ppm(atom, lacs, sigma)
+        )
+        total_loop.add_data([atom, _fmt(total_ppm)])
+    aux.add_loop(total_loop)
 
     entry.add_saveframe(aux)
 

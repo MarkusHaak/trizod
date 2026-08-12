@@ -20,8 +20,17 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import pearsonr
 
+from trizod.offsets import max_abs_offset, off_sigma_col
+
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 NA = 999.0  # CheZOD sentinel for terminal / no-data residues
+
+#: The POTENCI/AIC residual offsets, in SIGMA. This is the CheZOD-equivalent
+#: quantity (CheZOD never ran LACS) and it is what the 2.0 threshold in
+#: ``scripts/validation/reproduce_chezod.py`` is expressed in, matching
+#: ``--max-offset``. Built from the shared helper so it cannot drift from the
+#: emitter's spelling.
+POTENCI_SIGMA_COLS = [off_sigma_col(a) for a in ATOMS]
 
 
 def load_chezod(chezod_dir):
@@ -55,14 +64,21 @@ def load_trizod(path):
     """Load a TriZOD ``scores.json`` (JSONL) keyed by entry ID.
 
     Returns ``{entry_id: [{"seq", "z", "off"}, ...]}`` where ``off`` is the max
-    absolute per-atom POTENCI offset for the record.
+    absolute per-atom POTENCI offset for the record, in sigma.
+
+    Raises if a record does not carry the offset columns at all: a scores.json
+    written before they were renamed must be regenerated, not silently read as
+    a set of perfectly-referenced chains.
     """
     by = {}
     for line in Path(path).open():
         if not line.strip():
             continue
         r = json.loads(line)
-        off = max((abs(r.get(f"off_{a}") or 0.0) for a in ATOMS), default=0.0)
+        # None means every atom's offset is null, i.e. nothing measurable --
+        # distinct from a missing column (raises) and from a measured 0.0.
+        off = max_abs_offset(r, POTENCI_SIGMA_COLS)
+        off = 0.0 if off is None else off
         by.setdefault(str(r["entryID"]), []).append(
             {"seq": r["seq"] or "", "z": r["zscores"] or [], "off": off}
         )

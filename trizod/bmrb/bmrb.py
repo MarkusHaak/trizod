@@ -1,4 +1,5 @@
 import logging
+from collections import namedtuple
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +7,23 @@ import pandas as pd
 import pynmrstar
 
 from trizod.constants import AA3TO1, BACKBONE_ATOMS
+
+# One ``_Entity_assembly`` record, with the tags that describe *how* an entity
+# appears in an assembly. ``Assembly.entities`` keeps its historical 4-tuple
+# shape for backward compatibility; this carries the full row.
+EntityAssemblyRow = namedtuple(
+    "EntityAssemblyRow",
+    [
+        "id",
+        "name",
+        "entity_id",
+        "entity_label",
+        "physical_state",
+        "conformational_isomer",
+        "magnetic_equivalence_group",
+        "details",
+    ],
+)
 
 
 def get_tag_vals(
@@ -43,6 +61,15 @@ class Entity:
         )
         self.polymer_author_seq_details = get_tag_vals(
             sf, "_Entity.Polymer_author_seq_details", indices=0
+        )
+        # Ligand identity. _Entity.Type is never "metal" (polymer / non-polymer /
+        # water / SACCHARIDE only), so the PDB chem-comp code is the only handle
+        # on what a non-polymer entity actually is.
+        self.nonpolymer_comp_id = get_tag_vals(
+            sf, "_Entity.Nonpolymer_comp_ID", indices=0
+        )
+        self.nonpolymer_comp_label = get_tag_vals(
+            sf, "_Entity.Nonpolymer_comp_label", indices=0
         )
         self.seq = get_tag_vals(sf, "_Entity.Polymer_seq_one_letter_code", indices=0)
         if self.seq is not None and self.seq not in ["", "."]:
@@ -98,12 +125,55 @@ class Assembly:
                 get_tag_vals(sf, "_Entity_assembly.Physical_state", default=[]),
             )
         )
+        # Full _Entity_assembly records. Kept separate from ``entities`` so the
+        # historical 4-tuple contract stays intact, and padded rather than
+        # zipped so one absent tag cannot collapse the whole list to empty.
+        ids = get_tag_vals(sf, "_Entity_assembly.ID", default=[]) or []
+
+        def _col(tag):
+            vals = get_tag_vals(sf, f"_Entity_assembly.{tag}", default=[]) or []
+            return list(vals) + [""] * (len(ids) - len(vals))
+
+        self.entity_assembly_rows = [
+            EntityAssemblyRow(*row)
+            for row in zip(
+                ids,
+                _col("Entity_assembly_name"),
+                _col("Entity_ID"),
+                _col("Entity_label"),
+                _col("Physical_state"),
+                _col("Conformational_isomer"),
+                _col("Magnetic_equivalence_group_code"),
+                _col("Details"),
+            )
+        ]
 
     def __str__(self):
         return f"(Assembly {self.id}: entities {[(e[0], e[1]) for e in self.entities]}, {self.n_components} components)"
 
     def __repr__(self):
         return f"<Assembly {self.id}>"
+
+
+class ChemComp:
+    """A ``chem_comp`` saveframe — the definition of a non-polymer component.
+
+    ``Formula`` is the load-bearing tag: it is what tells a ``ZN`` entity apart
+    from a ``GDP`` one without maintaining a hand-written code list.
+    """
+
+    def __init__(self, sf):
+        super().__init__()
+        self.id = get_tag_vals(sf, "_Chem_comp.ID", indices=0)
+        self.name = get_tag_vals(sf, "_Chem_comp.Name", indices=0)
+        self.type = get_tag_vals(sf, "_Chem_comp.Type", indices=0)
+        self.formula = get_tag_vals(sf, "_Chem_comp.Formula", indices=0)
+
+    def __str__(self):
+        return f'(ChemComp {self.id}: formula="{self.formula}", name="{self.name}")'
+
+    def __repr__(self):
+        return f"<ChemComp {self.id}>"
 
 
 class SampleConditions:
@@ -350,6 +420,7 @@ class BmrbEntry:
         self.n_components = None
         self.n_entities = None
         self.entities = {}  # Physical_state, Name, Type, [(Database_code, Accession_code), ...]
+        self.chem_comps = {}
         self.conditions = {}
         self.shift_tables = {}
 
@@ -465,6 +536,15 @@ class BmrbEntry:
             raise ValueError(f"non-unique entity IDs in {id_}")
         self.entities = {e.id: e for e in self.entities}
 
+        # chem_comp saveframes are optional (only entries with non-polymer
+        # components carry them) and their ID may be unset, so this is a
+        # best-effort lookup table rather than a validated mapping.
+        self.chem_comps = {}
+        for sf in entry.get_saveframes_by_category("chem_comp"):
+            comp = ChemComp(sf)
+            if comp.id:
+                self.chem_comps[comp.id] = comp
+
         entry_samples = entry.get_saveframes_by_category("sample")
         if len(entry_samples) == 0:
             logging.getLogger("trizod.bmrb").warning(
@@ -574,7 +654,7 @@ class BmrbEntry:
                 continue
             sampleIDs = [sID.strip() for sID in set(sampleIDs) if sID in self.samples]
             if not sampleIDs:
-                # do not require link to samples - only necessary if filtered for denaturants
+                # do not require link to samples - only necessary if filtered for cosolvents
                 logging.getLogger("trizod.bmrb").warning(
                     f"sample ID(s) unknown for shift table {stID}."
                 )
@@ -679,6 +759,14 @@ class BmrbEntry:
         return f"<bmr{self.id}>"
 
 
+#: The stereo-split partners of the ``BACKBONE_ATOMS`` slots: deposited
+#: separately, averaged into ``HA``/``HB`` by ``get_valid_bbshifts`` below. One
+#: definition because five call sites have to agree on it -- the shift-array
+#: column order under ``--no-shift-averaging``, the published ``is_backbone``
+#: partition, and the Parquet atom list all read from here.
+BB_EXTRA_ATOM_IDS = ["HA2", "HA3", "HB1", "HB2", "HB3"]
+
+
 def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True):
     bb_atm_ids = BACKBONE_ATOMS[:]
     # 0: '_Atom_chem_shift.Entity_assembly_ID'
@@ -744,7 +832,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
     df = df.loc[df["ambc"].isin(["1", "2", "", "."])]
     # filter non-backbone atoms
     # TODO: maybe move this up to fasten processing
-    df = df.loc[df["atm_id"].isin(bb_atm_ids + ["HA2", "HA3", "HB1", "HB2", "HB3"])]
+    df = df.loc[df["atm_id"].isin(bb_atm_ids + BB_EXTRA_ATOM_IDS)]
     df["atm_id_single"] = df["atm_id"]
     # look for non-standard shifts
     df.loc[
@@ -782,7 +870,7 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
         df = df.groupby(["pos", "atm_id_single"])[["val"]].agg("mean").reset_index()
     else:
         df["atm_id_single"] = df["atm_id"]
-        bb_atm_ids = bb_atm_ids + ["HA2", "HA3", "HB1", "HB2", "HB3"]
+        bb_atm_ids = bb_atm_ids + BB_EXTRA_ATOM_IDS
     bbshifts_arr = np.zeros(shape=(len(seq), len(bb_atm_ids)))
     bbshifts_mask = np.full(shape=(len(seq), len(bb_atm_ids)), fill_value=False)
     for i, atm_id in enumerate(bb_atm_ids):
@@ -791,3 +879,158 @@ def get_valid_bbshifts(shifts, seq, filter_amb=True, max_err=1.3, averaging=True
         bbshifts_mask[df.loc[sel, "pos"], i] = True
     # """
     return bbshifts_arr, bbshifts_mask
+
+
+# Atom IDs consumed by get_valid_bbshifts(). Everything else in a deposition is
+# side chain, so `is_backbone` below partitions the table on this set exactly.
+BB_ATOM_IDS = frozenset(BACKBONE_ATOMS + BB_EXTRA_ATOM_IDS)
+
+SHIFT_COLUMNS = [
+    "seq_id",
+    "comp_id",
+    "atom_id",
+    "atom_type",
+    "val_ppm",
+    "val_err_ppm",
+    "ambiguity_code",
+    "is_backbone",
+]
+
+#: The side-chain-only view: the same columns minus the partition flag.
+SIDECHAIN_COLUMNS = [c for c in SHIFT_COLUMNS if c != "is_backbone"]
+
+
+def get_deposited_shifts(shifts, seq):
+    """Return every assigned chemical shift **on a canonical residue** of one
+    chain, as deposited.
+
+    A parallel read of the same ``ShiftTable.shifts`` tuples
+    :func:`get_valid_bbshifts` consumes, keeping backbone *and* side-chain
+    values (11,839,037 over the 16,851 chains of release 2026-08, of which
+    8,380,186 are backbone). The backbone read is untouched, so scoring is
+    unaffected.
+
+    Not **every** deposited value: the ``Comp_ID in AA3TO1`` guard below drops
+    shifts on non-canonical residues and groups, because ``seq_id`` is only a
+    usable join key into the released ``sequence`` for a residue that sequence
+    actually names. Measured on release 2026-08 that is 16,502 of 11,855,542
+    values (0.139 %), on 290 distinct ``Comp_ID``s across 1,050 chains, and it
+    is systematic rather than random: the PTMs (SEP, TPO, PTR, TYS, HYP, ALY,
+    MLY, M3L), the non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA, MLE,
+    DAL) and the terminal or lipid groups (ACE, NH2, MYR) — i.e. exactly what a
+    PTM-interested consumer would come looking for.
+
+    The sequence-consistency guards are the same as the backbone read's (Seq_ID
+    convertible and in range, canonical Comp_ID matching the polymer sequence,
+    numeric Val), because ``seq_id`` is only a usable join key if
+    ``seq[seq_id - 1]`` really is the residue named by ``comp_id``. The three
+    backbone *quality* filters are deliberately **not** applied:
+
+    * no atom whitelist — the whitelist is published as the ``is_backbone``
+      column instead of as a deletion, so a consumer filters in one line;
+    * no ``max_err <= 1.3`` cut — the deposited error ships as a column;
+    * no ambiguity whitelist — the backbone rule (``1``/``2``/empty) would drop
+      85,831 aromatic ring-degenerate (code 3) values alone.
+      ``ambiguity_code`` ships as data.
+
+    Values are **as deposited**: no re-referencing or offset correction of any
+    kind is applied here. :func:`trizod.shifts.annotate_offsets` adds the
+    corrected column beside them.
+
+    Args:
+        shifts: list of ``ShiftTable.shifts`` tuples for one chain.
+        seq: the polymer sequence of that chain (one-letter code).
+
+    Returns:
+        ``DataFrame`` with columns ``seq_id`` (1-based, as deposited),
+        ``comp_id``, ``atom_id``, ``atom_type``, ``val_ppm``, ``val_err_ppm``,
+        ``ambiguity_code`` (nullable ``Int8``) and ``is_backbone``, sorted by
+        ``(seq_id, atom_id)``; or ``None`` when the table fails a
+        sequence-consistency guard.
+    """
+    df = pd.DataFrame(
+        shifts,
+        columns=[
+            "entity_assemID",
+            "entityID",
+            "seq_id",
+            "comp_id",
+            "atom_id",
+            "atom_type",
+            "val_ppm",
+            "val_err_ppm",
+            "ambiguity_code",
+        ],
+    )
+    # sequence index, kept 1-based as deposited
+    try:
+        df["seq_id"] = df["seq_id"].astype(int)
+        assert np.all(df["seq_id"] >= 1)
+    except (ValueError, AssertionError):
+        logging.getLogger("trizod.bmrb").error(
+            "conversion to integer failed for at least one position index"
+        )
+        return
+    if np.any(df["seq_id"] > len(seq)):
+        logging.getLogger("trizod.bmrb").error(
+            "shift array sequence longer than polymer sequence"
+        )
+        return
+    # only process canonical bases, check if AAs match sequence
+    df = df.loc[df["comp_id"].isin(AA3TO1.keys())]
+    # .map()/positional take, not .replace(dict): pandas runs one full masked
+    # pass per dict key, so .replace(dict(enumerate(seq))) is O(rows x len(seq))
+    # -- ~11x slower here over the whole deposited table. Neither lookup can
+    # miss: comp_id was just filtered to AA3TO1 keys and seq_id is pinned to
+    # [1, len(seq)] above, so .map cannot introduce a NaN that .replace would
+    # have passed through unchanged.
+    aa1 = df["comp_id"].map(AA3TO1)
+    seq_arr = np.array(list(seq))
+    if np.any(aa1.to_numpy() != seq_arr[df["seq_id"].to_numpy() - 1]):
+        logging.getLogger("trizod.bmrb").error(
+            "canonical amino acid mismatch between sequence and shift array"
+        )
+        return
+    try:
+        df["val_ppm"] = df["val_ppm"].astype(float)  # throws on failed conversion
+    except ValueError:
+        logging.getLogger("trizod.bmrb").error(
+            "conversion to float failed for at least one shift value"
+        )
+        return
+    # non-numeric errors and codes become NaN/NA, which is intended: they are
+    # carried as metadata, they must never abort the extraction. Codes outside
+    # the BMRB dictionary domain (1-9) are dropped rather than cast blindly.
+    df["val_err_ppm"] = pd.to_numeric(df["val_err_ppm"], errors="coerce")
+    ambc = pd.to_numeric(df["ambiguity_code"], errors="coerce")
+    df["ambiguity_code"] = ambc.where(ambc.isin(range(1, 10))).astype("Int8")
+    df["is_backbone"] = df["atom_id"].isin(BB_ATOM_IDS)
+    # identical rows are redundant re-statements of one measurement; rows that
+    # differ in any field are kept (3 corpus-wide, all in one chain, same value
+    # deposited twice under different ambiguity codes) -- the long table can
+    # represent them and rejecting the chain outright would lose far more
+    dupl = df[SHIFT_COLUMNS].duplicated()
+    if np.any(dupl):
+        logging.getLogger("trizod.bmrb").warning(
+            "multiple identical shifts found for the same position and atom_id"
+        )
+        df = df.loc[~dupl]
+    if np.any(df[["seq_id", "atom_id"]].duplicated(keep=False)):
+        logging.getLogger("trizod.bmrb").warning(
+            "conflicting shifts found for the same position and atom_id"
+        )
+    df = df[SHIFT_COLUMNS].sort_values(["seq_id", "atom_id"], kind="stable")
+    return df.reset_index(drop=True)
+
+
+def get_sidechain_shifts(shifts, seq):
+    """The ``~is_backbone`` slice of :func:`get_deposited_shifts`.
+
+    Kept as its own entry point for the side-chain coverage analysis, which
+    counts assignments against a per-residue side-chain atom inventory; the
+    released table carries both halves and the flag instead.
+    """
+    df = get_deposited_shifts(shifts, seq)
+    if df is None:
+        return None
+    return df.loc[~df["is_backbone"], SIDECHAIN_COLUMNS].reset_index(drop=True)

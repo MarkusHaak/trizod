@@ -22,9 +22,14 @@ import pandas as pd
 import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
 import trizod.scoring.scoring as scoring
+from trizod.bmrb.sample_state import (
+    denied_physical_states,
+    warn_unseen_physical_states,
+)
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
 from trizod.io.atomic import atomic_write
+from trizod.offsets import off_sigma_col
 from trizod.provenance import scoring_cache_version
 
 
@@ -111,33 +116,87 @@ def prefilter_dataframe(
     max_noncanonical_fraction,
     max_x_fraction,
     keywords,
-    chemical_denaturants,
+    perturbing_cosolvents,
     exclude_paramagnetic=False,
+    physical_state_blacklist=(),
+    method_fallback="off",
 ):
+    if method_fallback not in ("off", "reject-solid", "require-solution"):
+        raise ValueError(f"Unknown method fallback: {method_fallback}")
     missing_vals = ~df[
         ["exp_method", "temperature", "ionic_strength", "pH", "seq", "total_bbshifts"]
     ].isna().any(axis=1)
     method_sel = df.exp_method.str.lower().str.contains("nmr")
+    # "" is a SENTINEL meaning "accept a MISSING subtype" and must never reach
+    # str.contains(): the empty alternative in e.g. "|solution|structures" matches
+    # EVERY string, which silently turned the tolerant/moderate whitelists into
+    # no-ops so that only the blacklist did any work.
     whitelist_lower = [entry.lower() for entry in method_whitelist]
-    if whitelist_lower:
+    whitelist_terms = [entry for entry in whitelist_lower if entry]
+    if whitelist_terms:
         method_sel &= df.exp_method_subtype.str.lower().str.contains(
-            "|".join(whitelist_lower), regex=True
+            "|".join(whitelist_terms), regex=True
         )
     else:
         method_sel = False
     blacklist_lower = [entry.lower() for entry in method_blacklist]
-    if blacklist_lower:
+    blacklist_terms = [entry for entry in blacklist_lower if entry]
+    if blacklist_terms:
         method_sel &= ~df.exp_method_subtype.str.lower().str.contains(
-            "|".join(blacklist_lower), regex=True
+            "|".join(blacklist_terms), regex=True
         )
-    if "" in whitelist_lower and "" not in blacklist_lower:
-        method_sel |= df.exp_method.str.lower().str.contains("nmr") & pd.isna(
-            df.exp_method_subtype
+    subtype_missing = pd.isna(df.exp_method_subtype)
+    # The subtype tag is simply ABSENT on 4,103 entries -- 90.8 % of everything
+    # the strict method filter rejects, and 90.7 % of them pre-2006, when the tag
+    # was not routinely filled in. `sample_state_evidence` decides those rows on
+    # what the deposition actually says about the sample. Resolved BEFORE the
+    # whitelist block because a re-admitted row must also stop counting as a
+    # "missing value" -- otherwise it is admitted by the method filter and vetoed
+    # one line later.
+    evidence = df.get("sample_state_evidence")
+    if evidence is None:
+        evidence = pd.Series("unknown", index=df.index)
+    evidence = evidence.fillna("unknown")
+    if method_fallback == "require-solution":
+        # Restricted to a NULL subtype: applying the fallback to
+        # present-but-uninformative subtypes re-admits 'X-RAY DIFFRACTION' and
+        # 'THEORETICAL' rows and cancels half of the whitelist fix above.
+        readmitted = (
+            df.exp_method.str.lower().str.contains("nmr").fillna(False)
+            & subtype_missing
+            & (evidence == "solution")
         )
     else:
+        readmitted = pd.Series(False, index=df.index)
+    # `require-solution` OUTRANKS the "" sentinel, which is the contradictory
+    # half of the same question: "" says admit ANY missing subtype, the fallback
+    # says admit one only on positive solution evidence. Taking the sentinel
+    # branch there admits every null-subtype NMR row regardless of evidence and
+    # leaves `readmitted` dead, so the flag silently degraded to `reject-solid`.
+    # Routing to the else branch instead is a no-op for every shipped tier
+    # (strict, the only require-solution tier, has no "" in its whitelist) and
+    # is the NA-safe path that also tightens `missing_vals`.
+    if (
+        "" in whitelist_lower
+        and "" not in blacklist_lower
+        and method_fallback != "require-solution"
+    ):
+        method_sel |= df.exp_method.str.lower().str.contains("nmr") & subtype_missing
+    else:
         # method_sel = sels_pre["method (sub-)type"].fillna(False)
-        method_sel &= ~pd.isna(df.exp_method_subtype)
-        missing_vals &= ~pd.isna(df.exp_method_subtype)
+        # `& ~subtype_missing` first, then `| readmitted`: str.contains() on a
+        # missing subtype yields NA, and NA | True is True while NA & True is NA.
+        method_sel = (method_sel & ~subtype_missing) | readmitted
+        missing_vals &= ~subtype_missing | readmitted
+    if method_fallback == "require-solution":
+        # The refined solid veto: solid evidence disqualifies a row whatever its
+        # declared subtype says. This is what removes bmr25289 (Abeta fibrils,
+        # MAS/DARR/PAIN, subtype "NMR, 20 STRUCTURES") and bmr27211 (P. horikoshii
+        # TET2, all five samples _Sample.Type=solid, subtype "solution") from the
+        # strict tier.
+        method_sel &= evidence != "solid"
+    elif method_fallback == "reject-solid":
+        method_sel &= ~(subtype_missing & (evidence == "solid"))
     sels_pre = {
         # "missing values" : ~df[['ionic_strength', 'pH', 'temperature','seq','total_bbshifts', 'bbshift_types']].isna().any(axis=1),
         ("method (sub-)type", ""): method_sel,
@@ -175,13 +234,45 @@ def prefilter_dataframe(
             df.seq.str.count("X") / df.seq.str.len() <= max_x_fraction
         ),
     }
+    if len(physical_state_blacklist) and "physical_state" in df:
+        # EXACT match, case-insensitive -- never a substring: 'denatured' must not
+        # fire on 'partially denatured' or 'not denatured', and the values that
+        # signal an IDP ('intrinsically disordered', 'partially disordered') are
+        # protected by never appearing in any deny list.
+        warn_unseen_physical_states(df.physical_state)
+        # The ambiguous states (`denatured`, `unfolded`, ...) are denied only
+        # where the entry independently names a perturbing cosolvent; see
+        # trizod.bmrb.sample_state.PHYSICAL_STATE_AMBIGUOUS.
+        # Absent evidence would silently KEEP every ambiguous state, quietly
+        # weakening a filter that gates a published dataset. fill_row_data always
+        # sets the column beside `physical_state`, so its absence is a bug in the
+        # caller, not a case to tolerate.
+        if "cosolvent_evidence" not in df:
+            raise ValueError(
+                "physical_state is present but cosolvent_evidence is missing; "
+                "the ambiguous states (denatured/unfolded/...) cannot be judged "
+                "without it. Build the frame with fill_row_data()."
+            )
+        corroborated = df.cosolvent_evidence.fillna(False).astype(bool)
+        denied = pd.Series(
+            denied_physical_states(
+                df.physical_state, physical_state_blacklist, corroborated=corroborated
+            ),
+            index=df.index,
+        )
+        sels_pre[
+            ("physical state", f"[{len(physical_state_blacklist)} denied]")
+        ] = ~denied
     sels_kws = {keyword: ~df[keyword] for keyword in keywords}
-    sels_denat = {denaturant: ~df[denaturant] for denaturant in chemical_denaturants}
+    sels_cosolvent = {token: ~df[token] for token in perturbing_cosolvents}
     sels_paramag = {}
     if exclude_paramagnetic:
         sels_paramag = {"paramagnetic": ~df["paramagnetic"].astype(bool)}
     sels_all_pre = (
-        {k[0]: v for k, v in sels_pre.items()} | sels_kws | sels_denat | sels_paramag
+        {k[0]: v for k, v in sels_pre.items()}
+        | sels_kws
+        | sels_cosolvent
+        | sels_paramag
     )
 
     passing = missing_vals.copy()
@@ -190,7 +281,15 @@ def prefilter_dataframe(
 
     df["pass_pre"] = False
     df.loc[passing, "pass_pre"] = True
-    return df, missing_vals, sels_pre, sels_kws, sels_denat, sels_paramag, sels_all_pre
+    return (
+        df,
+        missing_vals,
+        sels_pre,
+        sels_kws,
+        sels_cosolvent,
+        sels_paramag,
+        sels_all_pre,
+    )
 
 
 def postfilter_dataframe(
@@ -218,13 +317,21 @@ def postfilter_dataframe(
         ("error in computation", ""): (~comp_error),
     }
     if not reject_shift_type_only:
-        any_offsets_too_large = pd.Series(np.full((df.shape[0],), False))
+        # index=df.index: OR-ing a fresh RangeIndex against index-aligned columns
+        # silently misaligns whenever a caller passes a filtered subset.
+        any_offsets_too_large = pd.Series(
+            np.full((df.shape[0],), False), index=df.index
+        )
         for atom_type in scoring.BACKBONE_ATOMS:
-            any_offsets_too_large |= pd.isna(df[f"off_{atom_type}"])
+            # off_<atom>_sigma, not the ppm column: --max-offset (3/3/2) is a
+            # threshold in sigma units, applied in compute_scores() which NaNs
+            # the offset it rejects. Reading the ppm column here would silently
+            # change what the filter means.
+            any_offsets_too_large |= pd.isna(df[off_sigma_col(atom_type)])
         sels_post.update({("rejected due to any offset", ""): ~any_offsets_too_large})
 
     sels_off = {
-        f"off_{atom_type}": ~pd.isna(df[f"off_{atom_type}"])
+        off_sigma_col(atom_type): ~pd.isna(df[off_sigma_col(atom_type)])
         for atom_type in BACKBONE_ATOMS
     }
     sels_all_post = {k[0]: v for k, v in sels_post.items()}  # | sels_off
@@ -244,7 +351,7 @@ def print_filter_losses(
     missing_vals,
     sels_pre,
     sels_kws,
-    sels_denat,
+    sels_cosolvent,
     sels_paramag,
     sels_all_pre,
     sels_post,
@@ -287,12 +394,12 @@ def print_filter_losses(
             print(
                 f"{'.*' + filter + '.*':<{w_str}} : {(~sel).sum():>{w_num}} {uniq.sum():>{w_num}}"
             )
-    if sels_denat:
+    if sels_cosolvent:
         print()
         print(
-            f"{'chemical denaturant':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}"
+            f"{'perturbing cosolvent':>{w_str}} : {'filtered':<{w_num}} {'unique':<{w_num}}"
         )
-        for filter, sel in sels_denat.items():
+        for filter, sel in sels_cosolvent.items():
             uniq = pd.Series(np.full((len(sel),), False))
             for other_filter, other_sel in sels_all_pre.items():
                 if other_filter != filter:
@@ -333,8 +440,11 @@ def print_filter_losses(
             if other_filter != filter:
                 uniq |= ~other_sel
         uniq = ~sel & ~uniq & passing_pre
+        # sels_off is keyed by column name (off_<atom>_sigma); the report wants
+        # the bare atom, so strip both the prefix and the unit suffix.
+        atom = filter.removeprefix("off_").removesuffix("_sigma")
         print(
-            f"{filter[4:]:<{w_str}} : {(~sel & passing_pre).sum():>{w_num}} {uniq.sum():>{w_num}}"
+            f"{atom:<{w_str}} : {(~sel & passing_pre).sum():>{w_num}} {uniq.sum():>{w_num}}"
         )
     print("=" * total_width)
     print()
