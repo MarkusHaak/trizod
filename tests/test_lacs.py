@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from trizod.lacs import compute_lacs_offsets
+from trizod.lacs.lacs import _robustfit
 
 # A realistic 80-residue sequence (ubiquitin-like)
 _SEQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
@@ -315,3 +316,50 @@ class TestNOffsetCompositionIndependence:
         off = self._n_offset(seq, rng_seed=7)
         assert off is not None
         assert abs(off) < 0.5, f"N offset for correctly-referenced protein: {off}"
+
+
+# A real 13C fit from BMRB entry 10157 (42-residue peptide, 33 CA / 28 CB
+# assignments) that the historical 50-iteration cap truncated: the loop needed
+# 101 iterations to settle, and stopping at 50 put the intercept 0.13 ppm away
+# from the converged value -- 13x the 0.01 ppm step the published LACS offset
+# is rounded to.  See issue #22.
+_SLOW_X = np.array([
+    0.18700000000000117, -1.573999999999998, -1.1880000000000024,
+    2.1579999999999977, 2.9379999999999953, 4.147999999999996,
+    -3.4310000000000045, -3.6950000000000003, 1.8539999999999957,
+    3.7509999999999977, 4.942999999999994, 4.947000000000003,
+    5.493999999999993, 5.300999999999998, 4.192999999999998,
+    5.193000000000001, 3.228999999999999, 3.2279999999999944,
+    3.117999999999995, 0.20700000000000074, 0.6610000000000014,
+    0.04000000000000625,
+])  # fmt: skip
+
+_SLOW_Y = np.array([
+    0.46000000000000085, -0.4540000000000006, -0.41799999999999926,
+    1.9059999999999988, 2.354999999999997, 2.9549999999999983,
+    -0.8719999999999999, -0.3400000000000034, 2.1899999999999977,
+    2.6060000000000016, 3.3589999999999947, 3.1230000000000047,
+    2.9919999999999973, 3.9919999999999973, 3.1370000000000005,
+    4.371000000000002, 3.067999999999998, 2.4069999999999965,
+    1.9450000000000003, 0.1769999999999996, 0.757000000000005,
+    0.21100000000000563,
+])  # fmt: skip
+
+
+class TestRobustFitConvergence:
+    """_robustfit must return a converged fit at its default settings (#22)."""
+
+    def test_default_settings_reach_the_converged_fit(self):
+        # The defaults must land on the same answer a far tighter, far longer
+        # run does.  Anything else means the loop returned whichever iterate it
+        # happened to stop on, and that iterate reaches the published offset.
+        intercept, slope, _ = _robustfit(_SLOW_X, _SLOW_Y)
+        ref_intercept, ref_slope, _ = _robustfit(
+            _SLOW_X, _SLOW_Y, max_iter=100_000, tol=1e-14
+        )
+
+        assert intercept == pytest.approx(ref_intercept, abs=1e-6), (
+            f"intercept {intercept:.6f} is {abs(intercept - ref_intercept):.6f} "
+            f"from the converged {ref_intercept:.6f}"
+        )
+        assert slope == pytest.approx(ref_slope, abs=1e-6)
