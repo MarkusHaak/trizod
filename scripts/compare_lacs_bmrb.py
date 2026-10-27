@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from trizod import paths
+
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -163,7 +165,7 @@ def main():
     parser.add_argument(
         "--bmrb-dir",
         type=str,
-        default="data/raw/bmrb_entries",
+        default=str(paths.RAW_BMRB),
         help="Directory with raw BMRB entries",
     )
     parser.add_argument(
@@ -175,7 +177,7 @@ def main():
     parser.add_argument(
         "--lacs-dir",
         type=str,
-        default="data/external/bmrb_lacs",
+        default=str(paths.EXT_BMRB_LACS),
         help="Directory to cache downloaded LACS reports",
     )
     args = parser.parse_args()
@@ -343,7 +345,7 @@ def main():
             print(f"    {atom:>3}: {within:>5}/{len(bmrb_arr)} ({pct:.1f}%)")
 
     # Save raw data for further analysis
-    out_path = Path("data/interim/lacs_comparison.npz")
+    out_path = paths.LACS_COMPARISON
     out_path.parent.mkdir(parents=True, exist_ok=True)
     save_dict = {"entry_ids": np.array(entry_ids_compared)}
     for atom in atoms:

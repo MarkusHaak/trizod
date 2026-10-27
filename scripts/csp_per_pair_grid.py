@@ -19,6 +19,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from trizod import paths
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -97,7 +99,7 @@ def main():
     parser.add_argument(
         "--baseline-tolerant",
         type=Path,
-        default=Path("data/interim/baseline/tolerant.json"),
+        default=paths.INTERIM_BASELINE / "tolerant.json",
     )
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)

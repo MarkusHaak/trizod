@@ -29,6 +29,7 @@ import numpy as np
 
 import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
+from trizod import paths
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.scoring.scoring import (
     compute_gscores,
@@ -206,7 +207,7 @@ def name_for(entry):
 
 def build_case_study_figure(
     output,
-    baseline_tolerant=Path("data/interim/baseline/tolerant.json"),
+    baseline_tolerant=paths.INTERIM_BASELINE / "tolerant.json",
     bmrb_cache=Path("tmp/bmrb_entries"),
     potenci_cache=Path("tmp"),
     max_scan=200,
@@ -233,7 +234,7 @@ def build_case_study_figure(
     pkl_6968 = bmrb_cache / "6968.pkl"
     if not pkl_17665.exists() or not pkl_6968.exists():
         # Re-parse fresh from .str (post-Step8) when pickles are absent
-        bmrb_dir = Path("data/raw/bmrb_entries")
+        bmrb_dir = paths.RAW_BMRB
         entry_17665 = bmrb.BmrbEntry("17665", bmrb_dir / "bmr17665")
         entry_6968 = bmrb.BmrbEntry("6968", bmrb_dir / "bmr6968")
     else:
@@ -320,7 +321,7 @@ def build_case_study_figure(
                 entry = pickle.load(f)
         else:
             try:
-                entry = bmrb.BmrbEntry(eid, Path("data/raw/bmrb_entries") / f"bmr{eid}")
+                entry = bmrb.BmrbEntry(eid, paths.RAW_BMRB / f"bmr{eid}")
             except Exception:
                 continue
         g_raw, seq = score_entry(entry, potenci_cache, "none")
@@ -365,7 +366,7 @@ def main():
     parser.add_argument(
         "--baseline-tolerant",
         type=Path,
-        default=Path("data/interim/baseline/tolerant.json"),
+        default=paths.INTERIM_BASELINE / "tolerant.json",
     )
     parser.add_argument("--bmrb-cache", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument("--potenci-cache", type=Path, default=Path("tmp"))

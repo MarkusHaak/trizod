@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pynmrstar
 
+from trizod import paths
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
 logger = logging.getLogger("panav_local")
 
@@ -132,13 +134,13 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/raw/bmrb_entries"),
+        default=paths.RAW_BMRB,
         help="Directory containing bmr* folders (default: data/raw/bmrb_entries)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data/external/panav_offsets.json"),
+        default=paths.EXT_PANAV,
         help="Output JSON file (default: data/external/panav_offsets.json)",
     )
     parser.add_argument(

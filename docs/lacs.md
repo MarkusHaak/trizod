@@ -130,6 +130,8 @@ Our `_robustfit` reimplements MATLAB's `robustfit` using iteratively reweighted 
 
 The tuning constant 4.685 gives 95% asymptotic efficiency at the normal distribution while providing strong resistance to outliers.
 
+**Convergence criterion.** Like MATLAB's `statrobustfit`, the loop stops once the *coefficients* stop moving — `|b - b_prev| <= sqrt(eps) * max(|b|, |b_prev|)` elementwise — with an iteration cap of 200. Testing the raw weight vector instead (the criterion used up to issue #22) is not equivalent: bisquare weights can oscillate near the solution while the fit itself is stationary, and a fit whose weights are still settling returns whichever iterate the cap stopped on. On a 2,873-chain scoring run, 157 of 23,448 fits exhausted the old 50-iteration cap; the worst sat 0.13 ppm from its converged intercept, 13× the 0.01 ppm step the published offset is rounded to.
+
 ## Data tables
 
 | Table | Source | Purpose |

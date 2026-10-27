@@ -148,10 +148,29 @@ _EXCLUDE_PRECEDING_N = {"G", "H"}
 # ---------------------------------------------------------------------------
 
 
-def _robustfit(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e-6):
+# Relative coefficient tolerance, matching MATLAB statrobustfit's ``D``.
+_ROBUSTFIT_TOL = float(np.sqrt(np.finfo(float).eps))
+
+
+def _robustfit(
+    x: np.ndarray,
+    y: np.ndarray,
+    max_iter: int = 200,
+    tol: float = _ROBUSTFIT_TOL,
+):
     """Iteratively reweighted least squares with bisquare weight function.
 
     Mimics MATLAB's ``robustfit(x, y)`` returning (intercept, slope, weights).
+
+    Convergence is tested on the *coefficients*, as MATLAB's ``statrobustfit``
+    does: stop once ``|b - b_prev| <= tol * max(|b|, |b_prev|)`` elementwise.
+    The earlier criterion tested the raw weight vector instead, which failed on
+    two counts (issue #22): bisquare weights can oscillate near the solution
+    without the fit itself moving, and a fit whose weights were still settling
+    returned whichever iterate the cap stopped on. On a 2,873-chain scoring run
+    157 of 23,448 fits exhausted the old 50-iteration cap, one of them 0.13 ppm
+    away from its converged intercept -- 13x the 0.01 ppm step the published
+    offset is rounded to.
     """
     n = len(x)
     if n < 3:
@@ -185,15 +204,17 @@ def _robustfit(x: np.ndarray, y: np.ndarray, max_iter: int = 50, tol: float = 1e
         # Adjusted residuals
         u = r / (tune * s * np.sqrt(1 - hat))
         # Bisquare weights
-        new_weights = np.where(np.abs(u) < 1, (1 - u**2) ** 2, 0.0)
-        if np.max(np.abs(new_weights - weights)) < tol:
-            weights = new_weights
-            break
-        weights = new_weights
+        weights = np.where(np.abs(u) < 1, (1 - u**2) ** 2, 0.0)
         # Weighted least squares: scale rows by sqrt(w) so lstsq minimizes
         # sum(w * r^2) (as MATLAB robustfit does), not sum(w^2 * r^2).
         sqrt_w = np.sqrt(weights)
+        beta_prev = beta
         beta, _, _, _ = np.linalg.lstsq(X * sqrt_w[:, None], sqrt_w * y, rcond=None)
+        if np.all(
+            np.abs(beta - beta_prev)
+            <= tol * np.maximum(np.abs(beta), np.abs(beta_prev))
+        ):
+            break
 
     return beta[0], beta[1], weights  # intercept, slope, weights
 

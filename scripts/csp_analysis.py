@@ -32,6 +32,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from trizod import paths
 from trizod.bmrb.bmrb import get_valid_bbshifts
 from trizod.constants import BACKBONE_ATOMS
 
@@ -70,7 +71,7 @@ def shifts_for(entry_id, cache_dir, entity_id_filter=None):
         # Fall back to re-parsing from raw .str
         from trizod.bmrb.bmrb import BmrbEntry
 
-        raw_dir = Path("data/raw/bmrb_entries") / f"bmr{entry_id}"
+        raw_dir = paths.RAW_BMRB / f"bmr{entry_id}"
         if not raw_dir.exists():
             return None, None, None
         try:
@@ -184,9 +185,7 @@ def main():
         choices=["unfiltered", "tolerant", "moderate", "strict"],
         default="tolerant",
     )
-    parser.add_argument(
-        "--baseline-dir", type=Path, default=Path("data/interim/baseline")
-    )
+    parser.add_argument("--baseline-dir", type=Path, default=paths.INTERIM_BASELINE)
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument(
         "--output-histogram",
