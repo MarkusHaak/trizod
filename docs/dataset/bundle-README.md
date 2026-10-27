@@ -219,9 +219,10 @@ deliberately kept comparable (see below).
   dropped from the strict tier for that alone. They are now judged on
   `sample_state_evidence`: `require-solution` at strict, `reject-solid` at
   tolerant/moderate, `off` at unfiltered. A refined solid veto (solid evidence
-  **and** no solution-type experiment name) additionally removes genuine
-  solid-state depositions — 25289 (×2) and 27211 — that were in the released
-  strict tier.
+  **and** no solution-type experiment name) applies at tolerant, moderate and
+  strict whatever the declared subtype says. It removes genuine solid-state
+  depositions — 25289 (×2) and 27211 — that were in the released strict tier,
+  and 27211 from the moderate training set.
 - **`_Entity_assembly.Physical_state` is now used.** Non-native states
   (`misfolded`, `aggregated`, `amyloid*`, `fibril*`, `molten globule`, …) are
   denied from tolerant upwards; `bound` / `reconstituted` states additionally at

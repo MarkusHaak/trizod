@@ -227,8 +227,12 @@ is derived from `_Sample.Type`, `_Experiment.Sample_state` and the experiment na
 | value                          | effect                                                                                                     |
 | :----------------------------- | :---------------------------------------------------------------------------------------------------------- |
 | `off` (unfiltered)             | the whitelist alone decides — "unfiltered" stays the raw corpus                                            |
-| `reject-solid` (tolerant, moderate) | rows with **no** subtype are dropped when the evidence is `solid`                                     |
+| `reject-solid` (tolerant, moderate) | any row with `solid` evidence is rejected, whatever its declared subtype says; rows with **no** subtype and `solution` or `unknown` evidence stay in |
 | `require-solution` (strict)    | rows with **no** subtype are admitted only on `solution` evidence, **and** any row with `solid` evidence is rejected whatever its declared subtype says |
+
+Both non-`off` values share the refined solid veto. Until v0.4.0, `reject-solid` vetoed
+only rows with **no** subtype, so BMRB 27211 (P. horikoshii TET2: subtype `solution`, all
+five samples `_Sample.Type = solid`) stayed a moderate-tier training chain.
 
 The fallback never applies to a subtype that is present but uninformative: doing so would
 walk `X-RAY DIFFRACTION` and `THEORETICAL` rows into the tiers on `_Sample.Type ==

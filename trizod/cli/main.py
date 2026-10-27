@@ -222,11 +222,12 @@ def score(
         None,
         "--method-fallback",
         help=(
-            "How to treat entries with no _Entry.Experimental_method_subtype. "
-            "'off': the whitelist alone decides. 'reject-solid': drop those entries "
-            "when _Sample.Type / _Experiment.Sample_state / the experiment names "
-            "are solid-state. 'require-solution': admit them only on positive "
-            "solution evidence, and reject any row with solid evidence."
+            "How to use the sample-state evidence (_Sample.Type / "
+            "_Experiment.Sample_state / the experiment names). 'off': the "
+            "whitelist alone decides. 'reject-solid': reject any row with solid "
+            "evidence, whatever its declared subtype says. 'require-solution': "
+            "the same veto, and entries with no _Entry.Experimental_method_subtype "
+            "are admitted only on positive solution evidence."
         ),
     ),
     exclude_paramagnetic: Optional[bool] = typer.Option(

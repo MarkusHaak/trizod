@@ -188,15 +188,14 @@ def prefilter_dataframe(
         # missing subtype yields NA, and NA | True is True while NA & True is NA.
         method_sel = (method_sel & ~subtype_missing) | readmitted
         missing_vals &= ~subtype_missing | readmitted
-    if method_fallback == "require-solution":
+    if method_fallback in ("reject-solid", "require-solution"):
         # The refined solid veto: solid evidence disqualifies a row whatever its
         # declared subtype says. This is what removes bmr25289 (Abeta fibrils,
         # MAS/DARR/PAIN, subtype "NMR, 20 STRUCTURES") and bmr27211 (P. horikoshii
-        # TET2, all five samples _Sample.Type=solid, subtype "solution") from the
-        # strict tier.
+        # TET2, all five samples _Sample.Type=solid, subtype "solution"). Until
+        # v0.4.0 `reject-solid` vetoed only a NULL subtype, which left 27211 as a
+        # moderate-tier training chain.
         method_sel &= evidence != "solid"
-    elif method_fallback == "reject-solid":
-        method_sel &= ~(subtype_missing & (evidence == "solid"))
     sels_pre = {
         # "missing values" : ~df[['ionic_strength', 'pH', 'temperature','seq','total_bbshifts', 'bbshift_types']].isna().any(axis=1),
         ("method (sub-)type", ""): method_sel,
