@@ -292,15 +292,30 @@ def test_strict_vetoes_solid_evidence_whatever_the_subtype_says():
     assert _method_selection(rows, "strict") == [False, False, True]
 
 
-def test_tolerant_rejects_solid_evidence_only_for_a_null_subtype():
+@pytest.mark.parametrize("tier", ["tolerant", "moderate"])
+def test_reject_solid_vetoes_solid_evidence_whatever_the_subtype_says(tier):
+    # bmr27211 (P. horikoshii TET2) declares "solution" but all five samples are
+    # _Sample.Type=solid; with a null-subtype-only veto it was a moderate-tier
+    # training chain in v0.4.0. Solid evidence here is the REFINED verdict (no
+    # solution-type experiment names), so this keeps its measured precision.
     rows = [
-        (None, SOLID),  # dropped by the fallback
-        (None, SOLUTION),  # admitted by the "" sentinel, as before
-        (None, UNKNOWN),  # admitted by the "" sentinel, as before
+        (None, SOLID),  # no subtype, solid evidence: dropped
+        (None, SOLUTION),  # admitted by the "" sentinel
+        (None, UNKNOWN),  # admitted by the "" sentinel (strict would not)
         ("X-RAY DIFFRACTION", SOLUTION),  # still rejected by the whitelist
-        ("NMR, 20 STRUCTURES", SOLID),  # present subtype: fallback does not apply
+        ("NMR, 20 STRUCTURES", SOLID),  # bmr25289: declared, but solid samples
+        ("solution", SOLID),  # bmr27211: declared solution, solid samples
+        ("solution", SOLUTION),
     ]
-    assert _method_selection(rows, "tolerant") == [False, True, True, False, True]
+    assert _method_selection(rows, tier) == [
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+    ]
 
 
 def test_require_solution_outranks_the_missing_subtype_sentinel():
