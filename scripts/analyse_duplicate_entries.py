@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from trizod import paths
 from trizod.bmrb.bmrb import get_valid_bbshifts
 from trizod.constants import BACKBONE_ATOMS
 
@@ -337,7 +338,7 @@ def main():
     parser.add_argument(
         "--baseline-dir",
         type=Path,
-        default=Path("data/interim/baseline"),
+        default=paths.INTERIM_BASELINE,
     )
     parser.add_argument(
         "--cache-dir",

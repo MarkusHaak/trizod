@@ -21,6 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
+from trizod import paths
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -31,7 +33,7 @@ from case_study_gscore_flips import score_entry  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--baseline", type=Path, default=Path("data/interim/baseline/tolerant.json")
+        "--baseline", type=Path, default=paths.INTERIM_BASELINE / "tolerant.json"
     )
     parser.add_argument("--bmrb-cache", type=Path, default=Path("tmp/bmrb_entries"))
     parser.add_argument("--potenci-cache", type=Path, default=Path("tmp"))

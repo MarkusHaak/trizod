@@ -15,6 +15,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from trizod import paths
+
 
 def fetch_lacs_listing() -> list[str]:
     """Fetch all LACS report IDs from the BMRB FTP directory."""
@@ -43,7 +45,7 @@ def download_one(entry_id: str, lacs_dir: Path) -> tuple[str, bool]:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--lacs-dir", default="data/external/bmrb_lacs", help="Output directory"
+        "--lacs-dir", default=str(paths.EXT_BMRB_LACS), help="Output directory"
     )
     parser.add_argument("--workers", type=int, default=16, help="Parallel downloads")
     args = parser.parse_args()

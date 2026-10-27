@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Initialize pandarallel (required for parallel_apply in load/create)
 from pandarallel import pandarallel
 
+from trizod import paths
 from trizod.trizod import (
     create_peptide_dataframe,
     filter_defaults,
@@ -265,7 +266,7 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/raw/bmrb_entries"),
+        default=paths.RAW_BMRB,
         help="Directory containing BMRB entry folders (default: data/raw/bmrb_entries)",
     )
     parser.add_argument(

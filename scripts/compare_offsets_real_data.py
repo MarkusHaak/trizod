@@ -20,6 +20,7 @@ import pynmrstar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from trizod import paths
 from trizod.lacs import compute_lacs_offsets
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s : %(message)s")
@@ -177,17 +178,17 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=Path("data/raw/bmrb_entries"),
+        default=paths.RAW_BMRB,
     )
     parser.add_argument(
         "--panav-file",
         type=Path,
-        default=Path("data/external/panav_offsets.json"),
+        default=paths.EXT_PANAV,
     )
     parser.add_argument(
         "--bmrb-lacs-dir",
         type=Path,
-        default=Path("data/external/bmrb_lacs"),
+        default=paths.EXT_BMRB_LACS,
     )
     parser.add_argument(
         "--output",

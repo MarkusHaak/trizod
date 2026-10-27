@@ -27,6 +27,7 @@ import pandas as pd
 
 import trizod.bmrb.bmrb as bmrb
 import trizod.potenci.potenci as potenci
+from trizod import paths
 from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS
 from trizod.figures.style import TIERS, classify_tier, load_tier_sets
@@ -407,7 +408,7 @@ def main():
     parser.add_argument(
         "--baseline-dir",
         type=Path,
-        default=Path("data/interim/baseline"),
+        default=paths.INTERIM_BASELINE,
         help="Directory with {tier}.json baseline files",
     )
     parser.add_argument(
