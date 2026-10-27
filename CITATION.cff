@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+title: "TriZOD: Re-referenced BMRB chemical shift dataset and disorder scoring pipeline"
+message: "If you use this software or dataset, please cite it as below."
+type: software
+authors:
+  - family-names: Senoner
+    given-names: Tobias
+    email: tobias.senoner94@gmail.com
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+  - family-names: Haak
+    given-names: Markus
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+  - family-names: Heinzinger
+    given-names: Michael
+    affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
+  - family-names: Wagemann
+    given-names: David
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+  - family-names: Pritišanac
+    given-names: Iva
+    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
+  - family-names: Rost
+    given-names: Burkhard
+    affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
+  - family-names: Alderson
+    given-names: Reid
+    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
+repository-code: "https://github.com/tsenoner/trizod"
+url: "https://doi.org/10.5281/zenodo.21309963"
+doi: 10.5281/zenodo.21309963
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21309963
+    description: "Concept DOI — all versions of the TriZOD dataset on Zenodo"
+  - type: doi
+    value: 10.5281/zenodo.21309964
+    description: "TriZOD dataset v0.2.0"
+license: MIT
+version: "0.2.0"
+date-released: "2026-07-11"
+keywords:
+  - NMR
+  - BMRB
+  - chemical shift
+  - intrinsically disordered proteins
+  - LACS
+  - POTENCI
+  - CheZOD
