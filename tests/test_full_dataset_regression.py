@@ -18,6 +18,7 @@ import pytest
 
 from tests.conftest import requires_bmrb_data
 from trizod import paths
+from trizod.provenance import baseline_staleness
 
 BASELINE_DIR = paths.INTERIM_BASELINE
 BMRB_DIR = paths.RAW_BMRB
@@ -43,6 +44,16 @@ def load_jsonl(path):
 class TestFullDatasetRegression:
     @pytest.mark.parametrize("filter_level", FILTER_LEVELS)
     def test_matches_baseline(self, tmp_path, filter_level):
+        # Check this before spending up to two hours rescoring the full dataset
+        # only to fail on a count mismatch that means "the baselines are old",
+        # not "the pipeline regressed".
+        stale = baseline_staleness(BASELINE_DIR)
+        if stale:
+            pytest.fail(
+                f"{stale}\n\nRegenerate with:\n"
+                f"    uv run python scripts/regenerate_baselines.py"
+            )
+
         baseline_file = BASELINE_DIR / f"{filter_level}.json"
         if not baseline_file.exists():
             pytest.skip(f"Baseline {baseline_file} not found")

@@ -81,4 +81,11 @@ dev = [
     # standard `uv sync` / `uv run pytest` dev workflow (matplotlib is optional
     # for consumers but required to exercise trizod/figures/).
     "trizod[figures]",
+    # pyarrow is NOT here yet, though it should be: without it the Parquet tests
+    # in test_parquet_columns.py / test_shifts.py importorskip silently, leaving
+    # the released artifact's own format untested. Adding it currently makes the
+    # pipeline deadlock -- pandas loads pyarrow, pyarrow spawns threads, and
+    # pandarallel then fork()s that multi-threaded parent, so the worker blocks
+    # forever on an inherited lock (measured: 3/3 hangs with pyarrow installed,
+    # 0/3 without). Add it once the fork/spawn issue is fixed.
 ]
