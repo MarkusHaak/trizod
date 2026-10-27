@@ -26,7 +26,13 @@ released chain — backbone and side chain, 11,839,037 values in release 2026-08
 sitting on a non-canonical residue). It joins on ``id`` with the main table,
 ships ``val_ppm`` exactly as deposited, and adds ``val_corrected_ppm`` wherever
 a trustworthy referencing offset transfers (``trizod.shifts.annotate_offsets``);
-that column is NULL, never a copy of the raw value, where none does.
+that column is NULL, never a copy of the raw value, where none does. Every C,
+CA, CB and N row also carries the far-outlier flag ``mad_z`` / ``is_far_outlier``
+against the frozen median/MAD reference (``trizod.shifts.outliers``).
+
+The main table is sorted by ``(entry_id, id)`` and written in 500-row groups
+with statistics (``SORT_KEYS``, ``ROW_GROUP_SIZE``), so a reader filtering on
+``entry_id`` touches one row group.
 
 Every column is declared once, in ``COLUMNS`` below, together with the record it
 is read from. ``tests/test_parquet_columns.py`` asserts that declaration against
@@ -67,9 +73,11 @@ from trizod.offsets import (
     total_off_ppm_col,
 )
 from trizod.shifts import (
+    annotate_mad,
     annotate_offsets,
     chain_offsets,
     iter_shift_frames,
+    load_mad_reference,
     write_shift_parquet,
 )
 from trizod.shifts.parquet import import_pyarrow
@@ -122,6 +130,16 @@ OFFSET_COLUMNS_DOC = (
 # the dataset chain needs it), so it is imported lazily — the column contract
 # below stays importable, and testable, without it.
 COMPOSITION_CACHE_NAME = "_composition_cache.csv"
+
+#: Physical layout of the main table, requested by David Wagemann for his web
+#: viewer, which reads the deposit over HTTP range requests. Rows are sorted by
+#: ``(entry_id, id)`` in STRING order (``entry_id`` stays a string column, so
+#: "10001" < "979"), and written in 500-row groups with min/max statistics, so a
+#: filter on ``entry_id`` reads one ~400 kB group instead of the whole file.
+#: ``id`` is sorted within an entry but cannot also be globally monotone: entry
+#: "1000" sorts before "10000", while id "1000_1_1_1" sorts after "10000_1_1_1".
+SORT_KEYS = [("entry_id", "ascending"), ("id", "ascending")]
+ROW_GROUP_SIZE = 500
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -566,12 +584,18 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
     return cols
 
 
-def build(in_bundle: Path, out_path: Path, composition_csv: Path | None = None) -> None:
+def build(
+    in_bundle: Path,
+    out_path: Path,
+    composition_csv: Path | None = None,
+    row_group_size: int = ROW_GROUP_SIZE,
+) -> None:
     cols = collect_columns(in_bundle, composition_csv)
 
     pa, pq = import_pyarrow()
     schema = arrow_schema(pa)
     table = pa.table({name: cols[name] for name in schema.names}, schema=schema)
+    table = table.sort_by(SORT_KEYS)
 
     metadata = {
         b"dataset": b"TriZOD",
@@ -586,17 +610,35 @@ def build(in_bundle: Path, out_path: Path, composition_csv: Path | None = None) 
         b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
         b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
+        b"sort_order": (
+            f"entry_id,id ascending, in string (byte) order: entry_id is a string, "
+            f"so '10001' sorts before '979'. Written in row groups of "
+            f"{row_group_size} rows with min/max statistics on every column, so a "
+            f"filter on entry_id touches one row group. id is sorted within each "
+            f"entry but is not globally monotone ('1000_1_1_1' follows "
+            f"'10000_1_1_1'), so filter on entry_id when pruning matters."
+        ).encode(),
     }
     table = table.replace_schema_metadata(metadata)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, out_path, compression="zstd", compression_level=19)
+    pq.write_table(
+        table,
+        out_path,
+        compression="zstd",
+        compression_level=19,
+        row_group_size=row_group_size,
+        write_statistics=True,
+        sorting_columns=pq.SortingColumn.from_ordering(table.schema, SORT_KEYS),
+    )
 
     # summary
     split_counts = Counter(cols["split"])
     tier_counts = Counter(t for t in cols["train_tier"] if t is not None)
+    n_groups = pq.ParquetFile(out_path).metadata.num_row_groups
     print(f"\nwrote {out_path}  ({out_path.stat().st_size / 1e6:.2f} MB)")
     print(f"rows: {table.num_rows}   columns: {table.num_columns}")
+    print(f"sorted by entry_id,id; {n_groups} row groups of <= {row_group_size}")
     print("split counts:", dict(split_counts))
     print("train_tier counts (strictest):", dict(tier_counts))
 
@@ -624,11 +666,13 @@ def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
     # per-chain rejections (AA mismatch, unparsable Seq_ID) are expected in bulk
     # and would emit thousands of lines; the summary below counts them instead
     logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
+    reference = load_mad_reference()
+    print(f"far-outlier reference: {reference.attrs.get('source', '?')}")
     frames = (
-        (cid, annotate_offsets(df, offsets.get(cid)))
+        (cid, annotate_mad(annotate_offsets(df, offsets.get(cid)), reference))
         for cid, df in iter_shift_frames(list(offsets), pkl_dir)
     )
-    path, n_rows = write_shift_parquet(frames, out_path)
+    path, n_rows = write_shift_parquet(frames, out_path, mad_reference=reference)
 
     _, pq = import_pyarrow()
     # Aggregate inside Arrow. `.to_pylist()` on the two string columns would
@@ -637,9 +681,17 @@ def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
     # whole table is never resident.
     import pyarrow.compute as pc
 
-    table = pq.read_table(path, columns=["id", "is_backbone", "offset_source"])
+    table = pq.read_table(
+        path, columns=["id", "is_backbone", "offset_source", "is_far_outlier"]
+    )
     n_chains = pc.count_distinct(table.column("id")).as_py()
     n_bb = pc.sum(table.column("is_backbone")).as_py()
+    flags = table.column("is_far_outlier")
+    n_assessed = len(flags) - flags.null_count
+    n_flagged = pc.sum(flags).as_py() or 0
+    flagged_chains = pc.count_distinct(
+        table.filter(pc.fill_null(flags, False)).column("id")
+    ).as_py()
     source_counts = {
         row["values"]: row["counts"]
         for row in table.column("offset_source").value_counts().to_pylist()
@@ -650,6 +702,10 @@ def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
     print(f"  backbone: {n_bb}   side chain: {n_rows - n_bb}")
     print(f"  corrected: {n_rows - withheld}   raw only (NULL): {withheld}")
     print("  offset_source:", source_counts)
+    print(
+        f"  far outliers: {n_flagged} of {n_assessed} assessed shifts "
+        f"in {flagged_chains} chains"
+    )
 
 
 def main() -> None:

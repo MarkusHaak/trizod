@@ -11,8 +11,9 @@ lipid groups (ACE, NH2, MYR).
 
 This package attaches TriZOD's re-referencing to the rows that remain
 (:mod:`trizod.shifts.correct`, where the per-nucleus transfer policy and the
-ppm/sigma unit contract live) and writes the released table
-``trizod_shifts.parquet``.
+ppm/sigma unit contract live), flags far-outlier backbone shifts against a
+frozen median/MAD reference (:mod:`trizod.shifts.outliers`) and writes the
+released table ``trizod_shifts.parquet``.
 """
 
 from .correct import (
@@ -32,6 +33,14 @@ from .extract import (
     iter_chains,
     iter_shift_frames,
 )
+from .outliers import (
+    MAD_K,
+    MAD_REFERENCE_PATH,
+    annotate_mad,
+    compute_mad_reference,
+    load_mad_reference,
+    write_mad_reference,
+)
 from .parquet import (
     PARQUET_METADATA,
     SHIFT_PARQUET_COLUMNS,
@@ -40,6 +49,8 @@ from .parquet import (
 )
 
 __all__ = [
+    "MAD_K",
+    "MAD_REFERENCE_PATH",
     "OFFSET_SOURCES",
     "PARQUET_METADATA",
     "SHIFTS_PARQUET_NAME",
@@ -48,13 +59,17 @@ __all__ = [
     "SIDECHAIN_CORRECTED_NUCLEI",
     "SIDECHAIN_MAX_ABS_LACS_PPM",
     "ChainOffsets",
+    "annotate_mad",
     "annotate_offsets",
     "backbone_slot",
     "chain_id",
     "chain_offsets",
+    "compute_mad_reference",
     "entry_chains",
     "iter_chains",
     "iter_shift_frames",
+    "load_mad_reference",
     "shift_schema",
+    "write_mad_reference",
     "write_shift_parquet",
 ]

@@ -573,3 +573,89 @@ def test_legacy_scores_json_still_builds_and_agrees(tmp_path):
         assert _one(cols, total_off_ppm_col(atom)) == pytest.approx(
             total_offset_ppm(atom, 0.2, 0.1)
         )
+
+
+# --------------------------------------------------------------------------- #
+# physical layout: sorted rows in small row groups with statistics
+# --------------------------------------------------------------------------- #
+
+#: Out of order on purpose, and with an entry ID that sorts differently as a
+#: string ("979" > "12345") than as a number.
+_UNSORTED_IDS = [
+    "979_1_1_1",
+    "12345_2_1_1",
+    "10001_1_2_2",
+    "12345_1_1_1",
+    "10001_1_1_1",
+]
+
+
+def _build_sorted(tmp_path, row_group_size=2):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[_record(cid.split("_", 1)[0], cid) for cid in _UNSORTED_IDS],
+    )
+    out = tmp_path / "trizod_dataset.parquet"
+    builder.build(bundle, out, None, row_group_size=row_group_size)
+    return out
+
+
+def test_rows_are_sorted_by_entry_id_then_id_in_string_order(tmp_path):
+    """A reader that wants one entry (David's web viewer, over HTTP range
+    requests) can only skip row groups if the rows are sorted. ``entry_id`` is a
+    string column, so the order is the string order a filter compares with:
+    "10001" < "12345" < "979"."""
+    pq = pytest.importorskip("pyarrow.parquet")
+    out = _build_sorted(tmp_path)
+
+    got = pq.read_table(out, columns=["entry_id", "id"]).to_pydict()
+    assert got["id"] == [
+        "10001_1_1_1",
+        "10001_1_2_2",
+        "12345_1_1_1",
+        "12345_2_1_1",
+        "979_1_1_1",
+    ]
+    assert got["entry_id"] == ["10001", "10001", "12345", "12345", "979"]
+    sort_order = pq.read_schema(out).metadata[b"sort_order"].decode()
+    assert sort_order.startswith("entry_id,id")
+
+
+def test_row_groups_carry_statistics_that_prune_on_entry_id(tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    out = _build_sorted(tmp_path, row_group_size=2)
+
+    meta = pq.ParquetFile(out).metadata
+    assert meta.num_row_groups == 3
+    names = meta.schema.to_arrow_schema().names
+    ranges = []
+    for i in range(meta.num_row_groups):
+        group = meta.row_group(i)
+        for name in ("id", "entry_id"):
+            stats = group.column(names.index(name)).statistics
+            assert stats is not None and stats.has_min_max, (i, name)
+        stats = group.column(names.index("entry_id")).statistics
+        ranges.append((stats.min, stats.max))
+    # ascending and non-overlapping: a filter on entry_id reads one group
+    for (_, prev_max), (next_min, _) in zip(ranges, ranges[1:]):
+        assert prev_max <= next_min
+
+
+def test_the_sort_order_is_declared_in_the_file(tmp_path):
+    """``sorting_columns`` lets a query engine trust the order without
+    scanning; it must name exactly the two sort keys, ascending."""
+    pq = pytest.importorskip("pyarrow.parquet")
+    out = _build_sorted(tmp_path)
+
+    meta = pq.ParquetFile(out).metadata
+    names = meta.schema.to_arrow_schema().names
+    for i in range(meta.num_row_groups):
+        declared = meta.row_group(i).sorting_columns
+        assert [(names[c.column_index], c.descending) for c in declared] == [
+            ("entry_id", False),
+            ("id", False),
+        ]
+
+
+def test_the_release_row_group_size_is_david_s_500():
+    assert builder.ROW_GROUP_SIZE == 500

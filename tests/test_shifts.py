@@ -33,9 +33,11 @@ from trizod.offsets import total_offset_ppm
 from trizod.shifts import (
     OFFSET_SOURCES,
     SIDECHAIN_MAX_ABS_LACS_PPM,
+    annotate_mad,
     annotate_offsets,
     backbone_slot,
     chain_offsets,
+    load_mad_reference,
 )
 
 # 4-residue toy chain (ALA-LEU-PHE-GLY). Tuple layout mirrors ShiftTable.shifts:
@@ -86,7 +88,9 @@ TOY_RECORD = {
 
 def _toy_table(record=TOY_RECORD):
     df = get_deposited_shifts(TOY_SHIFTS, TOY_SEQ)
-    return annotate_offsets(df, chain_offsets(record))
+    return annotate_mad(
+        annotate_offsets(df, chain_offsets(record)), load_mad_reference()
+    )
 
 
 def _row(df, seq_id, atom_id):
@@ -388,6 +392,8 @@ def test_shift_parquet_schema_documents_every_unit(tmp_path):
         "offset_applied_ppm",
         "offset_source",
         "is_backbone",
+        "mad_z",
+        "is_far_outlier",
     ]
     for name in ("val_ppm", "val_err_ppm", "val_corrected_ppm", "offset_applied_ppm"):
         meta = schema.field(name).metadata or {}
@@ -397,6 +403,48 @@ def test_shift_parquet_schema_documents_every_unit(tmp_path):
     formula = table_meta.get(b"correction_formula", b"").decode()
     assert "val_corrected_ppm" in formula and "offset_applied_ppm" in formula
     assert b"offset_source_values" in table_meta
+    assert (schema.field("mad_z").metadata or {}).get(b"unit") == b"raw MAD"
+    assert str(schema.field("mad_z").type) == "float"  # float32, rounded to 0.01
+
+
+def test_shift_parquet_documents_the_far_outlier_rule_and_its_reference(tmp_path):
+    """The flag is only reproducible if the file says how it was computed AND
+    carries the medians/MADs it was computed against."""
+    pq = pytest.importorskip("pyarrow.parquet")
+    import json
+
+    from trizod.shifts import MAD_K, write_shift_parquet
+
+    path, _ = write_shift_parquet([("1_1_1_1", _toy_table())], tmp_path / "s.parquet")
+    meta = pq.read_schema(path).metadata
+    rule = meta[b"far_outlier_rule"].decode()
+    for atom, k in MAD_K.items():
+        assert f"{atom}: {k:g}" in rule
+    assert "N-terminal" in rule and "1.4826" in rule
+
+    embedded = json.loads(meta[b"mad_reference"])
+    ref = load_mad_reference()
+    assert len(embedded) == len(ref)
+    ala_ca = ref.set_index(["comp_id", "atom_id"]).loc[("ALA", "CA")]
+    assert embedded["ALA CA"] == {
+        "n": int(ala_ca.n),
+        "median_ppm": ala_ca.median_ppm,
+        "mad_ppm": ala_ca.mad_ppm,
+    }
+
+
+def test_a_frame_without_the_outlier_columns_is_refused(tmp_path):
+    """build_shifts must annotate every frame; forgetting to is a crash, not a
+    silently all-null pair of columns in the deposit."""
+    pytest.importorskip("pyarrow.parquet")
+
+    from trizod.shifts import write_shift_parquet
+
+    bare = annotate_offsets(
+        get_deposited_shifts(TOY_SHIFTS, TOY_SEQ), chain_offsets(TOY_RECORD)
+    )
+    with pytest.raises(ValueError, match="is_far_outlier.*mad_z"):
+        write_shift_parquet([("1_1_1_1", bare)], tmp_path / "s.parquet")
 
 
 def test_shift_parquet_round_trip_and_join(tmp_path):
@@ -417,6 +465,13 @@ def test_shift_parquet_round_trip_and_join(tmp_path):
     assert 3 in got["ambiguity_code"]
     assert True in got["is_backbone"] and False in got["is_backbone"]
     assert None in got["val_corrected_ppm"], "withheld corrections must be NULL"
+    flags = {
+        (sid, atom): flag
+        for sid, atom, flag in zip(got["seq_id"], got["atom_id"], got["is_far_outlier"])
+    }
+    assert flags[(2, "CA")] is False, "an assessed, ordinary CA is False"
+    assert flags[(2, "H")] is None, "protons are not assessed: NULL, not False"
+    assert flags[(1, "N")] is None, "the N-terminal amine is not assessed"
 
 
 # --------------------------------------------------------------------------- #
