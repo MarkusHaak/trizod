@@ -5,27 +5,40 @@ test-set draw (``--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0
 --mask 0``); do not change it without rebuilding + re-verifying the whole funnel.
 
 Test-set leakage is defined separately, by :func:`leakage_search_cmd` and
-:func:`is_leak`: a training chain leaks when an alignment to a held-out test
-chain reaches >= 30 % identity over >= 80 % of the TEST chain. Coverage is the
-mmseqs definition, the aligned span ``(tend - tstart + 1) / tlen``, gaps
-included. ``--cov-mode 0`` would demand 80 % of both chains, so a long training
-construct that contains a test protein would pass. The leakage search runs
-query = training chains against target = test chains (``--cov-mode 1``,
-coverage of the target) with E-values computed against the same (test) target
-database in both places that use it: the stage-2 removal in
+:func:`is_leak`, under one of two rules (``LEAKAGE_RULES``, decision D2):
+
+* ``"test"`` (the default): a training chain leaks when an alignment to a
+  held-out test chain reaches >= 30 % identity over >= 80 % of the TEST chain.
+  A longer training construct that contains a test protein is a leak; a
+  training fragment of a longer test chain is not.
+* ``"either"``: >= 30 % identity over >= 80 % of the test chain OR of the
+  training chain, i.e. of the shorter of the two (the union of an mmseqs
+  ``--cov-mode 1`` and ``--cov-mode 2`` pass). This also catches a test chain
+  that contains a shorter training chain.
+
+Coverage is the mmseqs definition, the aligned span ``(end - start + 1) /
+length``, gaps included. ``--cov-mode 0`` would demand 80 % of both chains, so
+neither kind of containment would be found. The leakage search runs query =
+training chains against target = test chains, with E-values computed against the
+same (test) target database in both places that use it: the stage-2 removal in
 :mod:`trizod.dataset.redundancy` and the release gate in
-:mod:`trizod.dataset.package_release`.
+:mod:`trizod.dataset.package_release`. The search command is the same under both
+rules; only the coverage test on the parsed hits differs. The redundancy step
+records the rule it applied (:func:`write_leakage_rule`) so the gate checks the
+same one.
 
 The 80 % is NOT passed to mmseqs (``-c 0``): with any ``-c`` above 0, mmseqs
 skips a pair by length ratio before aligning it (under ``--cov-mode 1``, when
 the training chain is shorter than 80 % of the test chain). Such a chain can
 still span >= 80 % of the test chain with a gap, e.g. a test protein minus an
-internal loop, so the test-coverage threshold is applied afterwards, to the
-unrounded span parsed from the hit table (:func:`is_leak`).
+internal loop, so the coverage threshold is applied afterwards, to the
+unrounded spans parsed from the hit table (:func:`is_leak`). With ``-c 0`` the
+``--cov-mode`` value has no effect on what mmseqs reports.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,9 +56,23 @@ COMMON = [
     "0",
 ]
 
-# Test-set leakage criterion: >= 30 % identity over >= 80 % of the test chain.
+# Test-set leakage criterion: >= 30 % identity over >= 80 % of the test chain
+# (rule "test") or of either chain (rule "either").
 LEAKAGE_MIN_SEQ_ID = 0.3
 LEAKAGE_MIN_TEST_COV = 0.8
+LEAKAGE_MIN_COV = LEAKAGE_MIN_TEST_COV
+LEAKAGE_RULES = ("test", "either")
+# The project owner decides D2; until then the build keeps the committed rule.
+DEFAULT_LEAKAGE_RULE = "test"
+LEAKAGE_RULE_COVERAGE_OF = {
+    "test": "the test chain",
+    "either": "the test chain or the training chain (at least one of the two)",
+}
+# Exact-substring containment (either direction) the release gate rejects
+# whatever the rule; three real containment pairs are only 21-22 aa long.
+SUBSTRING_MIN_LEN = 20
+# Written by the redundancy step into its output dir, read by the package step.
+LEAKAGE_RULE_FILE = "leakage_rule.json"
 # --cov-mode 1 = coverage of the target; the target is always the test set.
 LEAKAGE_COV_MODE = 1
 # Coverage threshold handed to mmseqs. 0 on purpose: any value above 0 makes
@@ -82,9 +109,19 @@ def cluster_tsv_groups(tsv: Path) -> dict:
     return groups
 
 
+def check_rule(rule: str) -> str:
+    """Return ``rule`` if it is one of ``LEAKAGE_RULES``, else raise."""
+    if rule not in LEAKAGE_RULES:
+        raise ValueError(
+            f"unknown leakage rule {rule!r}; expected one of {LEAKAGE_RULES}"
+        )
+    return rule
+
+
 @dataclass(frozen=True)
 class LeakageHit:
-    """One training/test alignment that meets the leakage criterion."""
+    """One reported training/test alignment (:func:`parse_leakage_hits`
+    returns every alignment; :func:`is_leak` applies the criterion)."""
 
     train_id: str
     test_id: str
@@ -105,8 +142,9 @@ def leakage_search_cmd(
     Query = training chains, target = test chains, ``--min-seq-id 0.3`` and
     ``--cov-mode 1 -c 0``; every other option is the shared ``COMMON`` block.
     mmseqs gets no coverage threshold, so it aligns every prefilter hit
-    whatever the length ratio; the >= 80 % test-coverage threshold is applied
-    to the parsed hits (:func:`is_leak`).
+    whatever the length ratio; the >= 80 % coverage threshold of the chosen
+    rule is applied to the parsed hits (:func:`is_leak`). The command is the
+    same for every rule.
     """
     return [
         "mmseqs",
@@ -115,6 +153,13 @@ def leakage_search_cmd(
         str(test_fa),
         str(out_tsv),
         str(tmp),
+        *leakage_search_options(),
+    ]
+
+
+def leakage_search_options() -> list[str]:
+    """The options of :func:`leakage_search_cmd` (everything after the paths)."""
+    return [
         "--min-seq-id",
         str(LEAKAGE_MIN_SEQ_ID),
         "-c",
@@ -153,17 +198,90 @@ def parse_leakage_hits(tsv: Path) -> list[LeakageHit]:
     return hits
 
 
-def is_leak(hit: LeakageHit) -> bool:
+def is_leak(hit: LeakageHit, rule: str = DEFAULT_LEAKAGE_RULE) -> bool:
     """The leakage criterion on one reported alignment. Identity >= 30 % is
-    enforced by mmseqs (``--min-seq-id``); test coverage is checked here."""
-    return hit.test_cov >= LEAKAGE_MIN_TEST_COV
+    enforced by mmseqs (``--min-seq-id``); coverage is checked here: of the
+    test chain (rule ``"test"``), or of the test or the training chain (rule
+    ``"either"``)."""
+    check_rule(rule)
+    if hit.test_cov >= LEAKAGE_MIN_COV:
+        return True
+    return rule == "either" and hit.train_cov >= LEAKAGE_MIN_COV
+
+
+def find_leaks(
+    train_fa: Path,
+    test_fa: Path,
+    out_tsv: Path,
+    tmp: Path,
+    log: Path,
+    rule: str = DEFAULT_LEAKAGE_RULE,
+) -> list[LeakageHit]:
+    """Every training/test pair that meets the leakage criterion of ``rule``
+    (one row per pair mmseqs reports). ``out_tsv`` keeps every alignment
+    mmseqs reported, including those below the coverage threshold."""
+    check_rule(rule)
+    run(leakage_search_cmd(train_fa, test_fa, out_tsv, tmp), log)
+    return [h for h in parse_leakage_hits(out_tsv) if is_leak(h, rule)]
 
 
 def find_test_coverage_leaks(
     train_fa: Path, test_fa: Path, out_tsv: Path, tmp: Path, log: Path
 ) -> list[LeakageHit]:
-    """Every training/test pair with >= 30 % identity over >= 80 % of the test
-    chain (one row per pair mmseqs reports). ``out_tsv`` keeps every alignment
-    mmseqs reported, including those below the coverage threshold."""
-    run(leakage_search_cmd(train_fa, test_fa, out_tsv, tmp), log)
-    return [h for h in parse_leakage_hits(out_tsv) if is_leak(h)]
+    """:func:`find_leaks` under rule ``"test"`` (>= 80 % of the test chain)."""
+    return find_leaks(train_fa, test_fa, out_tsv, tmp, log, rule="test")
+
+
+def mmseqs_version() -> str | None:
+    """``mmseqs version`` output, or None when it cannot be run."""
+    try:
+        out = subprocess.run(
+            ["mmseqs", "version"], check=True, capture_output=True, text=True
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def leakage_rule_record(rule: str) -> dict:
+    """Provenance of the leakage definition a build used (recorded by the
+    redundancy step, copied into the release MANIFEST)."""
+    check_rule(rule)
+    return {
+        "rule": rule,
+        "min_seq_id": LEAKAGE_MIN_SEQ_ID,
+        "min_coverage": LEAKAGE_MIN_COV,
+        "coverage_of": LEAKAGE_RULE_COVERAGE_OF[rule],
+        "coverage_definition": "aligned span / chain length, gaps included",
+        "evalue": "mmseqs easy-search default (1e-3), test chains as target DB",
+        "stage2_search": "mmseqs easy-search training (query) vs test (target) "
+        + " ".join(leakage_search_options()),
+        "stage1_cluster": "mmseqs easy-cluster --min-seq-id 0.3 -c 0.8 "
+        + " ".join(COMMON)
+        + " (training + test together; unchanged by the rule)",
+        "substring_gate_min_len": SUBSTRING_MIN_LEN,
+        "mmseqs_version": mmseqs_version(),
+    }
+
+
+def write_leakage_rule(out_dir: Path, rule: str) -> Path:
+    """Record the rule a redundancy run applied, as ``<out_dir>/leakage_rule.json``."""
+    path = Path(out_dir) / LEAKAGE_RULE_FILE
+    path.write_text(json.dumps(leakage_rule_record(rule), indent=2) + "\n")
+    return path
+
+
+def read_leakage_record(out_dir: Path) -> dict | None:
+    """The recorded leakage provenance, or None when no run recorded one."""
+    path = Path(out_dir) / LEAKAGE_RULE_FILE
+    if not path.exists():
+        return None
+    rec = json.loads(path.read_text())
+    check_rule(rec.get("rule"))
+    return rec
+
+
+def read_leakage_rule(out_dir: Path) -> str | None:
+    """The rule recorded in ``out_dir``, or None when none was recorded."""
+    rec = read_leakage_record(out_dir)
+    return None if rec is None else rec["rule"]

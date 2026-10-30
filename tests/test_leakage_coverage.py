@@ -17,14 +17,28 @@ The fixtures below rebuild both cases from seeded random sequences:
                   identity, but the training chain is shorter than 80 % of the
                   test chain, so any mmseqs coverage threshold above 0 skips the
                   pair before alignment.
-* fragment      - a training chain covering only half of a test chain (no leak)
+* fragment      - a training chain that is exactly the first half of a test
+                  chain: the test chain CONTAINS a shorter training chain. Not a
+                  leak under the "test" rule (50 % of the test chain), a leak
+                  under the "either" rule (100 % of the training chain), and an
+                  exact-substring containment the release gate always rejects
+* mutated fragment - the second half of the same test chain with a
+                  substitution every 8th residue: a leak only under "either",
+                  and no shared 20-mer, so the substring check passes it
 * unrelated     - a random training chain (no leak)
+
+Leakage rules (decision D2, ``trizod.dataset.mmseqs.LEAKAGE_RULES``):
+"test" (default) = >= 80 % of the test chain; "either" = >= 80 % of the test
+chain or of the training chain, i.e. of the shorter one. Whatever the rule, the
+release gate also fails on exact-substring containment of >= 20 aa in either
+direction, and it checks the rule the redundancy step recorded.
 
 mmseqs-dependent tests skip cleanly when the binary is not on PATH.
 """
 
 from __future__ import annotations
 
+import json
 import random
 import shutil
 import subprocess
@@ -34,7 +48,7 @@ import pytest
 
 from trizod.dataset import mmseqs as mm
 from trizod.dataset import package_release, redundancy
-from trizod.io.fasta import write_fasta
+from trizod.io.fasta import read_fasta, write_fasta
 
 requires_mmseqs = pytest.mark.skipif(
     shutil.which("mmseqs") is None, reason="mmseqs binary not found in PATH"
@@ -51,6 +65,7 @@ FRAG_TRAIN = "902_1_1_1"
 UNRELATED_TRAIN = "903_1_1_1"
 DELETION_TEST = "103_1_1_1"
 DELETION_TRAIN = "904_1_1_1"
+MUTFRAG_TRAIN = "906_1_1_1"
 
 
 def _rand(rng: random.Random, n: int) -> str:
@@ -63,6 +78,10 @@ def _substitute(seq: str, positions: list[int]) -> str:
     for p in positions:
         s[p] = AA[(AA.index(s[p]) + 7) % len(AA)]
     return "".join(s)
+
+
+def _shares_kmer(a: str, b: str, k: int) -> bool:
+    return any(a[i : i + k] in b for i in range(len(a) - k + 1))
 
 
 def _fixture_seqs() -> tuple[dict[str, str], dict[str, str]]:
@@ -88,6 +107,10 @@ def _fixture_seqs() -> tuple[dict[str, str], dict[str, str]]:
     deletion_test = _rand(rng, 124)
     test[DELETION_TEST] = deletion_test
     train[DELETION_TRAIN] = deletion_test[:50] + deletion_test[75:]
+    # no further random draws: derived from frag_test so the above stay fixed
+    train[MUTFRAG_TRAIN] = _substitute(frag_test[50:], list(range(3, 50, 8)))
+    assert not _shares_kmer(train[MUTFRAG_TRAIN], frag_test, 20)
+    assert train[FRAG_TRAIN] in frag_test
     assert len(train[RATIO_TRAIN]) == 124 and len(test[RATIO_TEST]) == 99
     assert len(train[DELETION_TRAIN]) == 99 and len(test[DELETION_TEST]) == 124
     assert contain_test in train[CONTAIN_TRAIN]
@@ -294,9 +317,10 @@ def test_stage2_drops_containment_and_length_ratio_leaks(fastas, tmp_path):
         train_fa, test_fa, tmp_path / "hits.tsv", tmp_path / "tmp", tmp_path / "log"
     )
     assert removed == {CONTAIN_TRAIN, RATIO_TRAIN, DELETION_TRAIN}
-    # the criterion is coverage of the TEST chain: a training fragment that
-    # covers half of a test chain is not a leak, nor is an unrelated chain
+    # the default criterion is coverage of the TEST chain: a training fragment
+    # that covers half of a test chain is not a leak, nor is an unrelated chain
     assert FRAG_TRAIN not in removed
+    assert MUTFRAG_TRAIN not in removed
     assert UNRELATED_TRAIN not in removed
 
 
@@ -320,13 +344,16 @@ def test_gate_fails_on_containment_and_reports_pairs(tmp_path):
         DELETION_TEST,
     ):
         assert tid in msg
-    assert FRAG_TRAIN not in msg and UNRELATED_TRAIN not in msg
+    # the exact half-length fragment is reported by the substring check, not
+    # by the (default, test-coverage) rule; the mutated one by neither
+    assert FRAG_TRAIN in msg
+    assert MUTFRAG_TRAIN not in msg and UNRELATED_TRAIN not in msg
 
 
 @requires_mmseqs
 def test_gate_fails_on_length_ratio_pair_alone(tmp_path):
     train, test = _fixture_seqs()
-    train = {k: v for k, v in train.items() if k != CONTAIN_TRAIN}
+    train = {k: train[k] for k in (RATIO_TRAIN, MUTFRAG_TRAIN, UNRELATED_TRAIN)}
     bundle = _make_bundle(tmp_path, train, test)
     with pytest.raises(SystemExit) as exc:
         package_release.assert_no_leakage(bundle)
@@ -336,19 +363,19 @@ def test_gate_fails_on_length_ratio_pair_alone(tmp_path):
 @requires_mmseqs
 def test_gate_fails_on_shorter_training_chain_spanning_test_chain(tmp_path):
     train, test = _fixture_seqs()
-    train = {k: train[k] for k in (DELETION_TRAIN, FRAG_TRAIN, UNRELATED_TRAIN)}
+    train = {k: train[k] for k in (DELETION_TRAIN, MUTFRAG_TRAIN, UNRELATED_TRAIN)}
     bundle = _make_bundle(tmp_path, train, test)
     with pytest.raises(SystemExit) as exc:
         package_release.assert_no_leakage(bundle)
     msg = str(exc.value)
     assert DELETION_TRAIN in msg and DELETION_TEST in msg
-    assert FRAG_TRAIN not in msg
+    assert MUTFRAG_TRAIN not in msg
 
 
 @requires_mmseqs
 def test_gate_passes_clean_bundle_and_leaves_it_untouched(tmp_path, capsys):
     train, test = _fixture_seqs()
-    clean = {k: train[k] for k in (FRAG_TRAIN, UNRELATED_TRAIN)}
+    clean = {k: train[k] for k in (MUTFRAG_TRAIN, UNRELATED_TRAIN)}
     bundle = _make_bundle(tmp_path, clean, test)
     before = sorted(p.relative_to(bundle) for p in bundle.rglob("*"))
     package_release.assert_no_leakage(bundle)
@@ -357,6 +384,8 @@ def test_gate_passes_clean_bundle_and_leaves_it_untouched(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "leakage gate: OK" in out
     assert "80 %" in out  # the coverage criterion is stated in the report
+    assert "rule 'test'" in out  # ... with the rule it was checked under
+    assert "exact-substring" in out and "20 aa" in out
 
 
 def test_gate_still_fails_on_exact_sequence_match(tmp_path):
@@ -365,3 +394,370 @@ def test_gate_still_fails_on_exact_sequence_match(tmp_path):
     bundle = _make_bundle(tmp_path, leaked, test)
     with pytest.raises(SystemExit, match="exact-sequence"):
         package_release.assert_no_leakage(bundle)
+
+
+# ===================================================== leakage rule (D2)
+
+
+def _hit(test_cov: float, train_cov: float) -> mm.LeakageHit:
+    return mm.LeakageHit(
+        train_id="tr",
+        test_id="te",
+        pident=50.0,
+        evalue=1e-10,
+        bits=100.0,
+        train_cov=train_cov,
+        test_cov=test_cov,
+        train_len=100,
+        test_len=100,
+    )
+
+
+def test_leakage_rules_and_default():
+    """Two rules; the default stays "test" until the project owner decides D2."""
+    assert mm.LEAKAGE_RULES == ("test", "either")
+    assert mm.DEFAULT_LEAKAGE_RULE == "test"
+    assert mm.SUBSTRING_MIN_LEN == 20
+
+
+@pytest.mark.parametrize(
+    "test_cov, train_cov, as_test, as_either",
+    [
+        (1.0, 0.3, True, True),  # training construct contains the test chain
+        (0.5, 1.0, False, True),  # test chain contains the training chain
+        (0.8, 0.8, True, True),  # boundary, both sides
+        (0.79, 0.79, False, False),  # below on both sides
+        (0.79, 0.8, False, True),  # boundary on the training side only
+    ],
+)
+def test_is_leak_per_rule(test_cov, train_cov, as_test, as_either):
+    hit = _hit(test_cov, train_cov)
+    assert mm.is_leak(hit) is as_test  # default rule
+    assert mm.is_leak(hit, rule="test") is as_test
+    assert mm.is_leak(hit, rule="either") is as_either
+
+
+def test_unknown_rule_is_rejected():
+    with pytest.raises(ValueError, match="leakage rule"):
+        mm.is_leak(_hit(1.0, 1.0), rule="both")
+
+
+def test_leakage_rule_record_roundtrip(tmp_path):
+    assert mm.read_leakage_rule(tmp_path) is None
+    path = mm.write_leakage_rule(tmp_path, "either")
+    assert path == tmp_path / mm.LEAKAGE_RULE_FILE
+    rec = json.loads(path.read_text())
+    assert rec["rule"] == "either"
+    assert rec["min_seq_id"] == 0.3 and rec["min_coverage"] == 0.8
+    assert "training chain" in rec["coverage_of"]
+    assert mm.read_leakage_rule(tmp_path) == "either"
+    with pytest.raises(ValueError, match="leakage rule"):
+        mm.write_leakage_rule(tmp_path, "both")
+
+
+@requires_mmseqs
+def test_stage2_either_rule_drops_training_chain_inside_test_chain(fastas, tmp_path):
+    """A test chain that CONTAINS a shorter training chain (51677 with
+    51674-51676 in the audit): missed by "test", caught by "either"."""
+    train_fa, test_fa = fastas
+    by_rule = {
+        rule: redundancy.stage2_search_removal(
+            train_fa,
+            test_fa,
+            tmp_path / f"{rule}_hits.tsv",
+            tmp_path / f"{rule}_tmp",
+            tmp_path / f"{rule}.log",
+            rule=rule,
+        )
+        for rule in ("test", "either")
+    }
+    by_test, by_either = by_rule["test"], by_rule["either"]
+    assert FRAG_TRAIN not in by_test and MUTFRAG_TRAIN not in by_test
+    assert by_either == by_test | {FRAG_TRAIN, MUTFRAG_TRAIN}
+    assert UNRELATED_TRAIN not in by_either
+
+
+@requires_mmseqs
+def test_find_leaks_reports_training_chain_coverage(fastas, tmp_path):
+    train_fa, test_fa = fastas
+    hits = mm.find_leaks(
+        train_fa,
+        test_fa,
+        tmp_path / "h.tsv",
+        tmp_path / "tmp",
+        tmp_path / "log",
+        rule="either",
+    )
+    pairs = {(h.train_id, h.test_id): h for h in hits}
+    frag = pairs[(FRAG_TRAIN, FRAG_TEST)]
+    assert frag.train_cov == pytest.approx(1.0) and frag.test_cov < 0.8
+    assert frag.pident == pytest.approx(100.0)
+    mut = pairs[(MUTFRAG_TRAIN, FRAG_TEST)]
+    assert mut.train_cov >= 0.8 and mut.test_cov < 0.8
+
+
+# ------------------------------------------------- substring containment
+
+
+def test_substring_containments_both_directions():
+    test = {"T1": "M" + "ACDEFGHIKLMNPQRSTVWYACDEF" + "W" * 10, "T2": "Q" * 40}
+    train = {
+        "a.fasta:inside_test": "ACDEFGHIKLMNPQRSTVWY",  # 20 aa inside T1
+        "a.fasta:too_short": "CDEFGHIKLMNPQRSTVWY",  # 19 aa inside T1
+        "a.fasta:contains_test": "GG" + test["T1"] + "GG",  # T1 inside it
+        "a.fasta:unrelated": "HHHHHHHHHHHHHHHHHHHHHHHHH",
+    }
+    found = package_release.find_substring_containments(train, test)
+    got = {(c.train_label, c.test_id, c.direction, c.length) for c in found}
+    assert got == {
+        ("a.fasta:inside_test", "T1", "train in test", 20),
+        ("a.fasta:contains_test", "T1", "test in train", len(test["T1"])),
+    }
+
+
+def test_substring_check_threshold_is_configurable():
+    test = {"T1": "ACDEFGHIKLMNPQRSTVWYW"}
+    train = {"x:short": "ACDEFGHIKL"}  # 10 aa inside T1
+    assert package_release.find_substring_containments(train, test) == []
+    found = package_release.find_substring_containments(train, test, min_len=10)
+    assert [(c.train_label, c.direction) for c in found] == [
+        ("x:short", "train in test")
+    ]
+
+
+@requires_mmseqs
+def test_gate_fails_on_substring_containment_under_test_rule(tmp_path):
+    """The exact half-length fragment passes the test-coverage rule (50 % of
+    the test chain) but the gate still fails it: substring containment of
+    >= 20 aa is rejected whatever the rule."""
+    train, test = _fixture_seqs()
+    train = {k: train[k] for k in (FRAG_TRAIN, UNRELATED_TRAIN)}
+    bundle = _make_bundle(tmp_path, train, test)
+    with pytest.raises(SystemExit) as exc:
+        package_release.assert_no_leakage(bundle, rule="test")
+    msg = str(exc.value)
+    assert "exact-substring containment" in msg
+    assert FRAG_TRAIN in msg and FRAG_TEST in msg
+    assert "train in test" in msg
+    assert "0 (training record, test chain) pairs" in msg  # coverage rule: clean
+
+
+@requires_mmseqs
+def test_gate_rule_either_rejects_what_rule_test_passes(tmp_path, capsys):
+    train, test = _fixture_seqs()
+    train = {k: train[k] for k in (MUTFRAG_TRAIN, UNRELATED_TRAIN)}
+    bundle = _make_bundle(tmp_path, train, test)
+    package_release.assert_no_leakage(bundle, rule="test")
+    assert "leakage gate: OK" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        package_release.assert_no_leakage(bundle, rule="either")
+    msg = str(exc.value)
+    assert MUTFRAG_TRAIN in msg and FRAG_TEST in msg
+    assert "rule 'either'" in msg
+    assert UNRELATED_TRAIN not in msg
+
+
+# ------------------------------------- package step: the recorded rule
+
+
+def _make_release_inputs(
+    root: Path, train: dict[str, str], test: dict[str, str], rule: str | None
+) -> Path:
+    """A minimal repo root + work dir that ``package_release.main`` accepts."""
+    work = root / "work"
+    (root / "docs" / "dataset").mkdir(parents=True)
+    (root / "docs" / "dataset" / "bundle-README.md").write_text("# bundle\n")
+    chezod_dir = root / "data" / "external" / "chezod117"
+    chezod_dir.mkdir(parents=True)
+    items = list(test.items())
+    write_fasta(dict(items[:1]), chezod_dir / "CheZOD117_test_set.fasta")
+    (work / "testset").mkdir(parents=True)
+    write_fasta(dict(items[1:]), work / "testset" / "TriZOD_test_set.fasta")
+    (work / "testset" / "TriZOD_test_set_labels.tsv").write_text("id\tlabel\n")
+    mm_dir = work / "mmseqs"
+    mm_dir.mkdir(parents=True)
+    clusters = "".join(f"{k}\t{k}\n" for k in train)
+    for tier in package_release.TIERS:
+        write_fasta(train, mm_dir / f"train_{tier}_best.fasta")
+        write_fasta(train, mm_dir / f"train_{tier}.fasta")
+        (mm_dir / f"train_{tier}_clu_best.tsv").write_text(clusters)
+        (mm_dir / f"train_{tier}_clu.tsv").write_text(clusters)
+        scored = root / "data" / "interim" / "scored" / tier
+        scored.mkdir(parents=True)
+        (scored / "scores.json").write_text('{"ID": "x"}\n')
+    if rule is not None:
+        mm.write_leakage_rule(mm_dir, rule)
+    return work
+
+
+def _package(root: Path, work: Path, *extra: str) -> Path:
+    package_release.main(
+        ["--version", "t", "--work-dir", str(work), "--root", str(root), *extra]
+    )
+    return work / "release_bundle" / "trizod-dataset-t"
+
+
+@requires_mmseqs
+def test_package_gate_checks_the_rule_the_build_recorded(tmp_path):
+    train, test = _fixture_seqs()
+    clean_for_test = {k: train[k] for k in (MUTFRAG_TRAIN, UNRELATED_TRAIN)}
+
+    root_t = tmp_path / "rule_test"
+    work_t = _make_release_inputs(root_t, clean_for_test, test, "test")
+    manifest = json.loads((_package(root_t, work_t) / "MANIFEST.json").read_text())
+    leak = manifest["leakage"]
+    assert leak["rule"] == "test"
+    assert leak["recorded_by_build"] is True
+    assert leak["substring_gate_min_len"] == 20
+    assert leak["gate"] == "passed"
+
+    root_e = tmp_path / "rule_either"
+    work_e = _make_release_inputs(root_e, clean_for_test, test, "either")
+    with pytest.raises(SystemExit) as exc:
+        _package(root_e, work_e)
+    assert MUTFRAG_TRAIN in str(exc.value)
+    bundle = work_e / "release_bundle" / "trizod-dataset-t"
+    assert not (bundle / "MANIFEST.json").exists()  # no manifest for a failed gate
+
+
+def test_package_refuses_a_rule_other_than_the_recorded_one(tmp_path):
+    train, test = _fixture_seqs()
+    work = _make_release_inputs(
+        tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test, "test"
+    )
+    with pytest.raises(SystemExit, match="recorded"):
+        _package(tmp_path, work, "--leakage-rule", "either")
+
+
+def test_package_requires_a_recorded_rule_or_an_explicit_one(tmp_path):
+    train, test = _fixture_seqs()
+    work = _make_release_inputs(
+        tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test, None
+    )
+    with pytest.raises(SystemExit, match="leakage rule"):
+        _package(tmp_path, work)
+
+
+@requires_mmseqs
+def test_package_explicit_rule_without_record_is_marked_unrecorded(tmp_path):
+    train, test = _fixture_seqs()
+    work = _make_release_inputs(
+        tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test, None
+    )
+    bundle = _package(tmp_path, work, "--leakage-rule", "either")
+    leak = json.loads((bundle / "MANIFEST.json").read_text())["leakage"]
+    assert leak["rule"] == "either" and leak["recorded_by_build"] is False
+
+
+# ------------------------------------------ redundancy step end to end
+
+
+def _make_redundancy_inputs(root: Path) -> Path:
+    train, test = _fixture_seqs()
+    rng = random.Random(7)
+    pool = dict(train)
+    pool.update({f"95{i}_1_1_1": _rand(rng, 80 + 7 * i) for i in range(6)})
+    work = root / "work"
+    for tier in redundancy.TIERS:  # every tier holds the whole pool (nested)
+        d = work / "final_dataset" / tier
+        d.mkdir(parents=True)
+        write_fasta(pool, d / f"{tier}.fasta")
+    chezod_dir = root / "data" / "external" / "chezod117"
+    chezod_dir.mkdir(parents=True)
+    items = list(test.items())
+    write_fasta(dict(items[:1]), chezod_dir / "CheZOD117_test_set.fasta")
+    (work / "testset").mkdir(parents=True)
+    write_fasta(dict(items[1:]), work / "testset" / "TriZOD_test_set.fasta")
+    return work
+
+
+@requires_mmseqs
+@pytest.mark.parametrize("rule", ["test", "either"])
+def test_redundancy_applies_and_records_the_rule(tmp_path, rule):
+    work = _make_redundancy_inputs(tmp_path)
+    argv = ["--work-dir", str(work), "--root", str(tmp_path)]
+    if rule != "test":
+        argv += ["--leakage-rule", rule]
+    redundancy.main(argv)
+    out = work / "mmseqs"
+    assert mm.read_leakage_rule(out) == rule
+    kept = set(read_fasta(out / "unfiltered_no_testset.fasta"))
+    for leak in (CONTAIN_TRAIN, RATIO_TRAIN, DELETION_TRAIN):
+        assert leak not in kept
+    inside_test = {FRAG_TRAIN, MUTFRAG_TRAIN}
+    if rule == "either":
+        assert not inside_test & kept
+    else:
+        assert inside_test <= kept
+    assert UNRELATED_TRAIN in kept
+
+
+# ------------------------------------------------------- CLI + script
+
+
+def test_cli_forwards_leakage_rule(monkeypatch):
+    from typer.testing import CliRunner
+
+    from trizod.cli.main import LeakageRule, app
+
+    assert tuple(r.value for r in LeakageRule) == mm.LEAKAGE_RULES
+    seen = {}
+    monkeypatch.setattr(redundancy, "main", lambda argv: seen.update(red=argv))
+    monkeypatch.setattr(package_release, "main", lambda argv: seen.update(pkg=argv))
+    runner = CliRunner()
+    r = runner.invoke(app, ["dataset", "redundancy", "--leakage-rule", "either"])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["dataset", "package", "--leakage-rule", "either"])
+    assert r.exit_code == 0, r.output
+    for argv in (seen["red"], seen["pkg"]):
+        assert argv[argv.index("--leakage-rule") + 1] == "either"
+    # the default is not forwarded: redundancy falls back to "test", package
+    # to the rule the build recorded
+    seen.clear()
+    assert runner.invoke(app, ["dataset", "redundancy"]).exit_code == 0
+    assert runner.invoke(app, ["dataset", "package"]).exit_code == 0
+    assert "--leakage-rule" not in seen["red"] + seen["pkg"]
+    r = runner.invoke(app, ["dataset", "redundancy", "--leakage-rule", "both"])
+    assert r.exit_code != 0
+
+
+def _run_build_script(tmp_path: Path, *args: str) -> list[str]:
+    """Run a copy of scripts/build_dataset.sh with stub uv/mmseqs that log
+    their arguments; returns the logged ``uv`` calls."""
+    repo = Path(__file__).resolve().parents[1]
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy(repo / "scripts" / "build_dataset.sh", root / "scripts")
+    for tier in ("unfiltered", "tolerant", "moderate", "strict"):
+        d = root / "data" / "interim" / "scored" / tier
+        d.mkdir(parents=True)
+        (d / "scores.json").write_text("{}\n")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "uv.log"
+    (bindir / "uv").write_text(f'#!/bin/sh\necho "$*" >> "{log}"\n')
+    (bindir / "mmseqs").write_text("#!/bin/sh\necho 18-test\n")
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    subprocess.run(
+        ["bash", str(root / "scripts" / "build_dataset.sh"), *args],
+        check=True,
+        env=env,
+        capture_output=True,
+    )
+    return log.read_text().splitlines()
+
+
+def test_build_script_passes_leakage_rule_to_redundancy_and_package(tmp_path):
+    calls = _run_build_script(tmp_path, "9.9", "--leakage-rule", "either")
+    red = [c for c in calls if "dataset redundancy" in c]
+    pkg = [c for c in calls if "dataset package" in c]
+    assert red == ["run trizod dataset redundancy --leakage-rule either"]
+    assert pkg == ["run trizod dataset package --version 9.9 --leakage-rule either"]
+
+
+def test_build_script_default_rule_is_test(tmp_path):
+    calls = _run_build_script(tmp_path)
+    red = [c for c in calls if "dataset redundancy" in c]
+    assert red == ["run trizod dataset redundancy --leakage-rule test"]
