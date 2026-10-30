@@ -29,7 +29,8 @@ trizod-dataset-2026-08/
 ├── scores/<tier>/scores.json     per-residue labels (one JSON object per line)
 ├── test/                         CheZOD117 + TriZOD test FASTAs
 ├── trizod_dataset.parquet        the same release as ONE table (70 columns,
-│                                 16,851 rows, one row per chain)
+│                                 16,851 rows, one row per chain), sorted by
+│                                 entry_id, id in 500-row groups
 ├── trizod_shifts.parquet         every assigned shift on a canonical residue,
 │                                 backbone AND side chain (11,839,037 rows),
 │                                 raw and re-referenced
@@ -38,6 +39,15 @@ trizod-dataset-2026-08/
 
 `MANIFEST.json` covers the FASTA/JSON layer; the two Parquet files are built
 from it by `scripts/build_parquet_dataset.py` and carry the same records.
+
+`trizod_dataset.parquet` is sorted by `(entry_id, id)` in **string** order
+(`entry_id` is a string, so "10001" sorts before "979") and written in 500-row
+groups with min/max statistics on every column. A reader that filters on
+`entry_id` (DuckDB, pyarrow, or a browser over HTTP range requests) fetches only
+the matching row group. `id` is sorted within an entry but is not globally
+monotone ("1000_1_1_1" sorts after "10000_1_1_1"), so filter on `entry_id`
+when pruning matters. `trizod_shifts.parquet` is sorted by
+`(id, seq_id, atom_id)`.
 
 ## `scores.json` fields (one record per line; `ID` matches the FASTA header)
 
@@ -85,7 +95,7 @@ chain — of every released chain: **11,839,037** rows over all 16,851 chains
 
 Columns: `id`, `seq_id`, `comp_id`, `atom_id`, `atom_type`, `val_ppm`,
 `val_err_ppm`, `ambiguity_code`, `val_corrected_ppm`, `offset_applied_ppm`,
-`offset_source`, `is_backbone`. Every numeric field declares its unit in the
+`offset_source`, `is_backbone`, `mad_z`, `is_far_outlier`. Every numeric field declares its unit in the
 Parquet **field** metadata and the table declares the correction formula, so a
 consumer reading the schema cannot get the units wrong.
 
@@ -155,6 +165,33 @@ break-even rather than above it.
 Those are genuine gross deposition errors that LACS detects correctly, but only
 5 of the 9 demonstrably transfer to the side chain and the difference cannot be
 adjudicated one chain at a time.
+
+### Far-outlier flag: `mad_z` and `is_far_outlier`
+
+Deposition errors survive in BMRB: a CB at −939 ppm, a carbonyl at 1,756 ppm,
+whole spectra referenced to the wrong nucleus. Following Sandro Kuppel, every C,
+CA, CB and N shift is measured against the median and **raw** median absolute
+deviation (MAD) of its residue type × atom, `mad_z = (val_ppm − median) / MAD`
+(rounded to 0.01), and `is_far_outlier` is true beyond **8 MADs for C, CA and N** and **12 MADs
+for CB**. The MAD is not scaled by 1.4826, so 8 MADs is about 5.4 normal σ;
+divide `mad_z` by 1.4826 for σ units.
+
+- **5,807 of 4,589,165** assessed shifts (0.13 %) are flagged, in 1,674 chains;
+  1,848 of them in 512 strict-tier chains. 65 of the 575 test chains carry at
+  least one flag.
+- **Not assessed** (both columns NULL, never false): protons, side chains, and
+  the N of residue 1, the free N-terminal amine near 35–40 ppm, which is real
+  physics.
+- **A flag, not a filter.** No row is dropped and the G-scores never read it:
+  the scorer already caps each residue's per-atom deviation and applies its own
+  `Val_err` and ambiguity cuts. Drop flagged rows yourself when you train on
+  shifts.
+- The medians and MADs come from a reference **frozen in the code repository**
+  (`trizod/shifts/mad_reference.csv`, 79 residue × atom groups built from this
+  release's shift table, test chains included; with at least 3,234 shifts per
+  group, no single chain moves a median), embedded in the file as the
+  `mad_reference` metadata key, so the flag does not move when BMRB does. `far_outlier_rule` restates the
+  rule in the file.
 
 ## Use for ML
 
@@ -264,7 +301,9 @@ depositions inflate the raw `n_entity_assembly_rows`.
 chain, raw (`val_ppm`) beside the re-referenced value (`val_corrected_ppm`)
 wherever an offset demonstrably transfers. 3,458,851 of them are side-chain
 values that previous releases discarded entirely. See the section above for the
-three re-referencing regimes and for what the table does not cover.
+three re-referencing regimes and for what the table does not cover. Backbone
+heavy-atom shifts carry a far-outlier flag (`mad_z`, `is_far_outlier`), requested
+by Sandro Kuppel; it is a flag only, and changes no score.
 
 ### 5. What moved
 
@@ -336,7 +375,14 @@ exactly why the third column exists. `off_<atom>` was documented as ppm in the
 v0.3.0 README and datasheet; it never was. Migration is mechanical:
 `off_<a>` → `off_<a>_sigma`, `lacs_off_<a>` → `lacs_off_<a>_ppm`.
 
-### 8. Known carry-over
+### 8. The main table is sorted for selective reads
+
+`trizod_dataset.parquet` was one unsorted row group. It is now sorted by
+`(entry_id, id)` in 500-row groups with statistics (requested by David
+Wagemann), so a filter on `entry_id` reads one group instead of the whole file.
+Columns and values are unchanged; only the row order differs.
+
+### 9. Known carry-over
 
 v0.3.0's tier counts already reflected a superseded scoring run (issue #20).
 This release is the first built end to end on the corrected scores *and* the

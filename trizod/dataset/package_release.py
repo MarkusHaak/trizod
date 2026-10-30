@@ -15,7 +15,7 @@ Core bundle (~115 MB):
   MANIFEST.json
 
 Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
-Optional (~50 MB): shifts/trizod_shifts.parquet — every assigned chemical
+Optional (~95 MB): shifts/trizod_shifts.parquet — every assigned chemical
 shift of every released chain, backbone and side chain, as deposited, beside the
 re-referenced value where one transfers. Staged automatically when it exists;
 build it with ``scripts/build_parquet_dataset.py --shifts-out``.

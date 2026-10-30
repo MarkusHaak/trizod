@@ -180,7 +180,10 @@ against the 575 test sequences.
 companion `trizod_shifts.parquet` (11,839,037 assigned shifts on canonical
 residues over all 16,851 chains — 8,380,186 backbone, 3,458,851 side chain, of
 which 12,643 chains carry side-chain assignments) are then built from that
-bundle by `scripts/build_parquet_dataset.py`.
+bundle by `scripts/build_parquet_dataset.py`. The main table is sorted by
+`(entry_id, id)` in 500-row groups; every C, CA, CB and N row of the shift
+table is flagged against the frozen median/MAD reference
+`trizod/shifts/mad_reference.csv`.
 
 ## 7. The leakage guarantee
 
@@ -197,4 +200,11 @@ hand-balanced benchmark, comparable to ODiNPred/SETH) and on the TriZOD test set
 ```bash
 scripts/build_dataset.sh         # the whole release end to end
 # = trizod dataset build → test-set → redundancy → representatives → package
+uv run --with pyarrow python scripts/build_parquet_dataset.py \
+    --in-bundle <bundle> --out <trizod_dataset.parquet> --shifts-out <trizod_shifts.parquet>
 ```
+
+`scripts/build_mad_reference.py` regenerates the far-outlier reference from a
+shift table. It is **not** part of a routine build: the committed reference is
+frozen on purpose, so rerun it only to move the flag deliberately, and commit
+the result.

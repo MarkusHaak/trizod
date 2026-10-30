@@ -73,7 +73,9 @@ Four layers are shipped:
    redundant 2,298 · test_trizod 460 · test_chezod117 115), `train_tier`
    (strict 1,895 · moderate 2,625 · tolerant 946 · unfiltered 337),
    `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
-   assembly-composition annotation columns.
+   assembly-composition annotation columns. Rows are sorted by
+   `(entry_id, id)` in string order and written in 500-row groups with min/max
+   statistics, so a filter on `entry_id` reads one row group.
 4. **Chemical-shift companion** — `trizod_shifts.parquet`, **11,839,037**
    assigned shifts **on canonical residues**, backbone *and* side chain, over
    all 16,851 chains (12,643 of which have side-chain assignments), one row per
@@ -88,7 +90,9 @@ Four layers are shipped:
    chains, including every PTM (HYP, SEP, TPO, PTR, TYS, ALY, MLY, M3L),
    non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA) and terminal/lipid
    groups (ACE, NH2, MYR). They are dropped because `seq_id` would not index the
-   released `sequence`; read them from the BMRB entry if you need them.
+   released `sequence`; read them from the BMRB entry if you need them. Every
+   C, CA, CB and N shift also carries the far-outlier flag `mad_z` /
+   `is_far_outlier` (§6).
 
 Held-out **test sets** (`test/`): `CheZOD117_test_set.fasta` (115 seq) and
 `TriZOD_test_set.fasta` (460 seq), with per-residue targets obtainable from the
@@ -243,6 +247,15 @@ it.
   of error); subtract the published `total_off_<atom>_ppm` instead.
 - Scores reflect the deposited shifts and conditions; re-referencing corrects
   systematic referencing errors but cannot fix fundamentally wrong depositions.
+- **Gross deposition errors are flagged, not removed.** 5,807 backbone
+  heavy-atom shifts (0.13 % of 4,589,165) in 1,674 chains lie beyond Sandro
+  Kuppel's limits of 8 raw MADs (C, CA, N) or 12 (CB) from their residue × atom
+  median and carry `is_far_outlier = true` in `trizod_shifts.parquet`; 1,848 of
+  them are in 512 strict-tier chains. They still feed the scores, where the
+  per-atom deviation cap bounds their pull. Protons, side chains and the
+  N-terminal amine are not assessed (NULL): a naive side-chain flag would also
+  catch real physics, such as paramagnetic shifts and folded Arg Nε peaks. The
+  medians and MADs are frozen in `trizod/shifts/mad_reference.csv`.
 
 ## 7. Licensing & citation
 
