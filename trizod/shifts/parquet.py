@@ -20,7 +20,6 @@ the dataset chain do not need it); it is imported lazily here, exactly like
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -30,7 +29,10 @@ from trizod.shifts.correct import (
     SIDECHAIN_CARBON_LACS_ATOM,
     SIDECHAIN_MAX_ABS_LACS_PPM,
 )
-from trizod.shifts.outliers import MAD_K, MAD_TO_SIGMA, load_mad_reference
+from trizod.shifts.outliers import MAD_K, MAD_TO_SIGMA, MAD_Z_DECIMALS, MadReference
+
+#: ``0.01`` for ``MAD_Z_DECIMALS = 2``, as the metadata states it.
+_MAD_Z_STEP = f"{10**-MAD_Z_DECIMALS:g}"
 
 #: Parquet column order. ``is_backbone`` follows the value columns: it is a
 #: filter flag, not a measurement. The far-outlier pair is appended after it.
@@ -148,10 +150,8 @@ _FIELDS = [
             "unit": "raw MAD",
             "description": "(val_ppm - median) / MAD of this comp_id+atom_id in "
             "the frozen reference (table metadata mad_reference), rounded to "
-            "0.01. MAD is NOT scaled: divide by "
-            f"{MAD_TO_SIGMA} for a normal-sigma z. NULL where "
-            "not assessed: protons, side chains, the N of residue 1, or a group "
-            "absent from the reference.",
+            f"{_MAD_Z_STEP}. MAD is NOT scaled: divide by {MAD_TO_SIGMA} for a "
+            "normal-sigma z. NULL where not assessed; see far_outlier_rule.",
         },
     ),
     (
@@ -207,18 +207,21 @@ _OFFSET_SOURCE_VALUES = (
 
 _FAR_OUTLIER_RULE = (
     "is_far_outlier = |mad_z| > k, mad_z = (val_ppm - median) / MAD rounded to "
-    "0.01 (the flag is evaluated on the rounded, published value), per "
+    f"{_MAD_Z_STEP} (the flag is evaluated on the rounded, published value), per "
     "(comp_id, atom_id), with k by atom_id: "
-    + ", ".join(f"{atom}: {k:g}" for atom, k in MAD_K.items())
-    + " (Sandro Kuppel's thresholds, read off the corpus histograms). Assessed on "
-    "the raw val_ppm of backbone heavy atoms only; protons and side chains are "
-    "NOT assessed (NULL), and neither is the N of residue 1, the N-terminal "
-    "free amine near 35-40 ppm, which is real physics. MAD is the raw median "
-    f"absolute deviation, NOT scaled by {MAD_TO_SIGMA}: k = 8 is about 5.4 normal "
-    "sigma. Median and MAD come from a reference table frozen in the code "
-    "repository (trizod/shifts/mad_reference.csv), embedded here as "
-    "mad_reference, so the flag does not drift with BMRB. Nothing is filtered: "
-    "drop the flagged rows yourself if your use needs it."
+    + ", ".join(
+        f"{atom}: {k:g} (about {k / MAD_TO_SIGMA:.1f} normal sigma)"
+        for atom, k in MAD_K.items()
+    )
+    + " (Sandro Kuppel's thresholds, read off the corpus histograms). Only the raw "
+    f"val_ppm of {', '.join(MAD_K)} is assessed; every other atom (protons, side "
+    "chains) is NOT assessed (NULL), and neither is the N of residue 1, the "
+    "N-terminal free amine near 35-40 ppm, which is real physics. MAD is the raw "
+    f"median absolute deviation, NOT scaled by {MAD_TO_SIGMA}. Median and MAD "
+    "come from a reference table frozen in the code repository "
+    "(trizod/shifts/mad_reference.csv), embedded here as mad_reference, so the "
+    "flag does not drift with BMRB. Nothing is filtered: drop the flagged rows "
+    "yourself if your use needs it."
 )
 
 PARQUET_METADATA = {
@@ -286,31 +289,13 @@ def import_pyarrow():
     return pa, pq
 
 
-def _reference_metadata(reference: pd.DataFrame) -> dict[bytes, bytes]:
-    """The far-outlier reference as JSON, keyed ``"<comp_id> <atom_id>"``."""
-    table = {
-        f"{r.comp_id} {r.atom_id}": {
-            "n": int(r.n),
-            "median_ppm": float(r.median_ppm),
-            "mad_ppm": float(r.mad_ppm),
-        }
-        for r in reference.itertuples(index=False)
-    }
-    return {
-        b"mad_reference": json.dumps(table, sort_keys=True).encode(),
-        b"mad_reference_source": str(reference.attrs.get("source", "")).encode(),
-    }
-
-
-def shift_schema(mad_reference: pd.DataFrame | None = None):
+def shift_schema(mad_reference: MadReference):
     """Arrow schema of ``trizod_shifts.parquet``, units and all.
 
-    ``mad_reference`` is the table ``mad_z`` was computed against (default: the
-    frozen one); it is embedded in the table metadata.
+    ``mad_reference`` is the reference ``mad_z`` was computed against; it is
+    embedded in the table metadata.
     """
     pa, _ = import_pyarrow()
-    if mad_reference is None:
-        mad_reference = load_mad_reference()
     fields = [
         pa.field(
             name,
@@ -321,7 +306,7 @@ def shift_schema(mad_reference: pd.DataFrame | None = None):
         for name, arrow, meta in _FIELDS
     ]
     assert [f.name for f in fields] == SHIFT_PARQUET_COLUMNS
-    metadata = {**PARQUET_METADATA, **_reference_metadata(mad_reference)}
+    metadata = {**PARQUET_METADATA, **mad_reference.metadata()}
     return pa.schema(fields, metadata=metadata)
 
 
@@ -330,7 +315,8 @@ def write_shift_parquet(
     out_path,
     compression_level: int = 19,
     batch_rows: int = 500_000,
-    mad_reference: pd.DataFrame | None = None,
+    *,
+    mad_reference: MadReference,
 ):
     """Stream ``(chain_id, DataFrame)`` pairs into the released shift Parquet.
 
@@ -342,9 +328,9 @@ def write_shift_parquet(
 
     Each frame must already carry the correction columns
     (:func:`trizod.shifts.correct.annotate_offsets`) and the far-outlier columns
-    (:func:`trizod.shifts.outliers.annotate_mad`, computed against
-    ``mad_reference``, which is embedded in the table metadata; default: the
-    frozen reference).
+    (:func:`trizod.shifts.outliers.annotate_mad`). Pass the same
+    ``mad_reference`` the frames were annotated with: it is embedded in the
+    table metadata, and a file must describe the reference its ``mad_z`` uses.
 
     Written to a sibling temp file and promoted only on success. ``frames`` is a
     lazy generator doing unguarded per-chain work, and closing a ParquetWriter

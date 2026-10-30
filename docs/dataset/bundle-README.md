@@ -188,8 +188,9 @@ divide `mad_z` by 1.4826 for σ units.
   shifts.
 - The medians and MADs come from a reference **frozen in the code repository**
   (`trizod/shifts/mad_reference.csv`, 79 residue × atom groups built from this
-  release's shift table), embedded in the file as the `mad_reference` metadata
-  key, so the flag does not move when BMRB does. `far_outlier_rule` restates the
+  release's shift table, test chains included; with at least 3,234 shifts per
+  group, no single chain moves a median), embedded in the file as the
+  `mad_reference` metadata key, so the flag does not move when BMRB does. `far_outlier_rule` restates the
   rule in the file.
 
 ## Use for ML

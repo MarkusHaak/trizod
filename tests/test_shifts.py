@@ -86,11 +86,13 @@ TOY_RECORD = {
 }
 
 
+#: The frozen far-outlier reference, loaded once.
+MAD_REFERENCE = load_mad_reference()
+
+
 def _toy_table(record=TOY_RECORD):
     df = get_deposited_shifts(TOY_SHIFTS, TOY_SEQ)
-    return annotate_mad(
-        annotate_offsets(df, chain_offsets(record)), load_mad_reference()
-    )
+    return annotate_mad(annotate_offsets(df, chain_offsets(record)), MAD_REFERENCE)
 
 
 def _row(df, seq_id, atom_id):
@@ -375,7 +377,9 @@ def test_shift_parquet_schema_documents_every_unit(tmp_path):
     from trizod.shifts import SHIFTS_PARQUET_NAME, write_shift_parquet
 
     frames = [("1_1_1_1", _toy_table())]
-    path, n_rows = write_shift_parquet(frames, tmp_path / SHIFTS_PARQUET_NAME)
+    path, n_rows = write_shift_parquet(
+        frames, tmp_path / SHIFTS_PARQUET_NAME, mad_reference=MAD_REFERENCE
+    )
     assert n_rows == len(TOY_SHIFTS)
 
     schema = pq.read_schema(path)
@@ -413,18 +417,21 @@ def test_shift_parquet_documents_the_far_outlier_rule_and_its_reference(tmp_path
     pq = pytest.importorskip("pyarrow.parquet")
     import json
 
-    from trizod.shifts import MAD_K, write_shift_parquet
+    from trizod.shifts import write_shift_parquet
 
-    path, _ = write_shift_parquet([("1_1_1_1", _toy_table())], tmp_path / "s.parquet")
+    path, _ = write_shift_parquet(
+        [("1_1_1_1", _toy_table())], tmp_path / "s.parquet", mad_reference=MAD_REFERENCE
+    )
     meta = pq.read_schema(path).metadata
     rule = meta[b"far_outlier_rule"].decode()
-    for atom, k in MAD_K.items():
-        assert f"{atom}: {k:g}" in rule
-    assert "N-terminal" in rule and "1.4826" in rule
+    for stated in ("C: 8 ", "CA: 8 ", "N: 8 ", "CB: 12 ", "about 5.4 normal sigma"):
+        assert stated in rule
+    assert "N-terminal" in rule and "1.4826" in rule and "0.01" in rule
 
     embedded = json.loads(meta[b"mad_reference"])
-    ref = load_mad_reference()
+    ref = MAD_REFERENCE.table
     assert len(embedded) == len(ref)
+    assert meta[b"mad_reference_source"].decode() == MAD_REFERENCE.source
     ala_ca = ref.set_index(["comp_id", "atom_id"]).loc[("ALA", "CA")]
     assert embedded["ALA CA"] == {
         "n": int(ala_ca.n),
@@ -444,7 +451,9 @@ def test_a_frame_without_the_outlier_columns_is_refused(tmp_path):
         get_deposited_shifts(TOY_SHIFTS, TOY_SEQ), chain_offsets(TOY_RECORD)
     )
     with pytest.raises(ValueError, match="is_far_outlier.*mad_z"):
-        write_shift_parquet([("1_1_1_1", bare)], tmp_path / "s.parquet")
+        write_shift_parquet(
+            [("1_1_1_1", bare)], tmp_path / "s.parquet", mad_reference=MAD_REFERENCE
+        )
 
 
 def test_shift_parquet_round_trip_and_join(tmp_path):
@@ -454,7 +463,9 @@ def test_shift_parquet_round_trip_and_join(tmp_path):
 
     main = {"17665_1_1_1": TOY_SEQ, "17665_2_1_1": TOY_SEQ}
     frames = [(cid, _toy_table()) for cid in main]
-    path, n_rows = write_shift_parquet(frames, tmp_path / "trizod_shifts.parquet")
+    path, n_rows = write_shift_parquet(
+        frames, tmp_path / "trizod_shifts.parquet", mad_reference=MAD_REFERENCE
+    )
 
     got = pq.read_table(path).to_pydict()
     assert set(got["id"]) == set(main)
@@ -625,6 +636,6 @@ def test_a_crashing_frame_generator_leaves_no_truncated_parquet(tmp_path):
 
     out = tmp_path / "trizod_shifts.parquet"
     with pytest.raises(RuntimeError, match="blew up"):
-        write_shift_parquet(frames(), out)
+        write_shift_parquet(frames(), out, mad_reference=MAD_REFERENCE)
     assert not out.exists()
     assert list(tmp_path.iterdir()) == []

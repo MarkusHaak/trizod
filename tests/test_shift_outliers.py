@@ -16,6 +16,7 @@ import pytest
 from trizod.constants import AA3TO1
 from trizod.shifts.outliers import (
     MAD_K,
+    MadReference,
     annotate_mad,
     compute_mad_reference,
     load_mad_reference,
@@ -33,14 +34,17 @@ def _stats(ref, comp_id, atom_id):
 
 
 #: Hand-made reference: one MAD of 1 ppm (2 ppm for N) around round medians.
-REF = pd.DataFrame(
-    {
-        "comp_id": ["ALA", "ALA", "ALA", "ALA"],
-        "atom_id": ["C", "CA", "CB", "N"],
-        "n": [100, 100, 100, 100],
-        "median_ppm": [177.0, 52.0, 19.0, 124.0],
-        "mad_ppm": [1.0, 1.0, 1.0, 2.0],
-    }
+REF = MadReference(
+    pd.DataFrame(
+        {
+            "comp_id": ["ALA", "ALA", "ALA", "ALA"],
+            "atom_id": ["C", "CA", "CB", "N"],
+            "n": [100, 100, 100, 100],
+            "median_ppm": [177.0, 52.0, 19.0, 124.0],
+            "mad_ppm": [1.0, 1.0, 1.0, 2.0],
+        }
+    ),
+    source="hand-made",
 )
 
 
@@ -65,6 +69,14 @@ def test_reference_is_the_median_and_raw_mad_per_residue_and_atom():
     assert (ala.n, ala.median_ppm, ala.mad_ppm) == (5, 53.0, 1.0)
     gly = _stats(ref, "GLY", "CA")
     assert (gly.n, gly.median_ppm, gly.mad_ppm) == (2, 45.5, 0.5)
+
+
+def test_reference_n_counts_only_the_values_behind_the_statistics():
+    df = _frame(
+        [(2, "ALA", "CA", 52.0), (3, "ALA", "CA", 54.0), (4, "ALA", "CA", None)]
+    )
+    ala = _stats(compute_mad_reference(df), "ALA", "CA")
+    assert (ala.n, ala.median_ppm) == (2, 53.0)
 
 
 def test_reference_covers_only_the_flagged_backbone_heavy_atoms():
@@ -167,18 +179,29 @@ def test_annotate_leaves_its_input_alone_and_keeps_row_order():
 
 def test_reference_round_trips_through_its_csv(tmp_path):
     path = tmp_path / "mad_reference.csv"
-    write_mad_reference(REF, path, source="unit test")
+    write_mad_reference(REF.table, path, source="unit test")
     back = load_mad_reference(path)
-    pd.testing.assert_frame_equal(back, REF, check_dtype=False)
-    assert any("unit test" in line for line in path.read_text().splitlines())
+    pd.testing.assert_frame_equal(back.table, REF.table, check_dtype=False)
+    assert back.source == "unit test"
+
+
+def test_a_partial_reference_names_the_groups_it_cannot_assess():
+    """The build refuses a reference with gaps: a missing group would silently
+    turn every one of its shifts into NULL 'not assessed'."""
+    missing = REF.missing_groups()
+    assert ("GLY", "CA") in missing and ("ALA", "CA") not in missing
+    assert ("GLY", "CB") not in missing, "glycine has no CB to assess"
+    assert len(missing) == 20 * len(MAD_K) - 1 - len(REF.table)
 
 
 def test_the_frozen_reference_covers_every_canonical_residue():
-    ref = load_mad_reference()
+    reference = load_mad_reference()
+    ref = reference.table
     expected = {
         (aa, atom) for aa in AA3TO1 for atom in MAD_K if (aa, atom) != ("GLY", "CB")
     }
     assert set(zip(ref["comp_id"], ref["atom_id"])) == expected
+    assert reference.missing_groups() == []
     assert (ref["mad_ppm"] > 0).all()
     assert (ref["n"] >= 1000).all(), "a group too small to trust as a reference"
 
@@ -197,4 +220,5 @@ def test_the_frozen_reference_covers_every_canonical_residue():
 def test_the_frozen_reference_medians_are_textbook_values(comp_id, atom_id, low, high):
     """Guards against swapped columns or a reference built from corrected
     values in the wrong unit: every median must sit where NMR textbooks put it."""
-    assert low <= _stats(load_mad_reference(), comp_id, atom_id).median_ppm <= high
+    ref = load_mad_reference().table
+    assert low <= _stats(ref, comp_id, atom_id).median_ppm <= high

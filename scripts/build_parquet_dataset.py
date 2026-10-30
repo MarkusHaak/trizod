@@ -30,9 +30,8 @@ that column is NULL, never a copy of the raw value, where none does. Every C,
 CA, CB and N row also carries the far-outlier flag ``mad_z`` / ``is_far_outlier``
 against the frozen median/MAD reference (``trizod.shifts.outliers``).
 
-The main table is sorted by ``(entry_id, id)`` and written in 500-row groups
-with statistics (``SORT_KEYS``, ``ROW_GROUP_SIZE``), so a reader filtering on
-``entry_id`` touches one row group.
+The main table's physical layout (sort order, row groups) is ``SORT_KEYS`` /
+``ROW_GROUP_SIZE``; ``sort_order_doc`` is its published explanation.
 
 Every column is declared once, in ``COLUMNS`` below, together with the record it
 is read from. ``tests/test_parquet_columns.py`` asserts that declaration against
@@ -132,14 +131,25 @@ OFFSET_COLUMNS_DOC = (
 COMPOSITION_CACHE_NAME = "_composition_cache.csv"
 
 #: Physical layout of the main table, requested by David Wagemann for his web
-#: viewer, which reads the deposit over HTTP range requests. Rows are sorted by
-#: ``(entry_id, id)`` in STRING order (``entry_id`` stays a string column, so
-#: "10001" < "979"), and written in 500-row groups with min/max statistics, so a
-#: filter on ``entry_id`` reads one ~400 kB group instead of the whole file.
-#: ``id`` is sorted within an entry but cannot also be globally monotone: entry
-#: "1000" sorts before "10000", while id "1000_1_1_1" sorts after "10000_1_1_1".
+#: viewer, which reads the deposit over HTTP range requests: sorted rows in small
+#: row groups with statistics, so a filter on ``entry_id`` reads one ~400 kB
+#: group instead of the whole file. Explained to consumers by ``sort_order_doc``.
 SORT_KEYS = [("entry_id", "ascending"), ("id", "ascending")]
 ROW_GROUP_SIZE = 500
+
+
+def sort_order_doc(row_group_size: int) -> str:
+    """The ``sort_order`` table metadata: the layout, in the consumer's terms."""
+    keys = ",".join(name for name, _ in SORT_KEYS)
+    first = SORT_KEYS[0][0]
+    return (
+        f"{keys} ascending, in string (byte) order: {first} is a string, so "
+        f"'10001' sorts before '979'. Written in row groups of {row_group_size} "
+        f"rows with min/max statistics on every column, so a filter on {first} "
+        f"touches one row group. id is sorted within each entry but is not "
+        f"globally monotone ('1000_1_1_1' follows '10000_1_1_1'), so filter on "
+        f"{first} when pruning matters."
+    )
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -610,14 +620,7 @@ def build(
         b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
         b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
-        b"sort_order": (
-            f"entry_id,id ascending, in string (byte) order: entry_id is a string, "
-            f"so '10001' sorts before '979'. Written in row groups of "
-            f"{row_group_size} rows with min/max statistics on every column, so a "
-            f"filter on entry_id touches one row group. id is sorted within each "
-            f"entry but is not globally monotone ('1000_1_1_1' follows "
-            f"'10000_1_1_1'), so filter on entry_id when pruning matters."
-        ).encode(),
+        b"sort_order": sort_order_doc(row_group_size).encode(),
     }
     table = table.replace_schema_metadata(metadata)
 
@@ -635,10 +638,11 @@ def build(
     # summary
     split_counts = Counter(cols["split"])
     tier_counts = Counter(t for t in cols["train_tier"] if t is not None)
-    n_groups = pq.ParquetFile(out_path).metadata.num_row_groups
+    n_groups = math.ceil(table.num_rows / row_group_size)
     print(f"\nwrote {out_path}  ({out_path.stat().st_size / 1e6:.2f} MB)")
     print(f"rows: {table.num_rows}   columns: {table.num_columns}")
-    print(f"sorted by entry_id,id; {n_groups} row groups of <= {row_group_size}")
+    sort_keys = ",".join(name for name, _ in SORT_KEYS)
+    print(f"sorted by {sort_keys}; {n_groups} row groups of <= {row_group_size}")
     print("split counts:", dict(split_counts))
     print("train_tier counts (strictest):", dict(tier_counts))
 
@@ -667,7 +671,14 @@ def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
     # and would emit thousands of lines; the summary below counts them instead
     logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
     reference = load_mad_reference()
-    print(f"far-outlier reference: {reference.attrs.get('source', '?')}")
+    missing = reference.missing_groups()
+    if missing:
+        raise SystemExit(
+            f"far-outlier reference {reference.source!r} lacks {len(missing)} "
+            f"residue x atom groups, e.g. {missing[:3]}: their shifts would be "
+            "silently unassessed. Regenerate it with scripts/build_mad_reference.py."
+        )
+    print(f"far-outlier reference: {reference.source}")
     frames = (
         (cid, annotate_mad(annotate_offsets(df, offsets.get(cid)), reference))
         for cid, df in iter_shift_frames(list(offsets), pkl_dir)
