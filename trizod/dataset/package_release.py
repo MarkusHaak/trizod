@@ -28,6 +28,12 @@ Usage
 
 The output directory defaults under the work dir (gitignored). Nothing is
 uploaded; this only stages files locally for a manual Zenodo deposit.
+
+Before the manifest is written, a leakage gate checks the staged bundle and
+fails the step when any training record shares an ID or an exact sequence with
+a test chain, or covers >= 80 % of a test chain at >= 30 % identity (the
+stage-2 criterion of ``trizod.dataset.redundancy``, run with mmseqs, which must
+be on PATH); every offending pair is reported.
 """
 
 from __future__ import annotations
@@ -36,11 +42,13 @@ import argparse
 import hashlib
 import json
 import shutil
+import tempfile
 from pathlib import Path
 
 from trizod import paths as repo_paths
+from trizod.dataset.mmseqs import LeakageHit, find_test_coverage_leaks
 from trizod.dataset.paths import resolve_paths
-from trizod.io.fasta import count_fasta, read_fasta
+from trizod.io.fasta import count_fasta, read_fasta, write_fasta
 from trizod.provenance import pipeline_version
 from trizod.shifts import SHIFTS_PARQUET_NAME
 
@@ -65,11 +73,52 @@ def copy_in(src: Path, dst: Path) -> None:
     shutil.copy2(src, dst)
 
 
+def find_coverage_leaks(
+    train: dict[str, str], test: dict[str, str]
+) -> list[tuple[str, LeakageHit]]:
+    """Training records that cover >= 80 % of a test chain at >= 30 % identity.
+
+    ``train`` maps ``"<file>:<id>"`` labels to sequences. Each distinct
+    training sequence is searched once (query) against the test sequences
+    (target) with the stage-2 criterion of ``trizod.dataset.redundancy``
+    (:func:`trizod.dataset.mmseqs.leakage_search_cmd`), so the gate re-checks
+    exactly what stage 2 enforced, with E-values against the same test
+    database. mmseqs scratch lives in a temporary directory, never in the
+    bundle. Returns ``(training label, hit)`` pairs.
+    """
+    if not shutil.which("mmseqs"):
+        raise SystemExit(
+            "LEAKAGE GATE: mmseqs not found in PATH; the test-coverage check cannot run"
+        )
+    labels_by_seq: dict[str, list[str]] = {}
+    for label, seq in train.items():
+        labels_by_seq.setdefault(seq, []).append(label)
+    seq_key = {seq: f"q{i}" for i, seq in enumerate(labels_by_seq)}
+    labels_by_key = {seq_key[s]: labels for s, labels in labels_by_seq.items()}
+
+    with tempfile.TemporaryDirectory(prefix="trizod_leakgate_") as td:
+        work = Path(td)
+        train_fa = work / "train.fasta"
+        test_fa = work / "test.fasta"
+        write_fasta({k: s for s, k in seq_key.items()}, train_fa)
+        write_fasta(test, test_fa)
+        hits = find_test_coverage_leaks(
+            train_fa, test_fa, work / "hits.tsv", work / "tmp", work / "search.log"
+        )
+    return [
+        (label, hit)
+        for hit in sorted(hits, key=lambda h: (h.test_id, h.train_id))
+        for label in labels_by_key[hit.train_id]
+    ]
+
+
 def assert_no_leakage(bundle: Path) -> None:
     """Release gate: no training sequence may share an ID or an exact
-    sequence with any held-out test sequence. A shared BMRB entry ID (a
-    different shift record of the same entry, not a sequence leak) is only
-    reported, not failed."""
+    sequence with any held-out test sequence, and no training sequence may
+    cover >= 80 % of a test chain at >= 30 % identity (the stage-2 criterion,
+    which also catches a longer training construct that contains a test
+    protein). A shared BMRB entry ID (a different shift record of the same
+    entry, not a sequence leak) is only reported, not failed."""
     test: dict[str, str] = {}
     for tf in sorted((bundle / "test").glob("*.fasta")):
         test.update(read_fasta(tf))
@@ -79,9 +128,12 @@ def assert_no_leakage(bundle: Path) -> None:
 
     id_hits: list[tuple[str, str]] = []
     seq_hits: list[tuple[str, str]] = []
+    train_records: dict[str, str] = {}
     entry_hits = 0
     for trf in sorted((bundle / "train").rglob("*.fasta")):
+        rel = trf.relative_to(bundle / "train").as_posix()
         for tid, seq in read_fasta(trf).items():
+            train_records[f"{rel}:{tid}"] = seq
             if tid in test_ids:
                 id_hits.append((trf.name, tid))
             if seq in test_seqs:
@@ -94,9 +146,26 @@ def assert_no_leakage(bundle: Path) -> None:
             f"exact-sequence matches between train and test, e.g. "
             f"{(id_hits + seq_hits)[:5]}"
         )
+
+    cov_hits = find_coverage_leaks(train_records, test)
+    if cov_hits:
+        lines = [
+            f"    {label} -> {hit.test_id}: {hit.pident:.1f} % id, "
+            f"test cov {hit.test_cov:.3f}, train cov {hit.train_cov:.3f} "
+            f"({hit.train_len} vs {hit.test_len} aa, E={hit.evalue:.2g})"
+            for label, hit in cov_hits
+        ]
+        n_pairs = len({(h.train_id, h.test_id) for _, h in cov_hits})
+        n_test = len({h.test_id for _, h in cov_hits})
+        raise SystemExit(
+            f"LEAKAGE GATE FAILED: {len(cov_hits)} training records "
+            f"({n_pairs} distinct sequence pairs, {n_test} test chains) cover "
+            f">= 80 % of a test chain at >= 30 % identity:\n" + "\n".join(lines)
+        )
     msg = (
-        f"  leakage gate: OK — 0 shared IDs & 0 exact-sequence matches "
-        f"vs {len(test_ids)} test sequences"
+        f"  leakage gate: OK — 0 shared IDs, 0 exact-sequence matches & 0 "
+        f"training records covering >= 80 % of a test chain at >= 30 % "
+        f"identity, vs {len(test_ids)} test sequences"
     )
     if entry_hits:
         msg += (

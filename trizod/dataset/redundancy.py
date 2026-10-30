@@ -10,17 +10,28 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      script. CheZOD1325 was used at this step (to exclude its clusters
      from the random sample) but is NOT a training-leakage target.
   2. Test-set leakage removal of every tier's deduplicated FASTA against
-     the combined test set (CheZOD117 + TriZOD-348) at 30% id / 80% cov,
-     in TWO stages (matching the manuscript redundancy-reduction figure):
+     the combined test set (CheZOD117 + TriZOD test), in TWO stages
+     (matching the manuscript redundancy-reduction figure):
        2a. stage-1 "remove all cluster members": cluster the unfiltered
-           superset together with the test sequences at 30/80 and drop
-           every training sequence that shares a cluster with a test
-           sequence (catches transitive leakage A~B~test that a direct
-           search misses).
+           superset together with the test sequences at 30% id / 80%
+           coverage of BOTH sequences (--cov-mode 0) and drop every
+           training sequence that shares a cluster with a test sequence
+           (catches transitive leakage A~B~test that a direct search
+           misses).
        2b. stage-2 "search & remove": easy-search the training sequences
-           against the test sets at 30/80 and drop any direct hit.
-     Default mmseqs options: --alignment-mode 3 --cov-mode 0 -s 7.5
-     --comp-bias-corr 0 --mask 0.
+           (query) against the test sets (target) and drop every training
+           chain with an alignment of >= 30% identity over >= 80% of the
+           TEST chain (--cov-mode 1 -c 0.8; see
+           ``trizod.dataset.mmseqs.leakage_search_cmd``). This is the
+           leakage criterion: a longer training construct that contains a
+           test protein, or a pair whose length ratio is below 0.8, is
+           dropped here. Stage 1 keeps --cov-mode 0 on purpose: target
+           coverage in a clustering lets a long multi-domain construct pull
+           fragments of its other domains into the same cluster, which
+           would drop chains unrelated to any test chain; the direct
+           containment case is covered by stage 2.
+     Shared mmseqs options: --alignment-mode 3 -s 7.5 --comp-bias-corr 0
+     --mask 0, with --cov-mode 0 everywhere except the stage-2 search.
   3. Cluster the strict residual at 50% / 80% to seed the training
      representatives.
   4. clusterupdate to add moderate → tolerant → unfiltered, in this
@@ -40,7 +51,12 @@ import argparse
 import shutil
 from pathlib import Path
 
-from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
+from trizod.dataset.mmseqs import (
+    COMMON,
+    cluster_tsv_groups,
+    find_test_coverage_leaks,
+    run,
+)
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, fasta_ids
 
@@ -157,6 +173,22 @@ def stage1_cluster_member_removal(
     return leaked
 
 
+def stage2_search_removal(
+    train_fa: Path, combined_test: Path, hits: Path, tmp: Path, log: Path
+) -> set[str]:
+    """Stage-2 "search & remove".
+
+    Return the training IDs with an alignment to any test chain of >= 30 %
+    identity over >= 80 % of the TEST chain. The search runs training
+    (query) against test (target) with ``--cov-mode 1``, so a training chain
+    that contains a test protein is caught however long it is.
+    """
+    return {
+        h.train_id
+        for h in find_test_coverage_leaks(train_fa, combined_test, hits, tmp, log)
+    }
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -219,26 +251,11 @@ def main(argv=None):
         out_fa = out / f"{tier}_no_testset.fasta"
         log = out / f"{tier}_easy_search.log"
 
-        print(f"=== Step A ({tier}): stage-2 easy-search vs test sets ===")
-        run(
-            [
-                "mmseqs",
-                "easy-search",
-                str(fa),
-                str(combined),
-                str(hits),
-                str(tmp),
-                "--min-seq-id",
-                "0.3",
-                "-c",
-                "0.8",
-                *COMMON,
-                "--format-output",
-                "query,target,pident,evalue,bits",
-            ],
-            log,
+        print(
+            f"=== Step A ({tier}): stage-2 easy-search vs test sets "
+            "(>= 30% id over >= 80% of the test chain) ==="
         )
-        hit_ids = {ln.split("\t", 1)[0] for ln in open(hits) if ln.strip()}
+        hit_ids = stage2_search_removal(fa, combined, hits, tmp, log)
         tier_ids = set(fasta_ids(fa))
         leaked_tier = leaked & tier_ids
         removed = leaked_tier | hit_ids
