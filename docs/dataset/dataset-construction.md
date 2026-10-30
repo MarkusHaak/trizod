@@ -139,9 +139,11 @@ training-leakage target. Common mmseqs options throughout:
 (80 % coverage of **both** sequences) everywhere except the stage-2 search.
 
 **Leakage criterion.** A training chain leaks when an alignment to a test chain
-reaches **≥ 30 % identity over ≥ 80 % of the test chain**. Coverage of the
-training chain does not matter, so a longer construct that contains a test
-protein is a leak.
+reaches **≥ 30 % identity over ≥ 80 % of the test chain**. Coverage is the
+mmseqs aligned span (gaps included). Coverage of the training chain does not
+matter, so a longer construct that contains a test protein is a leak, and so
+is a shorter chain whose gapped alignment spans the test chain (e.g. the test
+protein minus an internal loop).
 
 - **Stage 1 — remove all cluster members** (A0): cluster the unfiltered
   superset with the test sequences at 30 % id / 80 % coverage of both
@@ -152,16 +154,19 @@ protein is a leak.
   cluster, dropping chains unrelated to any test chain. The containment case
   is handled by stage 2.
 - **Stage 2 — search & remove** (A): `easy-search` each tier (query) against
-  the test sets (target) with `--min-seq-id 0.3 -c 0.8 --cov-mode 1`
-  (coverage of the target, i.e. the test chain) and drop every training chain
-  with a hit. This enforces the leakage criterion. It catches a training
-  construct that contains a test chain (e.g. test `51709_1_1_1`, 169 aa,
-  inside `53339_1_1_1`, 419 aa) and a pair whose length ratio is below 0.8
-  (`27177_1_1_1`, 124 aa, vs test `27176_1_1_1`, 99 aa, 79.8 % identity).
-  Under `--cov-mode 1`, mmseqs skips a pair before alignment only when the
-  training chain is shorter than 80 % of the test chain, which could not
-  reach 80 % test coverage anyway. Builds up to `2026-10` ran this stage with
-  `--cov-mode 0` (80 % of both chains) and missed both cases.
+  the test sets (target) with `--min-seq-id 0.3 --cov-mode 1 -c 0` and drop
+  every training chain with an alignment that spans ≥ 80 % of the test chain,
+  `(tend − tstart + 1) / tlen ≥ 0.8`, computed from the hit table. This
+  enforces the leakage criterion. The 80 % is not passed to mmseqs: with any
+  `-c` above 0, mmseqs skips a pair by length ratio before aligning it (under
+  `--cov-mode 1`, when the training chain is shorter than 80 % of the test
+  chain; under `--cov-mode 0`, when either chain is). Stage 2 catches a
+  training construct that contains a test chain (e.g. test `51709_1_1_1`,
+  169 aa, inside `53339_1_1_1`, 419 aa) and gapped pairs whose length ratio is
+  below 0.8 in either direction (`27177_1_1_1`, 124 aa, vs test
+  `27176_1_1_1`, 99 aa, 79.8 % identity; `19243_1_1_1`, 148 aa, spanning test
+  `16205_1_1_1`, 238 aa, at 59.6 %). Builds up to `2026-10` ran this stage
+  with `--cov-mode 0 -c 0.8` (80 % of both chains) and missed all of these.
 - **Cluster** the strict residual at **50 % id / 80 % cov** (B), then iterative
   **`clusterupdate`** strict → moderate → tolerant → unfiltered (C) so each
   tier extends the previous and shared sequences keep the strict-tier
@@ -197,8 +202,8 @@ with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
 **leakage gate**. The gate fails if any test ID or exact test sequence appears
 in any training set, or if any staged training record covers **≥ 80 % of a test
 chain at ≥ 30 % identity**. The coverage check runs the stage-2 search
-(training as query, test as target, `--cov-mode 1`), so mmseqs must be on PATH,
-and every offending pair is listed. The `2026-08` bundle passed the ID and
+(training as query, test as target, test coverage from the alignment span), so
+mmseqs must be on PATH, and every offending pair is listed. The `2026-08` bundle passed the ID and
 exact-sequence checks with **0 shared IDs and 0 exact-sequence matches**
 against the 575 test sequences. The coverage check was added later, and the
 `2026-10` bundle fails it.
@@ -219,7 +224,8 @@ table is flagged against the frozen median/MAD reference
 Every `train_<tier>` set is redundancy-reduced in two stages against
 **CheZOD117 + the 460-sequence TriZOD test set**. The stage-2 mmseqs search
 finds no training chain that aligns to a test chain at ≥ 30 % identity over
-≥ 80 % of the test chain, whatever the training chain's length. The two test
+≥ 80 % of the test chain, whatever the training chain's length (within the
+sensitivity of its k-mer prefilter at `-s 7.5` and the default E ≤ 10⁻³). The two test
 sets are themselves disjoint
 (the TriZOD set excludes CheZOD clusters). So a model can train on any
 `train_<tier>` set and be evaluated on **CheZOD117** (the established

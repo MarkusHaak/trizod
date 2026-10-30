@@ -21,11 +21,12 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
        2b. stage-2 "search & remove": easy-search the training sequences
            (query) against the test sets (target) and drop every training
            chain with an alignment of >= 30% identity over >= 80% of the
-           TEST chain (--cov-mode 1 -c 0.8; see
-           ``trizod.dataset.mmseqs.leakage_search_cmd``). This is the
-           leakage criterion: a longer training construct that contains a
-           test protein, or a pair whose length ratio is below 0.8, is
-           dropped here. Stage 1 keeps --cov-mode 0 on purpose: target
+           TEST chain (aligned span, gaps included; --cov-mode 1 -c 0 with
+           the 80 % applied to the parsed span, see
+           ``trizod.dataset.mmseqs.leakage_search_cmd`` / ``is_leak``).
+           This is the leakage criterion: a longer training construct that
+           contains a test protein, or a pair whose length ratio is below
+           0.8 in either direction, is dropped here. Stage 1 keeps --cov-mode 0 on purpose: target
            coverage in a clustering lets a long multi-domain construct pull
            fragments of its other domains into the same cluster, which
            would drop chains unrelated to any test chain; the direct
@@ -180,8 +181,11 @@ def stage2_search_removal(
 
     Return the training IDs with an alignment to any test chain of >= 30 %
     identity over >= 80 % of the TEST chain. The search runs training
-    (query) against test (target) with ``--cov-mode 1``, so a training chain
-    that contains a test protein is caught however long it is.
+    (query) against test (target) without a coverage threshold inside mmseqs
+    (which would skip pairs by length ratio) and keeps alignments whose span
+    covers >= 80 % of the test chain, so a training chain that contains a
+    test protein is caught however long it is, and a shorter one whose gapped
+    alignment spans the test chain is caught too.
     """
     return {
         h.train_id
