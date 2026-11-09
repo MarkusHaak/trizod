@@ -50,6 +50,9 @@ class _Conditions:
     def get_temperature(self, **kwargs):
         return 298.0
 
+    def get_pressure_bar(self):
+        return float("nan")
+
 
 class _Sample:
     """Stand-in for ``bmrb.Sample``: only ``components`` matters here.
@@ -60,6 +63,7 @@ class _Sample:
     def __init__(self, components=(), name=None):
         self.name = name
         self.details = None
+        self.solvent_system = None
         self.framecode = "sample_1"
         self.type = "solution"
         self.components = list(components)
@@ -274,14 +278,14 @@ def test_urea_is_matched_on_word_boundaries(name, expected):
     assert _fill(_entry_with(name), ["urea"])["urea"] is expected
 
 
-def test_trifluoro_ethanol_with_a_space_needs_its_own_token():
-    # bmr15559/15579/15580 deposit 'Trifluoro Ethanol D2OH' at 50 % v/v, which
-    # neither 'TFE' nor 'trifluoroethanol' contains.
-    tokens = ["TFE", "trifluoroethanol", "trifluoro ethanol"]
+def test_trifluoro_ethanol_with_a_space_is_reached_by_the_fuzzy_token():
+    # bmr15559/15579/15580 deposit 'Trifluoro Ethanol D2OH' at 50 % v/v. It once
+    # needed its own literal 'trifluoro ethanol' token; the spelling-tolerant
+    # 'trifluoroethanol' token now reaches it (and 'Triflouroethanol', bmr50683).
+    tokens = ["TFE", "trifluoroethanol"]
     row = _fill(_entry_with("Trifluoro Ethanol D2OH"), tokens)
     assert row["TFE"] is False
-    assert row["trifluoroethanol"] is False
-    assert row["trifluoro ethanol"] is True
+    assert row["trifluoroethanol"] is True
 
 
 @pytest.mark.parametrize(
@@ -448,7 +452,7 @@ def _fill_real(entry_id, stID, cosolvents):
         ("26598", "1", "urea", False),  # 'bis-pyridylurea inhibitor', 1 mM
         ("50434", "1", "urea", False),  # 'palmitate, laureate, and stearate'
         # the spellings a token used to miss
-        ("15559", "1", "trifluoro ethanol", True),  # 'Trifluoro Ethanol D2OH', 50 %
+        ("15559", "1", "trifluoroethanol", True),  # 'Trifluoro Ethanol D2OH', 50 %
         ("7387", "1", "dimethyl sulfoxide", True),  # 'Dimethyl sulfoxide', 100 %
         ("7388", "1", "dimethylsulfoxide", True),  # 'dimethylsulfoxide', 50 %
     ],

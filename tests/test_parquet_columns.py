@@ -139,6 +139,7 @@ def _scored_frame():
         "ionic_strength": [0.15],
         "pH": [7.0],
         "temperature": [298.0],
+        "pressure_bar": [1.01325],
         "bbshift_positions_post": [n],
         "bbshift_types_post": [3],
         "total_bbshifts": [3 * n],
@@ -212,6 +213,19 @@ def test_declared_scores_sources_are_actually_emitted(tmp_path):
 def test_sample_state_annotations_reach_the_parquet(key):
     """Regression pin for the defect: these four stopped at scores.json."""
     assert key in builder.SCORES_JSON_SOURCES
+
+
+def test_pressure_bar_is_appended_to_the_contract():
+    """Sample pressure in bar, appended after every earlier column, float32 like
+    ph/temperature, and read from the scores.json key of the same name."""
+    last = builder.COLUMNS[-1]
+    assert (last.name, last.arrow, last.origin, last.source) == (
+        "pressure_bar",
+        "float32",
+        "scores",
+        "pressure_bar",
+    )
+    assert "pressure_bar" in builder.SCORES_JSON_SOURCES
 
 
 # --------------------------------------------------------------------------- #
@@ -485,6 +499,28 @@ def test_sample_state_columns_are_copied_from_scores_json(tmp_path):
         "membrane_mimetic",
     ):
         assert _one(cols, name, 1) is None, name
+
+
+def test_pressure_bar_is_copied_and_null_when_unrecorded(tmp_path):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _record("12345", "12345_1_1_1", pressure_bar=2500.0),
+            _record("23456", "23456_1_1_1", pressure_bar=None),  # NaN -> null
+            _record("99999", "99999_1_1_1"),  # key absent: older scores.json
+        ],
+    )
+    cols = builder.collect_columns(bundle, None)
+    assert _one(cols, "pressure_bar", 0) == pytest.approx(2500.0)
+    assert _one(cols, "pressure_bar", 1) is None
+    assert _one(cols, "pressure_bar", 2) is None
+
+
+def test_pressure_bar_semantics_are_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    metadata = pq.read_schema(sorted_parquet).metadata
+    semantics = metadata[b"pressure_bar_semantics"].decode()
+    assert "bar" in semantics and "never filtered" in semantics
 
 
 def test_published_columns_still_populate(tmp_path):

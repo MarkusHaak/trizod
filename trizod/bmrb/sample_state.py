@@ -122,7 +122,12 @@ _COSOLVENT_PREFIX_TOKENS = (
 )
 #: Whole words -- ``urea`` must NOT fire on ``urease``, and ``hfip`` must not be
 #: reachable from inside a longer token. ``hexafluoro`` is deliberately absent:
-#: it would fire on bmr7375's copper(I) hexafluorophosphate.
+#: it would fire on bmr7375's copper(I) hexafluorophosphate. ``cd3oh`` /
+#: ``cd3od`` / ``meoh`` are methanol spellings (bmr15323 'CD3OH' 100 %, bmr25162
+#: 'CD3OD' 33 %, bmr5580 'MeOH' 37 %) and ``etoh`` the ethanol one (bmr51165);
+#: whole words, so ``etoh`` does not fire inside 'acetohydroxamic acid'. The bare
+#: alcohol names are in ``COSOLVENT_PATTERNS`` below because a word boundary
+#: alone is not enough.
 _COSOLVENT_WORD_TOKENS = (
     "urea",
     "tfe",
@@ -132,9 +137,52 @@ _COSOLVENT_WORD_TOKENS = (
     "sds",
     "gdn-hcl",
     "gdncl",
+    "cd3oh",
+    "cd3od",
+    "meoh",
+    "etoh",
 )
 
-COSOLVENT_EVIDENCE_TOKENS = _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS
+#: Trifluoroethanol in every deposited spelling: ``Triflouroethanol`` (bmr50683,
+#: 17.5 % v/v), ``trifluorethanol`` (bmr26679), ``trifluroethanol``,
+#: ``trifluethanol`` (bmr5837, 30 %), ``Trifluoro Ethanol D2OH`` (bmr15559),
+#: ``trifluoro-ethanol``, and the formula ``CF3CD2OH`` / ``CF3CH2OH`` (bmr4723,
+#: bmr4724 and bmr15937, 50 %). Lower-case source: compile it IGNORECASE or
+#: match it against lower-cased text.
+TRIFLUOROETHANOL_PATTERN = (
+    r"(?:trifl?(?:uo|ou|u|o)r?[\s-]*o?[\s-]*ethanol|cf3c[hd]2o[hd])"
+)
+
+#: Substituents that turn methanol/ethanol into a different compound when they
+#: precede it as a separate word: 2-mercapto ethanol (bmr30782), B mercapto
+#: ethanol (bmr27165), beta-mercapto-ethanol (bmr26700) are the reducing agent
+#: at 2 mM / 0.1 %, and Trifluoro Ethanol is TFE. Spelled without the separator
+#: (2-mercaptoethanol, ethanolamine) the word boundary already rejects them.
+_ALCOHOL_SUBSTITUENTS = ("mercapto", "fluoro", "chloro", "bromo", "amino")
+
+
+def alcohol_pattern(name):
+    """Word-boundary pattern for a bare alcohol ``name`` that rejects substituted
+    names: a substituent word just before it (``2-mercapto ethanol``) or a
+    closing bracket (``(3-methylphenyl)methanol``, a ligand)."""
+    guards = "".join(
+        rf"(?<!{prefix}{sep})" for prefix in _ALCOHOL_SUBSTITUENTS for sep in (" ", "-")
+    )
+    return rf"(?<![a-z0-9)\]]){guards}{re.escape(name)}(?![a-z0-9])"
+
+
+#: Tokens whose match rule is a pattern rather than a plain substring or word
+#: boundary. Shared with the tier filter (``trizod.trizod.COSOLVENT_PATTERN_RES``)
+#: so the two lists cannot disagree on what counts as methanol or TFE.
+COSOLVENT_PATTERNS = {
+    "trifluoroethanol": TRIFLUOROETHANOL_PATTERN,
+    "methanol": alcohol_pattern("methanol"),
+    "ethanol": alcohol_pattern("ethanol"),
+}
+
+COSOLVENT_EVIDENCE_TOKENS = (
+    _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS + tuple(COSOLVENT_PATTERNS)
+)
 
 # Lookarounds rather than `\b`, matching the convention of the sibling matcher
 # `trizod.trizod._word_boundary_pattern`: `_` is a word character to `\b`, so
@@ -152,6 +200,7 @@ _COSOLVENT_EVIDENCE_RE = re.compile(
             rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
             for token in _COSOLVENT_WORD_TOKENS
         ]
+        + list(COSOLVENT_PATTERNS.values())
     ),
     re.IGNORECASE,
 )
@@ -218,8 +267,9 @@ def has_cosolvent_evidence(texts):
     """Does any of ``texts`` name a perturbing cosolvent?
 
     ``texts`` are sample-descriptive strings: ``_Sample_component.Mol_common_name``
-    values plus the entry/assembly/entity/sample free text. Word-boundary matched,
-    so ``urea`` does not fire on ``urease``.
+    values, ``_Sample.Solvent_system`` and the entry/assembly/entity/sample free
+    text. Word-boundary matched, so ``urea`` does not fire on ``urease`` and
+    ``ethanol`` not on 2-mercaptoethanol.
     """
     return any(
         text and _COSOLVENT_EVIDENCE_RE.search(str(text)) is not None for text in texts

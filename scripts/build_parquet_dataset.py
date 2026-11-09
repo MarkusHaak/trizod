@@ -436,6 +436,10 @@ COLUMNS: list[Column] = [
     Column(
         "label_tier", "string", origin="testset", source="label_tier", convert=clean_str
     ),
+    # --- appended 2026-10 ----------------------------------------------------
+    # Sample pressure in bar from the scored shift table's own condition list,
+    # like ph/temperature. Annotation only: no tier has a pressure ceiling.
+    _scores("pressure_bar", "float32", "pressure_bar", as_float),
 ]
 
 #: ``scores.json`` keys carried into the Parquet, derived from ``COLUMNS`` so
@@ -619,6 +623,7 @@ def build(
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
         b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
         b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
+        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted literally from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm); null when not recorded or the unit is missing/unknown; annotation only, never filtered",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
         b"sort_order": sort_order_doc(row_group_size).encode(),
     }

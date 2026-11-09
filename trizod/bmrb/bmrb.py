@@ -7,6 +7,7 @@ import pandas as pd
 import pynmrstar
 
 from trizod.constants import AA3TO1, BACKBONE_ATOMS
+from trizod.provenance import bmrb_parser_version
 
 # One ``_Entity_assembly`` record, with the tags that describe *how* an entity
 # appears in an assembly. ``Assembly.entities`` keeps its historical 4-tuple
@@ -176,6 +177,29 @@ class ChemComp:
         return f"<ChemComp {self.id}>"
 
 
+#: bar per deposited pressure unit. Keys are the deposited
+#: ``_Sample_condition_variable.Val_units`` lower-cased with whitespace removed,
+#: so ``mm Hg`` is ``mmhg`` and ``ATM`` is ``atm``. Every unit deposited in the
+#: corpus is here except the meaningless ones ('.', '1'), which stay unknown.
+PRESSURE_UNITS_TO_BAR = {
+    "bar": 1.0,
+    "mbar": 1e-3,
+    "kbar": 1e3,
+    "pa": 1e-5,
+    "hpa": 1e-3,
+    "kpa": 1e-2,
+    "mpa": 10.0,
+    "atm": 1.01325,
+    "mmhg": 133.322387415e-5,
+    "torr": 1.01325 / 760.0,
+    "psi": 6894.757293168e-5,
+}
+
+#: Deposited non-numeric pressure values that do mean one standard atmosphere
+#: (50 condition lists deposit 'ambient', unit atm). A recorded value, not a gap.
+AMBIENT_PRESSURE_VALUES = frozenset({"ambient", "atmospheric"})
+
+
 class SampleConditions:
     def __init__(self, sf):
         super().__init__()
@@ -290,6 +314,28 @@ class SampleConditions:
             factor = 0.001
         return val * factor + const1
 
+    def get_pressure_bar(self):
+        """Sample pressure in bar, or NaN when it is not recorded or not convertible.
+
+        Converted literally from the deposited unit (``PRESSURE_UNITS_TO_BAR``).
+        Unlike pH, temperature and ionic strength there is deliberately **no**
+        default and **no** unit repair: an absent value, a value without a
+        known unit, or a non-numeric one other than ``ambient`` is NaN (null
+        downstream), and an implausible value is not re-interpreted: the 89
+        condition lists depositing ``1 Pa`` (almost certainly one atmosphere)
+        read 1e-5 bar, as deposited. The value only annotates; no tier filters
+        on it.
+        """
+        val, unit = self.pressure if self.pressure else (None, None)
+        factor = PRESSURE_UNITS_TO_BAR.get("".join(str(unit or "").split()).lower())
+        if factor is None:
+            return np.nan
+        text = str(val if val is not None else "").strip().lower()
+        if text in AMBIENT_PRESSURE_VALUES:
+            return PRESSURE_UNITS_TO_BAR["atm"]
+        value = self.convert_val(text)
+        return value * factor if not np.isnan(value) else np.nan
+
     def __str__(self):
         return f"(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)"
 
@@ -304,6 +350,12 @@ class Sample:
         self.name = get_tag_vals(sf, "_Sample.Name", indices=0)
         self.framecode = get_tag_vals(sf, "_Sample.Sf_framecode", indices=0)
         self.details = get_tag_vals(sf, "_Sample.Details", indices=0)
+        # Free text such as '90% H2O/10% D2O' or 'trifluoroethanol/water' (an
+        # ADIT-NMR pick-list value, deposited by 173 entries). Read by the
+        # perturbing-cosolvent filter beside Details and the component names:
+        # bmr34568, 34011 and 34322 name their TFE only here and in Details,
+        # never as a _Sample_component.
+        self.solvent_system = get_tag_vals(sf, "_Sample.Solvent_system", indices=0)
         self.type = get_tag_vals(sf, "_Sample.Type", indices=0)
         self.sub_type = get_tag_vals(sf, "_Sample.Sub_type", indices=0)
         self.components = list(
@@ -399,6 +451,10 @@ class BmrbEntry:
     def __init__(self, id_, bmrb_dir):
         super().__init__()
         self.source = None
+        # Which parser produced this object. The pickle cache re-parses any
+        # entry stamped differently (pipeline.load_cached_entry), so a field
+        # added here later can never be missing from a cached entry.
+        self.parser_version = bmrb_parser_version()
 
         self.id = id_
         self.type = None

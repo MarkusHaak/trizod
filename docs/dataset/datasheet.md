@@ -55,7 +55,9 @@ Four layers are shipped:
      `total_off_<atom>_ppm = lacs_off_<atom>_ppm + off_<atom>_sigma ×
      REFINED_WEIGHTS[atom]` is the ppm quantity to subtract from a deposited
      shift — see §6.
-   - conditions (`pH`, `temperature`, `ionic_strength`), counts, citation.
+   - conditions (`pH`, `temperature`, `ionic_strength`, and `pressure_bar` —
+     sample pressure in bar, null when not recorded, annotation only), counts,
+     citation.
    - **sample-state annotation** (new): `physical_state` (the depositor's
      `_Entity_assembly.Physical_state`), `cosolvent_evidence` (does the entry
      independently name a perturbing cosolvent?), `sample_state_evidence`
