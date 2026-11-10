@@ -29,6 +29,29 @@ MIN_COMPARABLE = 10
 
 _REF = json.loads(REFERENCE.read_text()) if REFERENCE.exists() else {}
 
+# Documented, expected differences from the published CheZOD values. Each must
+# still FAIL (xfail strict=True), so a change that silently re-aligns or further
+# breaks them is noticed. The tolerance for every other entry is unchanged.
+_EXPECTED_DIFFERENCES = {
+    "4205": (
+        "bmr4205 records only 'pH* 6.5'. CheZOD, like TriZOD before the I-02 fix, "
+        "read only rows typed 'pH' and so scored it at the pH 7.0 default; TriZOD "
+        "now uses the pH* reading, which moves Z-scores by up to ~0.34 (> atol)."
+    ),
+}
+
+
+def _bmrb_id_params():
+    return [
+        pytest.param(
+            bmrb_id,
+            marks=pytest.mark.xfail(strict=True, reason=_EXPECTED_DIFFERENCES[bmrb_id]),
+        )
+        if bmrb_id in _EXPECTED_DIFFERENCES
+        else bmrb_id
+        for bmrb_id in sorted(_REF)
+    ]
+
 
 def _potenci_only_triplet_zscores(entry, shifts, condID, seq):
     """Per-residue triplet Z-scores for one peptide-shift table, LACS excluded."""
@@ -54,7 +77,7 @@ def _potenci_only_triplet_zscores(entry, shifts, condID, seq):
 
 @requires_bmrb_data
 @pytest.mark.skipif(not _REF, reason="CheZOD reference subset not available")
-@pytest.mark.parametrize("bmrb_id", sorted(_REF))
+@pytest.mark.parametrize("bmrb_id", _bmrb_id_params())
 def test_reproduces_chezod_zscores(bmrb_id):
     import trizod.bmrb.bmrb as bmrb
 
