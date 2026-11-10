@@ -443,3 +443,10 @@ def get_pred_shifts(seq, temperature, pH, ion, use_ph_corr=True, **kwargs):
                     shift -= ph_corr
             shift_dict[(pos + 1, seq[pos])][atom] = shift
     return shift_dict
+
+
+# Deprecated pre-2026-04 name, kept for PeptoneBench (trizod_gscores.py and
+# nmrcs.py import it from here). Positional calls and its `pkacsvfile=` keyword
+# (swallowed by **kwargs) behave as before; the old `usephcor=` keyword is now
+# `use_ph_corr=`.
+getpredshifts = get_pred_shifts
