@@ -15,81 +15,26 @@ set and no test set. These tests run the real ``build.main`` on tiny synthetic
 from __future__ import annotations
 
 import json
-import pickle
 import urllib.request
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
+from tests._stubs import run_build as _run_build
+from tests._stubs import scored_record
 from trizod.dataset import build, withdrawn
 from trizod.dataset.testset import load_tier_pools, resolve_pinned_testset
 from trizod.io.fasta import read_fasta
-from trizod.offsets import off_sigma_col, total_off_ppm_col
 
 TIERS = ("unfiltered", "tolerant", "moderate", "strict")
-ATOMS = ("C", "CA", "CB", "H", "HA", "HB", "N")
 
 # --------------------------------------------------------------------------- #
-# synthetic build harness
+# synthetic build harness (tests/_stubs.py, shared with the placeholder gate)
 # --------------------------------------------------------------------------- #
 
 
 def _record(rid: str, seq: str, n_bb_pos: int = 30) -> dict:
-    entry_id, st_id, assem_id, entity_id = rid.split("_")
-    rec = {
-        "ID": rid,
-        "entryID": entry_id,
-        "stID": st_id,
-        "entity_assemID": assem_id,
-        "entityID": entity_id,
-        "seq": seq,
-        "bbshift_positions_post": n_bb_pos,
-        "bbshift_types_post": 5,
-        "total_bbshifts": n_bb_pos * 5,
-        "entity_name": "stub",
-        "ionic_strength": 0.1,
-        "pH": 7.0,
-        "temperature": 298.0,
-    }
-    for atom in ATOMS:
-        rec[off_sigma_col(atom)] = 0.1
-        rec[total_off_ppm_col(atom)] = 0.05
-    return rec
-
-
-def _stub_entry():
-    """Smallest object ``composition.detect_bound`` classifies as unbound."""
-    entity = SimpleNamespace(
-        id="1",
-        name="stub",
-        type="polymer",
-        polymer_type="polypeptide(L)",
-        nonpolymer_comp_id="",
-        nonpolymer_comp_label="",
-    )
-    return SimpleNamespace(entities={"1": entity}, assemblies={}, chem_comps={})
-
-
-def _run_build(tmp_path: Path, by_tier: dict[str, list[dict]], *extra: str) -> Path:
-    """Write a synthetic root, run ``build.main`` on it, return final_dataset/."""
-    root = tmp_path / "root"
-    pkl_dir = root / "tmp" / "bmrb_entries"
-    pkl_dir.mkdir(parents=True)
-    entry_ids = set()
-    for tier in TIERS:
-        tier_dir = root / "data" / "interim" / "scored" / tier
-        tier_dir.mkdir(parents=True)
-        with (tier_dir / "scores.json").open("w") as fh:
-            for rec in by_tier.get(tier, []):
-                fh.write(json.dumps(rec) + "\n")
-                entry_ids.add(rec["entryID"])
-    for eid in entry_ids:
-        with (pkl_dir / f"{eid}.pkl").open("wb") as fh:
-            pickle.dump(_stub_entry(), fh)
-    work = tmp_path / "work"
-    build.main(["--work-dir", str(work), "--root", str(root), *extra])
-    return work / "final_dataset"
+    return scored_record(rid, seq, n_bb_pos)
 
 
 def _nested(records_by_top_tier: dict[str, list[dict]]) -> dict[str, list[dict]]:
@@ -368,5 +313,8 @@ def test_fetch_unlisted_entries_classifies_without_network():
 def test_local_entry_ids_reads_a_bmrb_snapshot_dir(tmp_path):
     for name in ("bmr36170", "bmr4", "notes"):
         (tmp_path / name).mkdir()
+    for eid in ("36170", "4"):
+        (tmp_path / f"bmr{eid}" / f"bmr{eid}_3.str").write_text("")
+    (tmp_path / "notes" / "readme.txt").write_text("")
     (tmp_path / "bmr5.str").write_text("")
     assert withdrawn.local_entry_ids(tmp_path) == {"36170", "4"}

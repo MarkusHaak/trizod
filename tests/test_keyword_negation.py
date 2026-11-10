@@ -18,83 +18,27 @@ more often describes a genuinely non-native sample with no cosolvent at all
 chains in the audit's what-if.
 """
 
-import numpy as np
-import pandas as pd
 import pytest
 
-import trizod.bmrb.bmrb as bmrb
+from tests._stubs import Entry, Sample, fill, fill_real
 from tests.conftest import requires_bmrb_data
-from trizod import paths
-from trizod.trizod import fill_row_data, filter_defaults
+from trizod.trizod import filter_defaults
 
 
-class _Conditions:
-    def get_ionic_strength(self, **kwargs):
-        return 0.1
-
-    def get_pH(self, **kwargs):
-        return 7.0
-
-    def get_temperature(self, **kwargs):
-        return 298.0
-
-    def get_pressure_bar(self):
-        return np.nan
-
-
-class _Named:
-    def __init__(self, name=None, details=None):
-        self.name = name
-        self.details = details
-        self.framecode = "sample_1"
-        self.solvent_system = None
-        self.seq = None
-        self.paramagnetic = None
-        self.components = []
-        self.type = "solution"
-        self.entities = [("1", "1", "$e", None)]
-
-
-class _ExperimentList:
-    experiments = [("1", "2D 1H-15N HSQC", None, "1", None, "isotropic")]
-
-
-class _Entry:
-    def __init__(self, title=None, sample_details=None, citation_title=None):
-        self.id = "1"
-        self.title = title
-        self.details = None
-        self.citation_title = citation_title
-        self.citation_DOI = None
-        self.exp_method = "NMR"
-        self.exp_method_subtype = "solution"
-        self.citation_keywords = []
-        self.struct_keywords = []
-        self.entities = {"1": _Named(name="entity")}
-        self.assemblies = {"1": _Named(name="assembly")}
-        self.samples = {"1": _Named(details=sample_details)}
-        self.conditions = {"1": _Conditions()}
-        self.experiment_list = _ExperimentList()
-
-    def get_peptide_shifts(self):
-        return {("1", "1", "1"): (None, "1", "1", ["1"])}
+def _Entry(title=None, sample_details=None, citation_title=None):
+    """One sample whose Details are ``sample_details``."""
+    return Entry(
+        {"1": Sample(details=sample_details)},
+        title=title,
+        citation_title=citation_title,
+    )
 
 
 KEYWORDS = ["denatur", "unfold", "misfold"]
 
 
 def _fill(entry, keywords=KEYWORDS, scope="sample"):
-    row = pd.Series(
-        {"entryID": "1", "stID": "1", "entity_assemID": "1", "entityID": "1"}
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=["1"])
-    return fill_row_data(
-        row,
-        perturbing_cosolvents=[],
-        keywords=keywords,
-        bmrb_entries=bmrb_entries,
-        keyword_search_scope=scope,
-    )
+    return fill(entry, keywords=keywords, keyword_search_scope=scope)
 
 
 @pytest.mark.parametrize(
@@ -196,24 +140,7 @@ def test_tier_keyword_lists_are_unchanged():
 
 
 def _fill_real(entry_id, keywords=KEYWORDS):
-    entry = bmrb.BmrbEntry(entry_id, paths.RAW_BMRB / f"bmr{entry_id}")
-    key = next(iter(entry.get_peptide_shifts()))
-    row = pd.Series(
-        {
-            "entryID": entry_id,
-            "stID": key[0],
-            "entity_assemID": key[1],
-            "entityID": key[2],
-        }
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=[entry_id])
-    return fill_row_data(
-        row,
-        perturbing_cosolvents=[],
-        keywords=keywords,
-        bmrb_entries=bmrb_entries,
-        keyword_search_scope="sample",
-    )
+    return fill_real(entry_id, keywords=keywords, keyword_search_scope="sample")
 
 
 @requires_bmrb_data

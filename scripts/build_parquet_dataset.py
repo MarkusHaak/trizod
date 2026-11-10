@@ -25,10 +25,11 @@ their records equal the unfiltered ones. Each row is therefore read, labels and
 offsets alike, from ONE record: that of the tier that selected the chain, named
 in ``label_tier_source`` -- its ``train_tier`` if it is a training
 representative, otherwise the strictest tier whose ``scores.json`` holds it
-(``LABEL_SOURCE_RULE``, shared with ``trizod.dataset.deploy_fasta`` so the
-deploy FASTA agrees chain for chain, and published as the ``label_source``
-metadata key). ``tests/test_release_label_consistency.py`` checks a built
-Parquet against the bundle's per-tier files.
+(``LABEL_SOURCE_RULE`` in ``trizod.dataset.tiers``, shared with
+``trizod.dataset.deploy_fasta`` so the deploy FASTA agrees chain for chain,
+and published as the ``label_source`` metadata key).
+``tests/test_release_label_consistency.py`` checks a built Parquet against the
+bundle's per-tier files.
 
 Per-residue labels are stored as equal-length list columns aligned 1:1 to the
 sequence; unscored positions are NaN in the score columns and False in the
@@ -79,13 +80,13 @@ from pathlib import Path
 from trizod import paths
 from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
-from trizod.dataset.deploy_fasta import (
+from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
+from trizod.dataset.tiers import (
     LABEL_SOURCE_RULE,
     TIER_ORDER,
     label_source_tier,
     strictest_tier,
 )
-from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
 from trizod.offsets import (
     lacs_off_ppm_col,
     legacy_lacs_off_col,
@@ -244,11 +245,6 @@ def read_cluster_map(path: Path) -> tuple[set[str], dict[str, str], dict[str, fl
             except (KeyError, ValueError, TypeError):
                 quality[m] = None
     return members, best, quality
-
-
-def strictest(id_: str, membership: dict[str, set[str]]) -> str | None:
-    """Loosest->strictest scan (``TIER_ORDER``); the strictest tier holding id_."""
-    return strictest_tier(id_, membership)
 
 
 def as_float(value) -> float | None:
@@ -570,14 +566,20 @@ def arrow_schema(pa):
     return pa.schema([(c.name, ARROW_TYPES[c.arrow](pa)) for c in COLUMNS])
 
 
-def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dict:
+def collect_columns(
+    in_bundle: Path,
+    composition_csv: Path | None = None,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> dict:
     """Assemble every ``COLUMNS`` entry into a name -> list-of-values dict.
 
     Pure Python, no pyarrow: the join/null behaviour is the part worth testing,
-    and pyarrow is an optional extra.
+    and pyarrow is an optional extra. ``labelled`` is
+    ``label_records(in_bundle)``, when already loaded.
     """
     reps = read_train_reps(in_bundle)
-    labelled = label_records(in_bundle, reps)
+    if labelled is None:
+        labelled = label_records(in_bundle, reps)
     print(f"loaded {len(labelled)} scored chains (unfiltered = superset)")
     pool = {}
     best_repr_map: dict[str, str] = {}
@@ -625,8 +627,8 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
         raw_k = rec.get("k") or []
         mask = [g is not None for g in raw_g]
 
-        train_tier = strictest(rid, reps)
-        pool_tier = strictest(rid, pool)
+        train_tier = strictest_tier(rid, reps)
+        pool_tier = strictest_tier(rid, pool)
         if rid in test_chezod:
             split = "test_chezod117"
         elif rid in test_trizod:
@@ -685,8 +687,9 @@ def build(
     out_path: Path,
     composition_csv: Path | None = None,
     row_group_size: int = ROW_GROUP_SIZE,
+    labelled: dict[str, tuple[str, dict]] | None = None,
 ) -> None:
-    cols = collect_columns(in_bundle, composition_csv)
+    cols = collect_columns(in_bundle, composition_csv, labelled)
 
     pa, pq = import_pyarrow()
     schema = arrow_schema(pa)
@@ -735,7 +738,12 @@ def build(
     print("train_tier counts (strictest):", dict(tier_counts))
 
 
-def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
+def build_shifts(
+    in_bundle: Path,
+    out_path: Path,
+    pkl_dir: Path,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> None:
     """Write the chemical-shift table for the bundle's chains.
 
     Every assigned shift on a canonical residue of every released chain,
@@ -747,11 +755,12 @@ def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
     whose offset it therefore nulled, is not corrected here either: its rows
     get ``offset_source`` ``none`` and a NULL ``val_corrected_ppm``. Every
     chain of the main table is enumerated, so the two join on ``id`` with no
-    orphans on either side.
+    orphans on either side. ``labelled`` is ``label_records(in_bundle)``, when
+    already loaded.
     """
-    offsets = {
-        rid: chain_offsets(rec) for rid, (_, rec) in label_records(in_bundle).items()
-    }
+    if labelled is None:
+        labelled = label_records(in_bundle)
+    offsets = {rid: chain_offsets(rec) for rid, (_, rec) in labelled.items()}
     print(f"\nbuilding shift table for {len(offsets)} chains from {pkl_dir} ...")
     if not pkl_dir.is_dir():
         raise SystemExit(f"BMRB pickle cache not found: {pkl_dir}")
@@ -843,6 +852,7 @@ def main() -> None:
     if not args.out and not args.shifts_out:
         ap.error("nothing to do: pass --out and/or --shifts-out")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    composition_csv = None
     if args.out:
         # The composition cache lives in the build work dir, not in the bundle
         # (package_release.py stages only the published artefacts). Missing it is
@@ -861,9 +871,12 @@ def main() -> None:
                 "run `trizod dataset build` first, pass --composition-csv, or "
                 "pass --skip-composition to accept null composition columns"
             )
-        build(args.in_bundle, args.out, composition_csv)
+    # the four tiers' scores.json, loaded once for the main and the shift table
+    labelled = label_records(args.in_bundle)
+    if args.out:
+        build(args.in_bundle, args.out, composition_csv, labelled=labelled)
     if args.shifts_out:
-        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir)
+        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)
 
 
 if __name__ == "__main__":

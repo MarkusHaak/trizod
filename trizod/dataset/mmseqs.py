@@ -63,7 +63,7 @@ LEAKAGE_MIN_SEQ_ID = 0.3
 LEAKAGE_MIN_TEST_COV = 0.8
 LEAKAGE_MIN_COV = LEAKAGE_MIN_TEST_COV
 LEAKAGE_RULES = ("test", "either")
-# The project owner decides D2; until then the build keeps the committed rule.
+# Decision D2: the build applies "either" unless --leakage-rule says otherwise.
 DEFAULT_LEAKAGE_RULE = "either"
 LEAKAGE_RULE_COVERAGE_OF = {
     "test": "the test chain",
@@ -120,6 +120,22 @@ def check_rule(rule: str) -> str:
             f"unknown leakage rule {rule!r}; expected one of {LEAKAGE_RULES}"
         )
     return rule
+
+
+def describe_rule(rule: str) -> str:
+    """The leakage criterion of ``rule`` in words, e.g. ``">= 30 % identity
+    over >= 80 % of the test chain"`` -- the one phrasing used by the CLI help,
+    the redundancy step's log and the release gate's messages."""
+    check_rule(rule)
+    return (
+        f">= {LEAKAGE_MIN_SEQ_ID * 100:g} % identity over "
+        f">= {LEAKAGE_MIN_TEST_COV * 100:g} % of {LEAKAGE_RULE_COVERAGE_OF[rule]}"
+    )
+
+
+#: Every rule and its criterion, for option help texts (argparse help needs its
+#: ``%`` doubled).
+LEAKAGE_RULES_HELP = "; ".join(f"'{r}': {describe_rule(r)}" for r in LEAKAGE_RULES)
 
 
 @dataclass(frozen=True)

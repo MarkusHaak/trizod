@@ -24,11 +24,11 @@ The regressions on real entries skip when the BMRB mirror is absent.
 """
 
 import math
-from pathlib import Path
 
 import pynmrstar
 import pytest
 
+from tests.conftest import requires_bmrb_data
 from trizod import paths
 from trizod.bmrb.bmrb import SampleConditions
 
@@ -326,18 +326,11 @@ def test_absent_rows_keep_default_where_the_tier_imputes():
 # real entries (skip without the BMRB mirror)
 # --------------------------------------------------------------------------- #
 
-_MAIN_CHECKOUT_BMRB = Path(
-    "/Users/tsenoner/Documents/projects/trizod-suit/trizod/data/raw/bmrb_entries"
-)
-
 
 def _entry_conditions(entry_id):
     """{condition-list ID: SampleConditions} for one deposited entry."""
-    for root in (paths.RAW_BMRB, _MAIN_CHECKOUT_BMRB):
-        files = sorted((Path(root) / f"bmr{entry_id}").glob("*.str"))
-        if files:
-            break
-    else:
+    files = sorted((paths.RAW_BMRB / f"bmr{entry_id}").glob("*.str"))
+    if not files:
         pytest.skip(f"BMRB entry {entry_id} not available")
     entry = pynmrstar.Entry.from_file(str(files[0]))
     conds = [
@@ -347,6 +340,7 @@ def _entry_conditions(entry_id):
     return {c.id: c for c in conds}
 
 
+@requires_bmrb_data
 @pytest.mark.parametrize(("entry_id", "ph"), [("4741", 2.5), ("16028", 3.0)])
 def test_real_ph_star_entries(entry_id, ph):
     cond = _entry_conditions(entry_id)["1"]
@@ -354,22 +348,26 @@ def test_real_ph_star_entries(entry_id, ph):
     assert cond.get_pH(return_default=False) == pytest.approx(ph)
 
 
+@requires_bmrb_data
 def test_real_controller_setting_entry():
     conds = _entry_conditions("50428")
     assert conds["1"].get_temperature() == pytest.approx(283.0)  # not 273
     assert conds["2"].get_temperature() == pytest.approx(283.0)  # not 265
 
 
+@requires_bmrb_data
 def test_real_mu_ionic_strength_entry():
     cond = _entry_conditions("4065")["1"]
     assert cond.get_ionic_strength(return_default=False) == pytest.approx(0.15)
 
 
+@requires_bmrb_data
 def test_real_unit_in_value_entry():
     cond = _entry_conditions("52233")["1"]
     assert cond.get_temperature(return_default=False) == pytest.approx(281.5)
 
 
+@requires_bmrb_data
 def test_real_ph_zero_entry():
     # pH 0.000 is recorded, so invalid: NaN even with defaults on.
     cond = _entry_conditions("18863")["1"]
@@ -377,6 +375,7 @@ def test_real_ph_zero_entry():
     assert math.isnan(cond.get_pH())
 
 
+@requires_bmrb_data
 def test_real_impossible_temperature_entry():
     # bmr2606 records 218 K: invalid, not the 298 K default.
     cond = _entry_conditions("2606")["1"]

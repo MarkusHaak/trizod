@@ -60,12 +60,13 @@ from pathlib import Path
 from trizod import paths as repo_paths
 from trizod.dataset.mmseqs import (
     DEFAULT_LEAKAGE_RULE,
-    LEAKAGE_RULE_COVERAGE_OF,
     LEAKAGE_RULE_FILE,
     LEAKAGE_RULES,
+    LEAKAGE_RULES_HELP,
     SUBSTRING_MIN_LEN,
     LeakageHit,
     check_rule,
+    describe_rule,
     find_leaks,
     leakage_rule_record,
     read_leakage_record,
@@ -107,8 +108,21 @@ class SubstringContainment:
     container_len: int  # length of the sequence that contains it
 
 
+def group_labels_by_seq(train: dict[str, str]) -> dict[str, list[str]]:
+    """``{sequence: [labels]}`` for a ``{label: sequence}`` map, both in first-seen
+    order: the gate's checks run once per distinct training sequence."""
+    labels_by_seq: dict[str, list[str]] = {}
+    for label, seq in train.items():
+        labels_by_seq.setdefault(seq, []).append(label)
+    return labels_by_seq
+
+
 def find_substring_containments(
-    train: dict[str, str], test: dict[str, str], min_len: int = SUBSTRING_MIN_LEN
+    train: dict[str, str],
+    test: dict[str, str],
+    min_len: int = SUBSTRING_MIN_LEN,
+    *,
+    labels_by_seq: dict[str, list[str]] | None = None,
 ) -> list[SubstringContainment]:
     """Every training record / test chain pair where one sequence is an exact
     substring of the other and the contained sequence is >= ``min_len`` aa.
@@ -116,10 +130,10 @@ def find_substring_containments(
     ``train`` maps labels (``"<file>:<id>"`` in the gate) to sequences. No
     aligner is involved, so this holds whatever the leakage rule and whatever
     the mmseqs prefilter finds. An identical pair is reported as "test in
-    train" (the gate rejects identical sequences before this check)."""
-    labels_by_seq: dict[str, list[str]] = {}
-    for label, seq in train.items():
-        labels_by_seq.setdefault(seq, []).append(label)
+    train" (the gate rejects identical sequences before this check).
+    ``labels_by_seq`` is ``group_labels_by_seq(train)``, when already built."""
+    if labels_by_seq is None:
+        labels_by_seq = group_labels_by_seq(train)
     found: list[SubstringContainment] = []
 
     def add(seq: str, tid: str, direction: str, length: int, container: int):
@@ -150,7 +164,11 @@ def find_substring_containments(
 
 
 def find_coverage_leaks(
-    train: dict[str, str], test: dict[str, str], rule: str = DEFAULT_LEAKAGE_RULE
+    train: dict[str, str],
+    test: dict[str, str],
+    rule: str = DEFAULT_LEAKAGE_RULE,
+    *,
+    labels_by_seq: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, LeakageHit]]:
     """Training records that meet the stage-2 criterion of ``rule``: >= 30 %
     identity over >= 80 % of the test chain (``"test"``) or of the test or the
@@ -162,16 +180,16 @@ def find_coverage_leaks(
     (:func:`trizod.dataset.mmseqs.leakage_search_cmd`), so the gate re-checks
     exactly what stage 2 enforced, with E-values against the same test
     database. mmseqs scratch lives in a temporary directory, never in the
-    bundle. Returns ``(training label, hit)`` pairs.
+    bundle. Returns ``(training label, hit)`` pairs. ``labels_by_seq`` is
+    ``group_labels_by_seq(train)``, when already built.
     """
     check_rule(rule)
     if not shutil.which("mmseqs"):
         raise SystemExit(
             "LEAKAGE GATE: mmseqs not found in PATH; the test-coverage check cannot run"
         )
-    labels_by_seq: dict[str, list[str]] = {}
-    for label, seq in train.items():
-        labels_by_seq.setdefault(seq, []).append(label)
+    if labels_by_seq is None:
+        labels_by_seq = group_labels_by_seq(train)
     seq_key = {seq: f"q{i}" for i, seq in enumerate(labels_by_seq)}
     labels_by_key = {seq_key[s]: labels for s, labels in labels_by_seq.items()}
 
@@ -204,11 +222,7 @@ def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
     identity over >= 80 % of the test chain, or under ``"either"`` of the test
     or the training chain). A shared BMRB entry ID (a different shift record of
     the same entry, not a sequence leak) is only reported, not failed."""
-    check_rule(rule)
-    criterion = (
-        f"rule '{rule}': >= 30 % identity over >= 80 % of "
-        f"{LEAKAGE_RULE_COVERAGE_OF[rule]}"
-    )
+    criterion = f"rule '{rule}': {describe_rule(rule)}"
     test: dict[str, str] = {}
     for tf in sorted((bundle / "test").glob("*.fasta")):
         test.update(read_fasta(tf))
@@ -237,8 +251,13 @@ def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
             f"{(id_hits + seq_hits)[:5]}"
         )
 
-    substr = find_substring_containments(train_records, test)
-    cov_hits = find_coverage_leaks(train_records, test, rule)
+    labels_by_seq = group_labels_by_seq(train_records)
+    substr = find_substring_containments(
+        train_records, test, labels_by_seq=labels_by_seq
+    )
+    cov_hits = find_coverage_leaks(
+        train_records, test, rule, labels_by_seq=labels_by_seq
+    )
     if substr or cov_hits:
         sub_pairs = {(train_records[c.train_label], c.test_id) for c in substr}
         lines = [
@@ -257,9 +276,8 @@ def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
         lines.append(
             f"  {len(cov_hits)} (training record, test chain) pairs "
             f"({len(cov_pairs)} distinct sequence pairs, "
-            f"{len({h.test_id for _, h in cov_hits})} test chains) cover >= 80 % "
-            f"of {LEAKAGE_RULE_COVERAGE_OF[rule]} at >= 30 % identity"
-            + (":" if cov_hits else "")
+            f"{len({h.test_id for _, h in cov_hits})} test chains) at "
+            f"{describe_rule(rule)}" + (":" if cov_hits else "")
         )
         lines += [
             f"    {label} -> {hit.test_id}: {hit.pident:.1f} % id, "
@@ -271,9 +289,8 @@ def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
     msg = (
         f"  leakage gate: OK ({criterion}) — 0 shared IDs, 0 exact-sequence "
         f"matches, 0 exact-substring containments >= {SUBSTRING_MIN_LEN} aa "
-        f"(either direction) & 0 training records covering >= 80 % of "
-        f"{LEAKAGE_RULE_COVERAGE_OF[rule]} at >= 30 % identity, vs "
-        f"{len(test_ids)} test sequences"
+        f"(either direction) & 0 training records at {describe_rule(rule)}, "
+        f"vs {len(test_ids)} test sequences"
     )
     if entry_hits:
         msg += (
@@ -374,9 +391,11 @@ def main(argv=None) -> None:
         choices=LEAKAGE_RULES,
         default=None,
         help=(
-            "leakage rule the redundancy step applied (default: the rule it "
-            "recorded in <work-dir>/mmseqs/" + LEAKAGE_RULE_FILE + "; a "
-            "different value is an error)"
+            "leakage rule the redundancy step applied ("
+            + LEAKAGE_RULES_HELP.replace("%", "%%")
+            + "; default: the rule it recorded in <work-dir>/mmseqs/"
+            + LEAKAGE_RULE_FILE
+            + "; a different value is an error)"
         ),
     )
     args = ap.parse_args(argv)

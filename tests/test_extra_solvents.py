@@ -25,19 +25,18 @@ shared definition, ``sample_state.COSOLVENT_PATTERNS`` plus the word tokens):
   1H/13C shift reference (bmr4831, 15447, 15565, 15973), not a cosolvent.
 """
 
-import numpy as np
-import pandas as pd
+import re
+
 import pytest
 
-import trizod.bmrb.bmrb as bmrb
 import trizod.bmrb.sample_state as sample_state
+from tests._stubs import Entry, Sample, fill, fill_real
 from tests.conftest import requires_bmrb_data
-from trizod import paths
 from trizod.trizod import (
     COSOLVENT_PATTERN_RES,
     COSOLVENT_TOKENS,
     WORD_BOUNDARY_COSOLVENTS,
-    fill_row_data,
+    _token_matches,
     filter_defaults,
 )
 
@@ -66,77 +65,8 @@ NEW_TOKENS = [
 # --------------------------------------------------------------------------- #
 
 
-class _Conditions:
-    def get_ionic_strength(self, **kwargs):
-        return 0.1
-
-    def get_pH(self, **kwargs):
-        return 7.0
-
-    def get_temperature(self, **kwargs):
-        return 298.0
-
-    def get_pressure_bar(self):
-        return np.nan
-
-
-class _Sample:
-    def __init__(self, components=(), solvent_system=None, details=None):
-        self.name = None
-        self.details = details
-        self.solvent_system = solvent_system
-        self.framecode = "sample_1"
-        self.type = "solution"
-        self.components = list(components)
-
-
-class _Named:
-    def __init__(self, name=None):
-        self.name = name
-        self.details = None
-        self.seq = None
-        self.paramagnetic = None
-        self.entities = [("1", "1", "$e", None)]
-
-
-class _ExperimentList:
-    experiments = [("1", "2D 1H-15N HSQC", None, "1", None, "isotropic")]
-
-
-class _Entry:
-    def __init__(self, sample):
-        self.id = "1"
-        self.title = None
-        self.details = None
-        self.citation_title = None
-        self.citation_DOI = None
-        self.exp_method = "NMR"
-        self.exp_method_subtype = "solution"
-        self.citation_keywords = []
-        self.struct_keywords = []
-        self.entities = {"1": _Named(name="entity")}
-        self.assemblies = {"1": _Named(name="assembly")}
-        self.samples = {"1": sample}
-        self.conditions = {"1": _Conditions()}
-        self.experiment_list = _ExperimentList()
-
-    def get_peptide_shifts(self):
-        return {("1", "1", "1"): (None, "1", "1", ["1"])}
-
-
 def _fill(**sample_kwargs):
-    row = pd.Series(
-        {"entryID": "1", "stID": "1", "entity_assemID": "1", "entityID": "1"}
-    )
-    bmrb_entries = pd.DataFrame(
-        {"entry": [_Entry(_Sample(**sample_kwargs))]}, index=["1"]
-    )
-    return fill_row_data(
-        row,
-        perturbing_cosolvents=STRICT_TOKENS,
-        keywords=[],
-        bmrb_entries=bmrb_entries,
-    )
+    return fill(Entry({"1": Sample(**sample_kwargs)}), STRICT_TOKENS)
 
 
 def _component(name, conc="30", units="%"):
@@ -164,7 +94,140 @@ def test_new_solvents_are_word_boundary_or_pattern_tokens():
     # never a bare substring match: 'acn' is inside NaCN, 'pentane' inside DSS
     for token in NEW_TOKENS:
         assert token in COSOLVENT_TOKENS
-        assert token.lower() in WORD_BOUNDARY_COSOLVENTS
+        t = token.lower()
+        assert t in WORD_BOUNDARY_COSOLVENTS or t in COSOLVENT_PATTERN_RES
+
+
+# The token lists before they were derived from sample_state's
+# ORGANIC_SOLVENT_TOKENS: WORD_BOUNDARY_COSOLVENTS then also listed the nine
+# pattern-matched names, and the evidence word list "trifluoroethanol". Pinned so
+# the derivation is shown to change no match.
+_LEGACY_COSOLVENT_TOKENS = (
+    "guanidin", "GdmCl", "Gdn-Hcl", "urea", "TFE", "trifluoroethanol",
+    "hexafluoroisopropanol", "hexafluoro-2-propanol", "HFIP", "DMSO",
+    "dimethyl sulfoxide", "dimethylsulfoxide", "methanol", "ethanol", "CD3OH",
+    "CD3OD", "MeOH", "EtOH", "acetonitrile", "CD3CN", "ACN", "chloroform",
+    "CDCl3", "CHCl3", "isopropanol", "2-propanol", "isopropyl alcohol",
+    "n-propanol", "1-propanol", "hexane", "pentane", "dioxane",
+)  # fmt: skip
+_LEGACY_WORD_BOUNDARY_COSOLVENTS = frozenset(
+    {
+        "urea", "hfip", "methanol", "ethanol", "cd3oh", "cd3od", "meoh", "etoh",
+        "acetonitrile", "cd3cn", "acn", "chloroform", "cdcl3", "chcl3",
+        "isopropanol", "2-propanol", "isopropyl alcohol", "n-propanol",
+        "1-propanol", "hexane", "pentane", "dioxane",
+    }
+)  # fmt: skip
+_LEGACY_EVIDENCE_WORD_TOKENS = (
+    "urea", "tfe", "trifluoroethanol", "hfip", "dmso", "sds", "gdn-hcl",
+    "gdncl", "cd3oh", "cd3od", "meoh", "etoh", "cd3cn", "acn", "chloroform",
+    "cdcl3", "chcl3", "isopropanol", "isopropyl alcohol",
+)  # fmt: skip
+
+# Every token, plain and in the contexts its guards exist for, plus decoys.
+_MATCH_CORPUS = [
+    text
+    for token in _LEGACY_COSOLVENT_TOKENS + _LEGACY_EVIDENCE_WORD_TOKENS
+    for text in (
+        token,
+        f"30% {token}",
+        f"{token}-d3",
+        f"{token}_d6",
+        f"x{token}",
+        f"{token}x",
+        f"2-mercapto {token}",
+        f"sila-{token}",
+        f"({token})",
+        f"tetrakis({token})copper(i)",
+        f"5 % {token}",
+        f"{token} (10 %)",
+        f"no {token}",
+    )
+] + [
+    "2,2-dimethyl-2-silapentane-5-sulfonate",
+    "hexafluoroisopropanol-d2",
+    "1,1,1,3,3,3-hexafluoro-2-propanol",
+    "trifluoro ethanol d2oh",
+    "triflouroethanol",
+    "cf3cd2oh",
+    "2,2,2-trifluoroethanol",
+    "1 mm dioxane",
+    "8% dioxane-d8",
+    "nacn",
+    "propionibacterium acnes",
+    "urease",
+    "palmitate, laureate, and stearate",
+    "methyl-2,4-pentane diol",
+    "acetohydroxamic acid",
+    "50% acetonitrile/ 50% h2o",
+]
+
+
+def _legacy_rule(token):
+    if token in COSOLVENT_PATTERN_RES:
+        return "pattern"
+    return "word" if token in _LEGACY_WORD_BOUNDARY_COSOLVENTS else "substring"
+
+
+def _rule(token):
+    if token in COSOLVENT_PATTERN_RES:
+        return "pattern"
+    return "word" if token in WORD_BOUNDARY_COSOLVENTS else "substring"
+
+
+def test_derived_tier_token_list_is_unchanged():
+    # same tokens, same spelling (they name the columns), same order
+    assert COSOLVENT_TOKENS == _LEGACY_COSOLVENT_TOKENS
+    assert set(sample_state.ORGANIC_SOLVENT_WORD_TOKENS) <= {
+        t.lower() for t in COSOLVENT_TOKENS
+    }
+
+
+def test_dropped_word_boundary_entries_were_shadowed_by_patterns():
+    # The pattern is checked first in _token_matches, so a word-boundary entry
+    # for a pattern token was never read.
+    dropped = _LEGACY_WORD_BOUNDARY_COSOLVENTS - WORD_BOUNDARY_COSOLVENTS
+    assert len(dropped) == 9
+    assert dropped <= set(COSOLVENT_PATTERN_RES)
+    assert WORD_BOUNDARY_COSOLVENTS <= _LEGACY_WORD_BOUNDARY_COSOLVENTS
+    for token in COSOLVENT_TOKENS:
+        assert _rule(token.lower()) == _legacy_rule(token.lower()), token
+
+
+def test_derived_word_boundary_set_matches_every_token_as_before():
+    for token in _LEGACY_COSOLVENT_TOKENS:
+        t = token.lower()
+        for text in _MATCH_CORPUS:
+            text = text.lower()
+            new = _token_matches(
+                t, [text], WORD_BOUNDARY_COSOLVENTS, COSOLVENT_PATTERN_RES
+            )
+            old = _token_matches(
+                t, [text], _LEGACY_WORD_BOUNDARY_COSOLVENTS, COSOLVENT_PATTERN_RES
+            )
+            assert new == old, (token, text)
+
+
+def test_cosolvent_evidence_matches_as_before_without_the_trifluoroethanol_word():
+    legacy = re.compile(
+        "|".join(
+            [
+                rf"(?<![a-z0-9]){re.escape(token)}"
+                for token in sample_state._COSOLVENT_PREFIX_TOKENS
+            ]
+            + [
+                rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
+                for token in _LEGACY_EVIDENCE_WORD_TOKENS
+            ]
+            + list(sample_state.COSOLVENT_PATTERNS.values())
+        ),
+        re.IGNORECASE,
+    )
+    words = tuple(t for t in _LEGACY_EVIDENCE_WORD_TOKENS if t != "trifluoroethanol")
+    assert words == sample_state._COSOLVENT_WORD_TOKENS
+    for text in _MATCH_CORPUS + [t.upper() for t in _MATCH_CORPUS]:
+        expected = legacy.search(text) is not None
+        assert sample_state.has_cosolvent_evidence([text]) is expected, text
 
 
 def test_patterned_solvents_share_one_definition_with_cosolvent_evidence():
@@ -437,23 +500,7 @@ def test_new_solvent_feeds_the_row_annotation():
 
 
 def _fill_real(entry_id, stID="1"):
-    entry = bmrb.BmrbEntry(entry_id, paths.RAW_BMRB / f"bmr{entry_id}")
-    key = next(k for k in entry.get_peptide_shifts() if k[0] == stID)
-    row = pd.Series(
-        {
-            "entryID": entry_id,
-            "stID": key[0],
-            "entity_assemID": key[1],
-            "entityID": key[2],
-        }
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=[entry_id])
-    return fill_row_data(
-        row,
-        perturbing_cosolvents=STRICT_TOKENS,
-        keywords=[],
-        bmrb_entries=bmrb_entries,
-    )
+    return fill_real(entry_id, stID, STRICT_TOKENS)
 
 
 @requires_bmrb_data

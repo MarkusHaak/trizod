@@ -342,7 +342,9 @@ def main(argv=None):
     n_dropped_short_global = int(is_short.sum())
     n_dropped_bound_global = int((~is_short & all_df["is_bound"]).sum())
     max_unknown = args.max_unknown_fraction
-    is_placeholder_row = all_df["seq"].map(unknown_fraction) > max_unknown
+    is_placeholder_row = (
+        all_df["seq"].map(lambda seq: is_placeholder(seq, max_unknown)).astype(bool)
+    )
     dropped_placeholder = universal_keep & is_placeholder_row
     n_dropped_placeholder_global = int(dropped_placeholder.sum())
     placeholder_dropped_ids = sorted(all_df.loc[dropped_placeholder, "ID"].unique())

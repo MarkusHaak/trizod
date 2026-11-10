@@ -287,6 +287,12 @@ def parse_condition_value(val):
     return np.nan, ""
 
 
+def _key(text):
+    """Lookup key of a deposited Type/unit: lower case, all whitespace removed,
+    ``""`` for None ('mm Hg' -> 'mmhg', ' pH* ' -> 'ph*')."""
+    return "".join(str(text or "").split()).lower()
+
+
 def _ph_scale(type_, unit):
     """``'pH'``, ``'pH*'`` or ``'pD'`` for a pH-like condition row, else None.
 
@@ -294,9 +300,9 @@ def _ph_scale(type_, unit):
     chains are typed 'pH' with the unit 'pD'). A pD row deposited with the unit
     'pH' (72 rows) is still a pD.
     """
-    scale = PH_SCALES.get("".join(str(type_ or "").split()).lower())
+    scale = PH_SCALES.get(_key(type_))
     if scale == "pH":
-        scale = PH_SCALES.get("".join(str(unit or "").split()).lower(), "pH")
+        scale = PH_SCALES.get(_key(unit), "pH")
     return scale
 
 
@@ -495,15 +501,14 @@ class SampleConditions:
         read 1e-5 bar, as deposited. The value only annotates; no tier filters
         on it.
         """
-        val, unit = self.pressure if self.pressure else (None, None)
-        factor = PRESSURE_UNITS_TO_BAR.get("".join(str(unit or "").split()).lower())
+        val, unit = self.pressure
+        factor = PRESSURE_UNITS_TO_BAR.get(_key(unit))
         if factor is None:
             return np.nan
         text = str(val if val is not None else "").strip().lower()
         if text in AMBIENT_PRESSURE_VALUES:
             return PRESSURE_UNITS_TO_BAR["atm"]
-        value = self.convert_val(text)
-        return value * factor if not np.isnan(value) else np.nan
+        return self.convert_val(text) * factor  # NaN stays NaN
 
     def __str__(self):
         return f"(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)"

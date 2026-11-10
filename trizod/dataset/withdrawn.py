@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
@@ -51,8 +50,6 @@ HEADER_COMMENT = """\
 # Refresh (network): python -m trizod.dataset.withdrawn --bmrb-dir data/raw/bmrb_entries
 # then review the diff and commit it; the build itself never calls the network.
 """
-
-_BMR_DIR = re.compile(r"^bmr(\d+)$")
 
 #: ``get(url) -> (http_status, parsed_json_or_None)``; injectable for tests.
 Getter = Callable[[str], tuple[int, Any]]
@@ -116,12 +113,13 @@ def write_withdrawn(entries: Iterable[UnlistedEntry], path: Path) -> None:
 
 
 def local_entry_ids(bmrb_dir: Path) -> set[str]:
-    """Entry IDs of a BMRB snapshot laid out as ``<bmrb_dir>/bmr<ID>/``."""
-    return {
-        m.group(1)
-        for p in Path(bmrb_dir).iterdir()
-        if p.is_dir() and (m := _BMR_DIR.match(p.name))
-    }
+    """Entry IDs of a BMRB snapshot (``<bmrb_dir>/bmr<ID>/bmr<ID>_3.str``): the
+    entries the scoring pipeline reads, found the way it finds them
+    (:func:`trizod.pipeline.find_bmrb_files`), withdrawn ones included."""
+    # imported here: trizod.pipeline imports this module when it filters
+    from trizod.pipeline import find_bmrb_files
+
+    return set(find_bmrb_files(bmrb_dir, exclude_withdrawn=False))
 
 
 def http_get_json(url: str, timeout: float = 60.0) -> tuple[int, Any]:
@@ -208,7 +206,7 @@ def main(argv=None) -> None:
     bmrb_dir = args.bmrb_dir or layout(args.root).raw_bmrb
     local = local_entry_ids(bmrb_dir)
     if not local:
-        raise SystemExit(f"no bmr<ID>/ directories under {bmrb_dir}")
+        raise SystemExit(f"no bmr<ID>/bmr<ID>_3.str files under {bmrb_dir}")
     print(f"{len(local)} local entries in {bmrb_dir}; querying {BMRB_API} ...")
 
     fresh = fetch_unlisted_entries(local)

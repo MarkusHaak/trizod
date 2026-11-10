@@ -120,39 +120,50 @@ _COSOLVENT_PREFIX_TOKENS = (
     "hexafluoroisopropanol",
     "hexafluoro-2-propanol",
 )
-#: Whole words -- ``urea`` must NOT fire on ``urease``, and ``hfip`` must not be
-#: reachable from inside a longer token. ``hexafluoro`` is deliberately absent:
-#: it would fire on bmr7375's copper(I) hexafluorophosphate. ``cd3oh`` /
-#: ``cd3od`` / ``meoh`` are methanol spellings (bmr15323 'CD3OH' 100 %, bmr25162
-#: 'CD3OD' 33 %, bmr5580 'MeOH' 37 %) and ``etoh`` the ethanol one (bmr51165);
-#: whole words, so ``etoh`` does not fire inside 'acetohydroxamic acid'. The bare
-#: alcohol names are in ``COSOLVENT_PATTERNS`` below because a word boundary
-#: alone is not enough. The organic solvents of NMR-STAR audit I-07 follow:
-#: ``cd3cn`` (bmr5633, 30 %) and ``acn`` (bmr36521, a pinned test chain, '30%
-#: deuterated ACN'; whole word, so not NaCN or 'Propionibacterium acnes'),
-#: ``chloroform`` / ``cdcl3`` / ``chcl3`` (not a chloroformate), and
-#: ``isopropanol`` (not hexafluoroisopropanol, which is HFIP) / ``isopropyl
-#: alcohol`` (bmr17810, 25 %).
-_COSOLVENT_WORD_TOKENS = (
-    "urea",
-    "tfe",
-    "trifluoroethanol",
-    "hfip",
-    "dmso",
-    "sds",
-    "gdn-hcl",
-    "gdncl",
-    "cd3oh",
-    "cd3od",
-    "meoh",
-    "etoh",
-    "cd3cn",
-    "acn",
+#: Alcohols and organic solvents, in the tier filter's spelling and order (they
+#: are the last entries of ``trizod.trizod.COSOLVENT_TOKENS`` and name its
+#: columns) and shared with the ``cosolvent_evidence`` annotation, so the two
+#: lists cannot disagree. The pattern-matched names are keys of
+#: ``COSOLVENT_PATTERNS``; the rest are plain whole words
+#: (``ORGANIC_SOLVENT_WORD_TOKENS``). Evidence, per spelling:
+#:
+#: * Methanol and ethanol (pattern; 2-mercaptoethanol, ethanolamine and
+#:   trifluoroethanol are not ethanol): melittin in 100 % methanol (bmr26334),
+#:   ubiquitin in 45 % methanol at 2,500 bar (bmr18611). ``CD3OH`` / ``CD3OD`` /
+#:   ``MeOH`` are the deposited methanol spellings that contain no 'methanol'
+#:   (bmr15323 'CD3OH' 100 %, bmr25162 'CD3OD' 33 %, bmr5580 'MeOH' 37 %) and
+#:   ``EtOH`` the ethanol one (bmr51165); whole words, so ``etoh`` does not fire
+#:   inside 'acetohydroxamic acid'.
+#: * NMR-STAR audit I-07, the organic solvents that still passed every tier:
+#:   acetonitrile (pattern, see ``ACETONITRILE_PATTERN``), ``CD3CN`` (bmr5633,
+#:   30 %) and ``ACN`` (bmr36521, a pinned test chain, '30% deuterated ACN'; whole
+#:   word, so not NaCN or 'Propionibacterium acnes'); ``chloroform`` /
+#:   ``CDCl3`` / ``CHCl3`` (not a chloroformate); ``isopropanol`` (not
+#:   hexafluoroisopropanol, which is HFIP), the propanol patterns (bmr19216
+#:   'CDCl3/2-propanol') and ``isopropyl alcohol`` (bmr17810, 25 %); the
+#:   DSS-guarded alkanes (bmr25640 pentane reverse micelle, bmr5387 'd-pentane'
+#:   98 %) and the percentage-gated ``dioxane`` (see ``DIOXANE_PATTERN``).
+ORGANIC_SOLVENT_TOKENS = (
+    "methanol",
+    "ethanol",
+    "CD3OH",
+    "CD3OD",
+    "MeOH",
+    "EtOH",
+    "acetonitrile",
+    "CD3CN",
+    "ACN",
     "chloroform",
-    "cdcl3",
-    "chcl3",
+    "CDCl3",
+    "CHCl3",
     "isopropanol",
+    "2-propanol",
     "isopropyl alcohol",
+    "n-propanol",
+    "1-propanol",
+    "hexane",
+    "pentane",
+    "dioxane",
 )
 
 #: Trifluoroethanol in every deposited spelling: ``Triflouroethanol`` (bmr50683,
@@ -250,6 +261,31 @@ COSOLVENT_PATTERNS = {
     "hexane": alkane_pattern("hexane"),
     "dioxane": DIOXANE_PATTERN,
 }
+
+#: The ``ORGANIC_SOLVENT_TOKENS`` matched as plain whole words (lower case): the
+#: ones without a ``COSOLVENT_PATTERNS`` entry. The tier filter's
+#: ``WORD_BOUNDARY_COSOLVENTS`` is built from this too.
+ORGANIC_SOLVENT_WORD_TOKENS = tuple(
+    token.lower()
+    for token in ORGANIC_SOLVENT_TOKENS
+    if token.lower() not in COSOLVENT_PATTERNS
+)
+
+#: Whole words -- ``urea`` must NOT fire on ``urease``, and ``hfip`` must not be
+#: reachable from inside a longer token. ``hexafluoro`` is deliberately absent:
+#: it would fire on bmr7375's copper(I) hexafluorophosphate. ``trifluoroethanol``
+#: is not here: its spelling-tolerant pattern (``COSOLVENT_PATTERNS``) matches
+#: wherever the whole word would.
+_COSOLVENT_WORD_TOKENS = (
+    "urea",
+    "tfe",
+    "hfip",
+    "dmso",
+    "sds",
+    "gdn-hcl",
+    "gdncl",
+    *ORGANIC_SOLVENT_WORD_TOKENS,
+)
 
 COSOLVENT_EVIDENCE_TOKENS = (
     _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS + tuple(COSOLVENT_PATTERNS)

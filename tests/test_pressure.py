@@ -18,12 +18,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import trizod.bmrb.bmrb as bmrb
+from tests._stubs import Entry, Sample, fill, fill_real
 from tests.conftest import requires_bmrb_data
-from trizod import paths
 from trizod.bmrb.bmrb import SampleConditions
 from trizod.pipeline import prefilter_dataframe
-from trizod.trizod import fill_row_data, filter_defaults, output_dataset
+from trizod.trizod import filter_defaults, output_dataset
 
 ATM = 1.01325
 
@@ -105,62 +104,25 @@ def test_literal_values_are_not_repaired():
 # --------------------------------------------------------------------------- #
 
 
-class _Named:
-    def __init__(self, name=None):
-        self.name = name
-        self.details = None
-        self.framecode = "sample_1"
-        self.solvent_system = None
-        self.seq = None
-        self.paramagnetic = None
-        self.components = []
-        self.type = "solution"
-        self.entities = [("1", "1", "$e", None)]
-
-
-class _ExperimentList:
-    experiments = [("1", "2D 1H-15N HSQC", None, "1", None, "isotropic")]
-
-
-class _Entry:
+def _entry():
     """Two shift tables of one chain, recorded under different condition lists."""
-
-    def __init__(self):
-        self.id = "1"
-        self.title = None
-        self.details = None
-        self.citation_title = None
-        self.citation_DOI = None
-        self.exp_method = "NMR"
-        self.exp_method_subtype = "solution"
-        self.citation_keywords = []
-        self.struct_keywords = []
-        self.entities = {"1": _Named(name="entity")}
-        self.assemblies = {"1": _Named(name="assembly")}
-        self.samples = {"1": _Named()}
-        self.conditions = {
+    return Entry(
+        {"1": Sample()},
+        conditions={
             "1": _conditions("1", "bar"),
             "3": _conditions("2250", "bar"),
             "4": _conditions(None, None),
-        }
-        self.experiment_list = _ExperimentList()
-
-    def get_peptide_shifts(self):
-        return {
+        },
+        peptide_shifts={
             ("1", "1", "1"): (None, "1", "1", ["1"]),
             ("2", "1", "1"): (None, "3", "1", ["1"]),
             ("3", "1", "1"): (None, "4", "1", ["1"]),
-        }
+        },
+    )
 
 
 def _fill(stID):
-    row = pd.Series(
-        {"entryID": "1", "stID": stID, "entity_assemID": "1", "entityID": "1"}
-    )
-    bmrb_entries = pd.DataFrame({"entry": [_Entry()]}, index=["1"])
-    return fill_row_data(
-        row, perturbing_cosolvents=[], keywords=[], bmrb_entries=bmrb_entries
-    )
+    return fill(_entry(), st_id=stID)
 
 
 def test_pressure_follows_the_shift_tables_condition_list():
@@ -284,20 +246,7 @@ def test_no_tier_has_a_pressure_filter(tier):
 
 
 def _fill_real(entry_id, stID="1"):
-    entry = bmrb.BmrbEntry(entry_id, paths.RAW_BMRB / f"bmr{entry_id}")
-    key = next(k for k in entry.get_peptide_shifts() if k[0] == stID)
-    row = pd.Series(
-        {
-            "entryID": entry_id,
-            "stID": key[0],
-            "entity_assemID": key[1],
-            "entityID": key[2],
-        }
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=[entry_id])
-    return fill_row_data(
-        row, perturbing_cosolvents=[], keywords=[], bmrb_entries=bmrb_entries
-    )
+    return fill_real(entry_id, stID)
 
 
 @requires_bmrb_data

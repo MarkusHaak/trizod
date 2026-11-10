@@ -11,6 +11,8 @@ from tqdm import tqdm
 import trizod.bmrb.bmrb as bmrb
 from trizod.bmrb.sample_state import (
     COSOLVENT_PATTERNS,
+    ORGANIC_SOLVENT_TOKENS,
+    ORGANIC_SOLVENT_WORD_TOKENS,
     PHYSICAL_STATE_MODERATE_DENY,
     PHYSICAL_STATE_STRICT_DENY,
     PHYSICAL_STATE_TOLERANT_DENY,
@@ -118,40 +120,16 @@ MEMBRANE_MIMETIC_TOKENS = (
 #: (+2 tolerant rows, +2 moderate, +1 strict). ``hfip`` is insurance rather than
 #: a fix -- all 14 corpus components containing it are genuine HFIP, so the
 #: boundary costs nothing -- but a four-letter acronym is precisely the token
-#: class where a substring match goes wrong. The alcohols must be whole words or
-#: ``ethanol`` fires on 2-mercaptoethanol, ethanolamine and trifluoroethanol and
-#: ``methanol`` on every ``...ylmethanol`` ligand (their extra substituent guard
-#: lives in ``COSOLVENT_PATTERN_RES``). So must every organic solvent added for
-#: NMR-STAR audit I-07: ``acn`` sits inside NaCN, ``pentane`` inside DSS
-#: (2,2-dimethyl-2-silapentane-5-sulfonate), ``isopropanol`` inside
-#: hexafluoroisopropanol. The rest stay substring matches: ``guanidin`` must
-#: reach ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
-WORD_BOUNDARY_COSOLVENTS = frozenset(
-    {
-        "urea",
-        "hfip",
-        "methanol",
-        "ethanol",
-        "cd3oh",
-        "cd3od",
-        "meoh",
-        "etoh",
-        "acetonitrile",
-        "cd3cn",
-        "acn",
-        "chloroform",
-        "cdcl3",
-        "chcl3",
-        "isopropanol",
-        "2-propanol",
-        "isopropyl alcohol",
-        "n-propanol",
-        "1-propanol",
-        "hexane",
-        "pentane",
-        "dioxane",
-    }
-)
+#: class where a substring match goes wrong. So must every alcohol and organic
+#: solvent (``sample_state.ORGANIC_SOLVENT_WORD_TOKENS``): ``acn`` sits inside
+#: NaCN, ``isopropanol`` inside hexafluoroisopropanol, ``etoh`` inside
+#: 'acetohydroxamic acid'. The bare alcohols, the propanols, acetonitrile, the
+#: alkanes and dioxane need more than a word boundary (``ethanol`` would still
+#: fire on '2-mercapto ethanol', ``pentane`` on 'sila-pentane' DSS), so they are
+#: matched by ``COSOLVENT_PATTERN_RES`` instead, which ``_token_matches`` checks
+#: first. The rest stay substring matches: ``guanidin`` must reach
+#: ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
+WORD_BOUNDARY_COSOLVENTS = frozenset({"urea", "hfip", *ORGANIC_SOLVENT_WORD_TOKENS})
 
 #: Cosolvent tokens matched by a pattern, which takes precedence over the
 #: substring / word-boundary rule: the spelling-tolerant ``trifluoroethanol``
@@ -171,7 +149,6 @@ COSOLVENT_PATTERN_RES = {
 #: Helix inducers (TFE, HFIP, DMSO, alcohols) play no part in refolding, so the
 #: guard is limited to this family, and it never applies to a component name.
 DENATURANT_TOKEN_PREFIXES = ("guanid", "gdm", "gdn", "urea")
-_REFOLDING_PROTOCOL_RE = re.compile(r"refold")
 
 #: A cosolvent named right after "no" / "without" in free text is absent, not
 #: present: bmr15936's 0 % point of a TFE titration has Details "no TFE
@@ -273,12 +250,10 @@ COSOLVENT_TOKENS = (
     # tables for 10/20/30 % TFE -- the reference itself moves with [TFE], and
     # dG(helix) is linear in TFE mole fraction, so no threshold is principled.
     # `trifluoroethanol` does not contain `tfe`, so both are needed; the second
-    # is a spelling-tolerant pattern (COSOLVENT_PATTERN_RES) that also reaches
-    # 'Triflouroethanol' (bmr50683, a pinned test chain, 17.5 % v/v) and
-    # 'Trifluoro Ethanol D2OH' (bmr15559/15579/15580, 50 % v/v) -- which is why
-    # the former literal `trifluoro ethanol` token is gone. The pattern also
-    # reaches 'trifluethanol' (bmr5837, 30 %) and the formula CF3CD2OH
-    # (bmr4723/4724, bmr15937, 50 %).
+    # is the spelling-tolerant sample_state.TRIFLUOROETHANOL_PATTERN (the
+    # deposited spellings and their entries are listed there). It also reaches
+    # 'Trifluoro Ethanol D2OH', so the former literal `trifluoro ethanol` token
+    # is gone.
     "TFE",
     "trifluoroethanol",
     # HFIP -- a STRONGER helix inducer than TFE (Hirota, Mizuno & Goto 1998,
@@ -303,48 +278,19 @@ COSOLVENT_TOKENS = (
     "DMSO",
     "dimethyl sulfoxide",
     "dimethylsulfoxide",
-    # Alcohols. Methanol and ethanol are the classic alcohol cosolvents of Buck
-    # 1998 (above) and were in no list, so melittin in 100 % methanol (bmr26334)
-    # and ubiquitin in 45 % methanol at 2,500 bar (bmr18611) passed every check.
-    # Word-boundary matched with a substituent guard (COSOLVENT_PATTERN_RES):
-    # 2-mercaptoethanol, ethanolamine and trifluoroethanol are not ethanol.
-    # CD3OH / CD3OD / MeOH are the deposited methanol spellings that contain no
-    # 'methanol' (bmr15323 'CD3OH' 100 %, bmr25162 'CD3OD' 33 %, bmr5580 'MeOH'
-    # 37 %), and EtOH the ethanol one (bmr51165). Ungated by concentration like
-    # the rest, so the few dilute deposits (bmr19921, 0.5 % methanol from an
-    # oleate stock) go too.
-    "methanol",
-    "ethanol",
-    "CD3OH",
-    "CD3OD",
-    "MeOH",
-    "EtOH",
-    # Organic solvents (NMR-STAR audit I-07). Still passing every tier after the
-    # alcohols went in: the pinned test chains 50871 and 50900 (Solvent_system
-    # '50% Acetonitrile/ 50% H2O') and 36521 ('30% deuterated ACN'), the CheZOD117
-    # chain 18578 (30 % acetonitrile), the strict representative 5633 (30 %
-    # CD3CN), bmr19216 in CDCl3/2-propanol and bmr25640 in a pentane reverse
-    # micelle. Neither POTENCI nor the LACS tables say anything about them.
-    # Every one is a whole word or a guarded pattern (COSOLVENT_PATTERN_RES):
-    # 'acn' must not fire on NaCN, 'pentane' not on DSS, 'isopropanol' not on
-    # hexafluoroisopropanol, 'acetonitrile' not on bmr7375's
-    # tetrakis(acetonitrile)copper(I). Dioxane is the one exception to "ungated
-    # by concentration": at 1-13 mM it is the 1H/13C shift reference (bmr4831,
+    # Alcohols and organic solvents (sample_state.ORGANIC_SOLVENT_TOKENS, where
+    # the deposits behind each spelling are listed). Methanol and ethanol are
+    # the classic alcohol cosolvents of Buck 1998 (above) and were in no list;
+    # acetonitrile, chloroform, the propanols, the alkanes and dioxane (NMR-STAR
+    # audit I-07) still passed every tier after the alcohols went in, among them
+    # the pinned test chains 50871, 50900 and 36521 and the CheZOD117 chain
+    # 18578. Neither POTENCI nor the LACS tables say anything about them. Each
+    # is a whole word or a guarded pattern (WORD_BOUNDARY_COSOLVENTS,
+    # COSOLVENT_PATTERN_RES). Ungated by concentration like the rest, so the few
+    # dilute deposits (bmr19921, 0.5 % methanol from an oleate stock) go too --
+    # except dioxane: at 1-13 mM it is the 1H/13C shift reference (bmr4831,
     # 15447, 15565, 15973), so it counts only written as >= 1 % of the solvent.
-    "acetonitrile",
-    "CD3CN",
-    "ACN",
-    "chloroform",
-    "CDCl3",
-    "CHCl3",
-    "isopropanol",
-    "2-propanol",
-    "isopropyl alcohol",
-    "n-propanol",
-    "1-propanol",
-    "hexane",
-    "pentane",
-    "dioxane",
+    *ORGANIC_SOLVENT_TOKENS,
 )
 
 
@@ -608,9 +554,7 @@ def fill_row_data(
         _NEGATED_MENTION_RE.sub(" ", text.lower()) for text in solvent_texts if text
     ]
     # a refolding protocol names its denaturant without it being in the tube
-    protocol_free_texts = [
-        text for text in free_texts if not _REFOLDING_PROTOCOL_RE.search(text)
-    ]
+    protocol_free_texts = [text for text in free_texts if "refold" not in text]
     for token in perturbing_cosolvents:
         token_lower = token.lower()
         texts = component_names + (

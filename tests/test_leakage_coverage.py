@@ -710,6 +710,77 @@ def test_redundancy_applies_and_records_the_rule(tmp_path, rule):
     assert UNRELATED_TRAIN in kept
 
 
+def _hit_lines(tsv: Path) -> set[str]:
+    return {ln for ln in tsv.read_text().splitlines() if ln.strip()}
+
+
+@requires_mmseqs
+def test_redundancy_stage2_searches_once_and_matches_per_tier_searches(
+    tmp_path, monkeypatch
+):
+    """Stage 2 runs one easy-search, on the unfiltered superset; each tier's
+    hits are that search restricted to the tier's IDs. Checked against a
+    separate search of every (nested, strictly smaller) tier FASTA -- what the
+    step ran before. The search is the same under both rules (only the parsed
+    hits are filtered differently), so one rule suffices."""
+    rule = "test"
+    work = _make_redundancy_inputs(tmp_path)
+    final = work / "final_dataset"
+    pool = read_fasta(final / "unfiltered" / "unfiltered.fasta")
+    ids = sorted(pool)
+    # nested tiers, each leak in a different one
+    keep = {
+        "tolerant": [i for i in ids if i != CONTAIN_TRAIN],
+        "moderate": [i for i in ids if i not in (CONTAIN_TRAIN, FRAG_TRAIN)],
+        "strict": [RATIO_TRAIN, MUTFRAG_TRAIN, UNRELATED_TRAIN, ids[-1]],
+    }
+    for tier, members in keep.items():
+        write_fasta({i: pool[i] for i in members}, final / tier / f"{tier}.fasta")
+
+    searches = []
+    real_find_leaks = redundancy.find_leaks
+
+    def counting_find_leaks(train_fa, *args, **kwargs):
+        searches.append(Path(train_fa).name)
+        return real_find_leaks(train_fa, *args, **kwargs)
+
+    monkeypatch.setattr(redundancy, "find_leaks", counting_find_leaks)
+    argv = ["--work-dir", str(work), "--root", str(tmp_path), "--leakage-rule", rule]
+    redundancy.main(argv)
+    monkeypatch.undo()
+    assert searches == ["unfiltered.fasta"]
+
+    out = work / "mmseqs"
+    combined = out / "combined_testset.fasta"
+    unfiltered_removed = set(pool) - set(
+        read_fasta(out / "unfiltered_no_testset.fasta")
+    )
+    for tier in redundancy.TIERS:
+        fa = final / tier / f"{tier}.fasta"
+        tier_ids = set(read_fasta(fa))
+        own = tmp_path / f"own_{tier}_hits.tsv"
+        own_hits = {
+            h.train_id
+            for h in mm.find_leaks(
+                fa, combined, own, tmp_path / f"own_{tier}", tmp_path / "log", rule
+            )
+        }
+        assert _hit_lines(out / f"{tier}_testset_hits.tsv") == _hit_lines(own), tier
+        kept = set(read_fasta(out / f"{tier}_no_testset.fasta"))
+        assert not kept & own_hits, tier
+        # removed = (stage-1 | stage-2) restricted to the tier, as before
+        assert kept == tier_ids - unfiltered_removed, tier
+
+
+@requires_mmseqs
+def test_redundancy_refuses_a_tier_that_is_not_nested(tmp_path):
+    work = _make_redundancy_inputs(tmp_path)
+    strict_fa = work / "final_dataset" / "strict" / "strict.fasta"
+    write_fasta({"999_1_1_1": AA * 3}, strict_fa)
+    with pytest.raises(SystemExit, match="not a subset"):
+        redundancy.main(["--work-dir", str(work), "--root", str(tmp_path)])
+
+
 # ------------------------------------------------------- CLI + script
 
 

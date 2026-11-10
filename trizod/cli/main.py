@@ -18,6 +18,12 @@ from typing import Optional
 import numpy as np
 import typer
 
+from trizod.dataset.mmseqs import (
+    DEFAULT_LEAKAGE_RULE,
+    LEAKAGE_RULES,
+    LEAKAGE_RULES_HELP,
+)
+
 app = typer.Typer(
     rich_markup_mode=None,
     add_completion=False,
@@ -56,11 +62,9 @@ class KeywordSearchScope(str, Enum):
     all = "all"
 
 
-class LeakageRule(str, Enum):
-    """Stage-2 test-set leakage rule (``trizod.dataset.mmseqs.LEAKAGE_RULES``)."""
-
-    test = "test"
-    either = "either"
+#: Stage-2 test-set leakage rule: one member per
+#: ``trizod.dataset.mmseqs.LEAKAGE_RULES``, so the two cannot drift apart.
+LeakageRule = Enum("LeakageRule", {rule: rule for rule in LEAKAGE_RULES}, type=str)
 
 
 class MethodFallback(str, Enum):
@@ -509,11 +513,7 @@ def _dataset_testset(
     testset.main(argv)
 
 
-_LEAKAGE_RULE_HELP = (
-    "'test': a training chain leaks at >= 30% identity over >= 80% of the test "
-    "chain; 'either': over >= 80% of the test or the training chain (the "
-    "shorter one)."
-)
+_LEAKAGE_RULE_HELP = f"Stage-2 test-set leakage rule ({LEAKAGE_RULES_HELP})."
 
 
 @dataset_app.command("redundancy")
@@ -523,7 +523,10 @@ def _dataset_redundancy(
     leakage_rule: Optional[LeakageRule] = typer.Option(
         None,
         "--leakage-rule",
-        help=_LEAKAGE_RULE_HELP + " Default: test. Recorded in mmseqs/.",
+        help=(
+            f"{_LEAKAGE_RULE_HELP} Default: {DEFAULT_LEAKAGE_RULE}. "
+            "Recorded in mmseqs/."
+        ),
     ),
 ):
     """Two-stage test-set leakage removal + mmseqs clustering (-> mmseqs/)."""

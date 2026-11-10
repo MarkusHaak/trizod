@@ -40,9 +40,10 @@ unfiltered run applies the offset and scores the type; in release 2026-10 that
 makes 1,073 of 15,073 tolerant records differ from the unfiltered ones, 478 of
 them training representatives (audit issue I-01). Each record's labels
 therefore come from the tier that selected the chain, by
-:func:`label_source_tier` -- the same rule ``scripts/build_parquet_dataset.py``
-applies to the Parquet's ``label_tier_source``, so the two artefacts agree
-chain for chain whatever ``--tier`` is (see :data:`LABEL_SOURCE_RULE`). For the
+:func:`trizod.dataset.tiers.label_source_tier` -- the same rule
+``scripts/build_parquet_dataset.py`` applies to the Parquet's
+``label_tier_source``, so the two artefacts agree chain for chain whatever
+``--tier`` is (see :data:`trizod.dataset.tiers.LABEL_SOURCE_RULE`). For the
 default ``--tier tolerant`` that is the tolerant record for every train and
 test chain: a chain held by moderate or strict was never masked at tolerant
 (moderate/strict reject an over-limit offset outright), so its moderate/strict
@@ -73,58 +74,10 @@ import random
 from pathlib import Path
 
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.tiers import LABEL_SOURCE_RULE, TIER_ORDER, label_source_tier
 from trizod.io.fasta import fasta_ids
 
 SENTINEL = "999.0"  # masked / no-score per-residue value (matches reference)
-
-#: Release tiers, loosest -> strictest. Their ``scores.json`` files, training
-#: representative sets and clustering pools all nest in this order.
-TIER_ORDER = ("unfiltered", "tolerant", "moderate", "strict")
-
-#: Which ``scores.json`` record a released chain's labels and offsets are read
-#: from. Shared verbatim by the deploy FASTA and the Parquet (its
-#: ``label_source`` metadata key), whose ``label_tier_source`` column names it.
-LABEL_SOURCE_RULE = (
-    "Every per-chain label (gscores, zscores, k, mask, n_scored), offset "
-    "(off_*_sigma, lacs_off_*_ppm, total_off_*_ppm) and other scores.json field "
-    "of a row is read from ONE record: that of the tier that selected the chain, "
-    "named in label_tier_source. A training representative's record is its "
-    "train_tier's (the strictest tier whose train_<tier>_best.fasta lists it); "
-    "any other chain's is the strictest tier whose scores.json holds it. The "
-    "per-tier records are NOT interchangeable: tolerant combines --max-offset 3 "
-    "with --reject-shift-type-only, so it masks an over-limit atom type out of "
-    "the score and nulls its off_<a>_sigma / total_off_<a>_ppm, where the "
-    "unfiltered run applies that offset and scores the type; moderate and strict "
-    "reject such a chain outright, so their records equal the unfiltered and "
-    "tolerant ones for every chain they hold. A row therefore reproduces its "
-    "label_tier_source tier's scores.json, not necessarily a looser tier's."
-)
-
-
-def strictest_tier(chain_id: str, membership) -> str | None:
-    """The strictest tier whose ``membership[tier]`` contains ``chain_id``."""
-    found = None
-    for tier in TIER_ORDER:
-        if chain_id in membership.get(tier, ()):
-            found = tier
-    return found
-
-
-def label_source_tier(chain_id: str, reps_by_tier, scored_by_tier) -> str | None:
-    """The tier whose ``scores.json`` record supplies ``chain_id``'s labels.
-
-    ``train_tier`` (strictest tier listing it as a training representative) if
-    it is one, else the strictest tier whose ``scores.json`` holds it; ``None``
-    if no tier scores it. See :data:`LABEL_SOURCE_RULE`.
-
-    Args:
-        reps_by_tier: tier -> training-representative IDs.
-        scored_by_tier: tier -> IDs (or ID-keyed records) in that tier's
-            ``scores.json``.
-    """
-    return strictest_tier(chain_id, reps_by_tier) or strictest_tier(
-        chain_id, scored_by_tier
-    )
 
 
 def rep_fasta(reps_dir: Path, tier: str) -> Path:

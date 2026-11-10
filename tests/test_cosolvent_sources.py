@@ -22,19 +22,19 @@ Pinned here:
 * ``cosolvent_evidence`` sees the alcohols and the Solvent_system text too.
 """
 
-import numpy as np
-import pandas as pd
 import pynmrstar
 import pytest
 
 import trizod.bmrb.bmrb as bmrb
 import trizod.bmrb.sample_state as sample_state
+from tests._stubs import Entry as _Entry
+from tests._stubs import Sample as _Sample
+from tests._stubs import fill, fill_real
 from tests.conftest import requires_bmrb_data
-from trizod import paths
 from trizod.trizod import (
+    COSOLVENT_PATTERN_RES,
     COSOLVENT_TOKENS,
     WORD_BOUNDARY_COSOLVENTS,
-    fill_row_data,
     filter_defaults,
 )
 
@@ -104,80 +104,12 @@ def test_null_solvent_system_is_empty():
 # --------------------------------------------------------------------------- #
 
 
-class _Conditions:
-    def get_ionic_strength(self, **kwargs):
-        return 0.1
-
-    def get_pH(self, **kwargs):
-        return 7.0
-
-    def get_temperature(self, **kwargs):
-        return 298.0
-
-    def get_pressure_bar(self):
-        return np.nan
-
-
-class _Sample:
-    def __init__(self, components=(), solvent_system=None, details=None, name=None):
-        self.name = name
-        self.details = details
-        self.solvent_system = solvent_system
-        self.framecode = "sample_1"
-        self.type = "solution"
-        self.components = list(components)
-
-
-class _Named:
-    def __init__(self, name=None):
-        self.name = name
-        self.details = None
-        self.seq = None
-        self.paramagnetic = None
-        self.entities = [("1", "1", "$e", None)]
-
-
-class _ExperimentList:
-    experiments = [("1", "2D 1H-15N HSQC", None, "1", None, "isotropic")]
-
-
-class _Entry:
-    def __init__(self, samples, referenced=("1",)):
-        self.id = "1"
-        self.title = None
-        self.details = None
-        self.citation_title = None
-        self.citation_DOI = None
-        self.exp_method = "NMR"
-        self.exp_method_subtype = "solution"
-        self.citation_keywords = []
-        self.struct_keywords = []
-        self.entities = {"1": _Named(name="entity")}
-        self.assemblies = {"1": _Named(name="assembly")}
-        self.samples = samples
-        self.conditions = {"1": _Conditions()}
-        self.experiment_list = _ExperimentList()
-        self._referenced = list(referenced)
-
-    def get_peptide_shifts(self):
-        return {("1", "1", "1"): (None, "1", "1", self._referenced)}
-
-
 def _component(name, entity_id="", conc="10", units="%"):
     return ("1", "1", entity_id, name, conc, units)
 
 
 def _fill(entry, cosolvents=STRICT_TOKENS):
-    row = pd.Series(
-        {"entryID": "1", "stID": "1", "entity_assemID": "1", "entityID": "1"}
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=["1"])
-    return fill_row_data(
-        row,
-        perturbing_cosolvents=list(cosolvents),
-        keywords=[],
-        bmrb_entries=bmrb_entries,
-    )
+    return fill(entry, cosolvents)
 
 
 def _flagged(row, tokens=STRICT_TOKENS):
@@ -377,8 +309,10 @@ def test_alcohols_are_tier_tokens_from_tolerant_up():
 
 
 def test_alcohols_are_word_boundary_tokens():
+    # a whole word, or a guarded pattern (methanol, ethanol), never a substring
     for token in ALCOHOL_TOKENS:
-        assert token.lower() in WORD_BOUNDARY_COSOLVENTS
+        t = token.lower()
+        assert t in WORD_BOUNDARY_COSOLVENTS or t in COSOLVENT_PATTERN_RES
 
 
 @pytest.mark.parametrize(
@@ -579,23 +513,7 @@ def test_negation_only_strips_the_negated_word():
 
 
 def _fill_real(entry_id, stID="1", cosolvents=STRICT_TOKENS):
-    entry = bmrb.BmrbEntry(entry_id, paths.RAW_BMRB / f"bmr{entry_id}")
-    key = next(k for k in entry.get_peptide_shifts() if k[0] == stID)
-    row = pd.Series(
-        {
-            "entryID": entry_id,
-            "stID": key[0],
-            "entity_assemID": key[1],
-            "entityID": key[2],
-        }
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=[entry_id])
-    return fill_row_data(
-        row,
-        perturbing_cosolvents=list(cosolvents),
-        keywords=[],
-        bmrb_entries=bmrb_entries,
-    )
+    return fill_real(entry_id, stID, cosolvents)
 
 
 @requires_bmrb_data
