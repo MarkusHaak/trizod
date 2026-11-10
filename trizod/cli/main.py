@@ -56,6 +56,13 @@ class KeywordSearchScope(str, Enum):
     all = "all"
 
 
+class LeakageRule(str, Enum):
+    """Stage-2 test-set leakage rule (``trizod.dataset.mmseqs.LEAKAGE_RULES``)."""
+
+    test = "test"
+    either = "either"
+
+
 class MethodFallback(str, Enum):
     off = "off"
     reject_solid = "reject-solid"
@@ -502,15 +509,30 @@ def _dataset_testset(
     testset.main(argv)
 
 
+_LEAKAGE_RULE_HELP = (
+    "'test': a training chain leaks at >= 30% identity over >= 80% of the test "
+    "chain; 'either': over >= 80% of the test or the training chain (the "
+    "shorter one)."
+)
+
+
 @dataset_app.command("redundancy")
 def _dataset_redundancy(
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
     root: Optional[str] = typer.Option(None, "--root"),
+    leakage_rule: Optional[LeakageRule] = typer.Option(
+        None,
+        "--leakage-rule",
+        help=_LEAKAGE_RULE_HELP + " Default: test. Recorded in mmseqs/.",
+    ),
 ):
     """Two-stage test-set leakage removal + mmseqs clustering (-> mmseqs/)."""
     from trizod.dataset import redundancy
 
-    redundancy.main(_wd_argv(work_dir, root))
+    argv = _wd_argv(work_dir, root)
+    if leakage_rule is not None:
+        argv += ["--leakage-rule", leakage_rule.value]
+    redundancy.main(argv)
 
 
 @dataset_app.command("representatives")
@@ -531,6 +553,13 @@ def _dataset_package(
     out: Optional[str] = typer.Option(None, "--out"),
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
     root: Optional[str] = typer.Option(None, "--root"),
+    leakage_rule: Optional[LeakageRule] = typer.Option(
+        None,
+        "--leakage-rule",
+        help=_LEAKAGE_RULE_HELP
+        + " Default: the rule the redundancy step recorded; a different value "
+        "is an error.",
+    ),
 ):
     """Assemble the Zenodo release bundle + MANIFEST + leakage gate."""
     from trizod.dataset import package_release
@@ -540,6 +569,8 @@ def _dataset_package(
         argv += ["--include-str"]
     if out is not None:
         argv += ["--out", out]
+    if leakage_rule is not None:
+        argv += ["--leakage-rule", leakage_rule.value]
     package_release.main(argv + _wd_argv(work_dir, root))
 
 

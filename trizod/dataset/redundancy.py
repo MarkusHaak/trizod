@@ -10,17 +10,35 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      script. CheZOD1325 was used at this step (to exclude its clusters
      from the random sample) but is NOT a training-leakage target.
   2. Test-set leakage removal of every tier's deduplicated FASTA against
-     the combined test set (CheZOD117 + TriZOD-348) at 30% id / 80% cov,
-     in TWO stages (matching the manuscript redundancy-reduction figure):
+     the combined test set (CheZOD117 + TriZOD test), in TWO stages
+     (matching the manuscript redundancy-reduction figure):
        2a. stage-1 "remove all cluster members": cluster the unfiltered
-           superset together with the test sequences at 30/80 and drop
-           every training sequence that shares a cluster with a test
-           sequence (catches transitive leakage A~B~test that a direct
-           search misses).
+           superset together with the test sequences at 30% id / 80%
+           coverage of BOTH sequences (--cov-mode 0) and drop every
+           training sequence that shares a cluster with a test sequence
+           (catches transitive leakage A~B~test that a direct search
+           misses).
        2b. stage-2 "search & remove": easy-search the training sequences
-           against the test sets at 30/80 and drop any direct hit.
-     Default mmseqs options: --alignment-mode 3 --cov-mode 0 -s 7.5
-     --comp-bias-corr 0 --mask 0.
+           (query) against the test sets (target) and drop every training
+           chain with an alignment of >= 30% identity over >= 80% of the
+           TEST chain (``--leakage-rule test``, the default) or of the test
+           OR the training chain (``--leakage-rule either``, i.e. of the
+           shorter chain; decision D2). Coverage is the aligned span, gaps
+           included (--cov-mode 1 -c 0 with the 80 % applied to the parsed
+           spans, see ``trizod.dataset.mmseqs.leakage_search_cmd`` /
+           ``is_leak``). This is the leakage criterion: a longer training
+           construct that contains a test protein, or a pair whose length
+           ratio is below 0.8 in either direction, is dropped under both
+           rules; a training chain contained in a longer test chain only
+           under "either". The rule is recorded in
+           ``mmseqs/leakage_rule.json``, and the package step's gate checks
+           the same one. Stage 1 keeps --cov-mode 0 on purpose: one-sided
+           coverage in a clustering lets a long multi-domain construct pull
+           fragments of its other domains into the same cluster (single-
+           linkage bridging), which would drop chains unrelated to any test
+           chain; the direct containment cases are covered by stage 2.
+     Shared mmseqs options: --alignment-mode 3 -s 7.5 --comp-bias-corr 0
+     --mask 0, with --cov-mode 0 everywhere except the stage-2 search.
   3. Cluster the strict residual at 50% / 80% to seed the training
      representatives.
   4. clusterupdate to add moderate → tolerant → unfiltered, in this
@@ -32,6 +50,7 @@ Outputs go to ``<work-dir>/mmseqs/``.
 Usage
 -----
     uv run python -m trizod.dataset.redundancy [--work-dir DIR] [--root DIR]
+        [--leakage-rule {test,either}]
 """
 
 from __future__ import annotations
@@ -40,7 +59,18 @@ import argparse
 import shutil
 from pathlib import Path
 
-from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
+from trizod.dataset.mmseqs import (
+    COMMON,
+    DEFAULT_LEAKAGE_RULE,
+    LEAKAGE_RULE_COVERAGE_OF,
+    LEAKAGE_RULE_FILE,
+    LEAKAGE_RULES,
+    check_rule,
+    cluster_tsv_groups,
+    find_leaks,
+    run,
+    write_leakage_rule,
+)
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, fasta_ids
 
@@ -157,6 +187,33 @@ def stage1_cluster_member_removal(
     return leaked
 
 
+def stage2_search_removal(
+    train_fa: Path,
+    combined_test: Path,
+    hits: Path,
+    tmp: Path,
+    log: Path,
+    rule: str = DEFAULT_LEAKAGE_RULE,
+) -> set[str]:
+    """Stage-2 "search & remove".
+
+    Return the training IDs with an alignment to any test chain of >= 30 %
+    identity over >= 80 % of the TEST chain (rule ``"test"``) or of the test
+    or the training chain (rule ``"either"``). The search runs training
+    (query) against test (target) without a coverage threshold inside mmseqs
+    (which would skip pairs by length ratio) and keeps alignments whose span
+    covers >= 80 % of the test chain, so a training chain that contains a
+    test protein is caught however long it is, and a shorter one whose gapped
+    alignment spans the test chain is caught too. Under ``"either"`` an
+    alignment that covers >= 80 % of the training chain also counts, which
+    catches a training fragment of a longer test chain.
+    """
+    return {
+        h.train_id
+        for h in find_leaks(train_fa, combined_test, hits, tmp, log, rule=rule)
+    }
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -171,7 +228,18 @@ def main(argv=None):
         default=None,
         help="repository root (default: auto-detected)",
     )
+    ap.add_argument(
+        "--leakage-rule",
+        choices=LEAKAGE_RULES,
+        default=DEFAULT_LEAKAGE_RULE,
+        help=(
+            "stage-2 leakage rule: 'test' = >= 30%% identity over >= 80%% of "
+            "the test chain; 'either' = over >= 80%% of the test or the "
+            "training chain (default: %(default)s)"
+        ),
+    )
     args = ap.parse_args(argv)
+    rule = check_rule(args.leakage_rule)
     paths = resolve_paths(args.work_dir, args.root)
     final = paths.final_dataset
     out = paths.mmseqs
@@ -180,6 +248,9 @@ def main(argv=None):
     trizod_test = paths.testset / "TriZOD_test_set.fasta"
 
     out.mkdir(parents=True, exist_ok=True)
+    # The rule record is written only once the run has finished, so a failed
+    # or interrupted run never leaves a record that vouches for stale outputs.
+    (out / LEAKAGE_RULE_FILE).unlink(missing_ok=True)
     # mmseqs refuses to overwrite existing DB outputs, so start from a clean
     # scratch dir on every run (makes the script idempotent / re-runnable).
     if tmp.exists():
@@ -189,6 +260,9 @@ def main(argv=None):
     if not shutil.which("mmseqs"):
         raise SystemExit("mmseqs binary not found in PATH")
 
+    print(
+        f"Leakage rule: {rule} (>= 30% id over >= 80% of {LEAKAGE_RULE_COVERAGE_OF[rule]})"
+    )
     print("Inputs:")
     print(f"  CheZOD117:    {chezod}  ({count_fasta(chezod)} sequences)")
     print(f"  TriZOD test:  {trizod_test}  ({count_fasta(trizod_test)} sequences)")
@@ -219,26 +293,11 @@ def main(argv=None):
         out_fa = out / f"{tier}_no_testset.fasta"
         log = out / f"{tier}_easy_search.log"
 
-        print(f"=== Step A ({tier}): stage-2 easy-search vs test sets ===")
-        run(
-            [
-                "mmseqs",
-                "easy-search",
-                str(fa),
-                str(combined),
-                str(hits),
-                str(tmp),
-                "--min-seq-id",
-                "0.3",
-                "-c",
-                "0.8",
-                *COMMON,
-                "--format-output",
-                "query,target,pident,evalue,bits",
-            ],
-            log,
+        print(
+            f"=== Step A ({tier}): stage-2 easy-search vs test sets "
+            f"(>= 30% id over >= 80% of {LEAKAGE_RULE_COVERAGE_OF[rule]}) ==="
         )
-        hit_ids = {ln.split("\t", 1)[0] for ln in open(hits) if ln.strip()}
+        hit_ids = stage2_search_removal(fa, combined, hits, tmp, log, rule=rule)
         tier_ids = set(fasta_ids(fa))
         leaked_tier = leaked & tier_ids
         removed = leaked_tier | hit_ids
@@ -401,7 +460,9 @@ def main(argv=None):
             f"{count_unique_first_column(ct):>10}"
             f"{count_fasta(rt):>8}"
         )
-    print(f"\nAll artefacts under {out}")
+    record = write_leakage_rule(out, rule)
+    print(f"\nLeakage rule '{rule}' recorded in {record}")
+    print(f"All artefacts under {out}")
 
 
 if __name__ == "__main__":

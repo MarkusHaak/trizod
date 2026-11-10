@@ -9,16 +9,19 @@
 #                (trizod.dataset.build -> <work-dir>/final_dataset/<tier>/<tier>.fasta)
 #   2. testset — recreate the seeded TriZOD test set (trizod.dataset.testset)
 #   3. mmseqs  — two-stage test-set leakage removal (stage-1 cluster-membership
-#                + stage-2 easy-search) then cluster @50/80 + clusterupdate
-#                (trizod.dataset.redundancy)
+#                + stage-2 easy-search under --leakage-rule) then cluster
+#                @50/80 + clusterupdate (trizod.dataset.redundancy)
 #   4. best    — quality-best cluster-representative override
 #                (trizod.dataset.representatives)
-#   5. package — stage the release bundle + MANIFEST + leakage gate
-#                (trizod.dataset.package_release)
+#   5. package — stage the release bundle + MANIFEST + leakage gate, checked
+#                under the same rule (trizod.dataset.package_release)
 #
 # Usage:
-#   scripts/build_dataset.sh [VERSION] [--rescore]
+#   scripts/build_dataset.sh [VERSION] [--rescore] [--leakage-rule test|either]
 #   VERSION defaults to 2026-06.
+#   --leakage-rule (default: test) — stage-2 leakage rule: 'test' drops a
+#   training chain at >= 30% identity over >= 80% of a test chain, 'either'
+#   over >= 80% of the test or the training chain (decision D2).
 #
 # Requirements: uv, mmseqs in PATH. Run from anywhere (paths auto-resolve to the
 # repo root; artefacts land under data/interim/build by default).
@@ -29,13 +32,23 @@ cd "$ROOT"
 
 VERSION="2026-06"
 RESCORE=0
-for arg in "$@"; do
-  case "$arg" in
+LEAKAGE_RULE="test"
+while [ $# -gt 0 ]; do
+  case "$1" in
     --rescore) RESCORE=1 ;;
-    -*) echo "unknown option: $arg" >&2; exit 2 ;;
-    *) VERSION="$arg" ;;
+    --leakage-rule)
+      [ $# -ge 2 ] || { echo "--leakage-rule needs a value (test|either)" >&2; exit 2; }
+      LEAKAGE_RULE="$2"; shift ;;
+    --leakage-rule=*) LEAKAGE_RULE="${1#--leakage-rule=}" ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) VERSION="$1" ;;
   esac
+  shift
 done
+case "$LEAKAGE_RULE" in
+  test|either) ;;
+  *) echo "unknown leakage rule: $LEAKAGE_RULE (expected test or either)" >&2; exit 2 ;;
+esac
 
 TIERS=(unfiltered tolerant moderate strict)
 
@@ -71,13 +84,13 @@ uv run trizod dataset build
 echo "== Step 2: test-set (recreate TriZOD test set, seeded) =="
 uv run trizod dataset test-set
 
-echo "== Step 3: redundancy (two-stage leakage removal + clustering) =="
-uv run trizod dataset redundancy
+echo "== Step 3: redundancy (two-stage leakage removal, rule '$LEAKAGE_RULE', + clustering) =="
+uv run trizod dataset redundancy --leakage-rule "$LEAKAGE_RULE"
 
 echo "== Step 4: representatives (quality-best override) =="
 uv run trizod dataset representatives
 
-echo "== Step 5: package --version $VERSION (with leakage gate) =="
-uv run trizod dataset package --version "$VERSION"
+echo "== Step 5: package --version $VERSION (with leakage gate, rule '$LEAKAGE_RULE') =="
+uv run trizod dataset package --version "$VERSION" --leakage-rule "$LEAKAGE_RULE"
 
 echo "== Done. Bundle: data/interim/build/release_bundle/trizod-dataset-$VERSION =="

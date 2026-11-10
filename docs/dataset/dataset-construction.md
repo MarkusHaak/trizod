@@ -135,13 +135,46 @@ the same seed, so a redraw invalidates comparison with every previous release.
 `trizod dataset redundancy`, against the held-out test sets **CheZOD117 (115) +
 TriZOD test (460)**, 575 sequences in total — CheZOD1325 is *not* a
 training-leakage target. Common mmseqs options throughout:
-`--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0 --mask 0`.
+`--alignment-mode 3 -s 7.5 --comp-bias-corr 0 --mask 0`, with `--cov-mode 0`
+(80 % coverage of **both** sequences) everywhere except the stage-2 search.
+
+**Leakage criterion.** A training chain leaks when an alignment to a test chain
+reaches **≥ 30 % identity over ≥ 80 %** of the chain(s) named by the
+**leakage rule** (`--leakage-rule`, decision D2):
+
+| rule | ≥ 80 % of | also catches |
+|---|---|---|
+| `test` (default) | the test chain | a longer construct that contains a test protein; a shorter chain whose gapped alignment spans the test chain (e.g. the test protein minus an internal loop) |
+| `either` | the test chain **or** the training chain (the shorter one) | everything `test` catches, plus a training chain contained in a longer test chain (e.g. test `51677_1_1_1`, 371 aa, which contains representatives `51674`–`51676`) |
+
+Coverage is the mmseqs aligned span (gaps included). The search is the same
+under both rules; only the coverage test on its hits differs. The redundancy
+step records the rule in `mmseqs/leakage_rule.json`, and the package step checks
+the same rule.
 
 - **Stage 1 — remove all cluster members** (A0): cluster the unfiltered
-  superset with the test sequences at 30/80 and drop every training sequence
-  sharing a cluster with a test sequence (catches transitive leaks).
-- **Stage 2 — search & remove** (A): `easy-search` each tier vs the test sets
-  at 30/80 and drop direct hits.
+  superset with the test sequences at 30 % id / 80 % coverage of both
+  sequences (`--cov-mode 0`) and drop every training sequence sharing a
+  cluster with a test sequence (catches transitive leaks). Stage 1 keeps
+  `--cov-mode 0` on purpose: target coverage in a clustering would let a long
+  multi-domain construct pull fragments of its other domains into one
+  cluster, dropping chains unrelated to any test chain. The containment case
+  is handled by stage 2.
+- **Stage 2 — search & remove** (A): `easy-search` each tier (query) against
+  the test sets (target) with `--min-seq-id 0.3 --cov-mode 1 -c 0` and drop
+  every training chain with an alignment that spans ≥ 80 % of the test chain,
+  `(tend − tstart + 1) / tlen ≥ 0.8`, computed from the hit table (rule
+  `either`: or ≥ 80 % of the training chain, `(qend − qstart + 1) / qlen`).
+  This enforces the leakage criterion. The 80 % is not passed to mmseqs: with any
+  `-c` above 0, mmseqs skips a pair by length ratio before aligning it (under
+  `--cov-mode 1`, when the training chain is shorter than 80 % of the test
+  chain; under `--cov-mode 0`, when either chain is). Stage 2 catches a
+  training construct that contains a test chain (e.g. test `51709_1_1_1`,
+  169 aa, inside `53339_1_1_1`, 419 aa) and gapped pairs whose length ratio is
+  below 0.8 in either direction (`27177_1_1_1`, 124 aa, vs test
+  `27176_1_1_1`, 99 aa, 79.8 % identity; `19243_1_1_1`, 148 aa, spanning test
+  `16205_1_1_1`, 238 aa, at 59.6 %). Builds up to `2026-10` ran this stage
+  with `--cov-mode 0 -c 0.8` (80 % of both chains) and missed all of these.
 - **Cluster** the strict residual at **50 % id / 80 % cov** (B), then iterative
   **`clusterupdate`** strict → moderate → tolerant → unfiltered (C) so each
   tier extends the previous and shared sequences keep the strict-tier
@@ -155,6 +188,10 @@ training-leakage target. Common mmseqs options throughout:
 | — of which stage-1-only (transitive) | 54 | 129 | 152 | 159 |
 | **non-redundant** (after leakage) | **2,334** | **6,038** | **7,560** | **8,101** |
 | **training reps** (cluster representatives) | **1,895** | **4,520** | **5,466** | **5,803** |
+
+These counts are from the `2026-08` build, whose stage 2 still used
+`--cov-mode 0`. With the test-chain criterion, stage 2 removes more, and the
+counts change at the next rebuild.
 
 → `data/interim/build/mmseqs/`.
 
@@ -170,9 +207,25 @@ with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
 ## 6. Package + leakage gate
 
 `trizod dataset package --version 2026-08` stages the bundle and runs a hard
-**leakage gate**: it fails if any test ID or exact test sequence appears in any
-training set. It passes with **0 shared IDs and 0 exact-sequence matches**
-against the 575 test sequences.
+**leakage gate**. The gate fails if
+
+- any test ID or exact test sequence appears in any training set;
+- any staged training record is an **exact substring of a test chain, or
+  contains one, over ≥ 20 aa** (whatever the rule; no aligner involved); or
+- any staged training record meets the stage-2 criterion **under the rule the
+  build recorded** (`mmseqs/leakage_rule.json`): ≥ 30 % identity over ≥ 80 % of
+  the test chain (`test`) or of the test or the training chain (`either`).
+  `--leakage-rule` on the package step may only restate the recorded rule.
+
+The coverage check runs the stage-2 search (training as query, test as target,
+coverage from the alignment span), so mmseqs must be on PATH, and every
+offending pair is listed. The rule and its parameters are copied into
+`MANIFEST.json` under `leakage`. The `2026-08` bundle passed the ID and
+exact-sequence checks with **0 shared IDs and 0 exact-sequence matches**
+against the 575 test sequences. The coverage and substring checks were added
+later, and the `2026-10` bundle fails them. Under the `test` rule, a training
+chain contained in a longer test chain stays in training, so the substring
+check fails such a build whenever one is ≥ 20 aa.
 
 → `data/interim/build/release_bundle/trizod-dataset-2026-08/` (train/ + scores/
 + test/ + README + MANIFEST — 24 files, 150,570,282 bytes). The single-table
@@ -187,8 +240,14 @@ table is flagged against the frozen median/MAD reference
 
 ## 7. The leakage guarantee
 
-Every `train_<tier>` set is redundancy-reduced (two stages, 30/80) against
-**CheZOD117 + the 460-sequence TriZOD test set**, which are themselves disjoint
+Every `train_<tier>` set is redundancy-reduced in two stages against
+**CheZOD117 + the 460-sequence TriZOD test set**. The stage-2 mmseqs search
+finds no training chain that aligns to a test chain at ≥ 30 % identity over
+≥ 80 % of the test chain (rule `test`) or of the test or the training chain
+(rule `either`), whatever the length ratio (within the sensitivity of its
+k-mer prefilter at `-s 7.5` and the default E ≤ 10⁻³), and the gate finds no
+exact-substring containment of ≥ 20 aa in either direction. The two test
+sets are themselves disjoint
 (the TriZOD set excludes CheZOD clusters). So a model can train on any
 `train_<tier>` set and be evaluated on **CheZOD117** (the established
 hand-balanced benchmark, comparable to ODiNPred/SETH) and on the TriZOD test set
