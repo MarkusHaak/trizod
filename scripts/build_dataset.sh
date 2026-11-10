@@ -19,7 +19,7 @@
 # Usage:
 #   scripts/build_dataset.sh [VERSION] [--rescore] [--leakage-rule test|either]
 #   VERSION defaults to 2026-06.
-#   --leakage-rule (default: test) — stage-2 leakage rule: 'test' drops a
+#   --leakage-rule (default: either) — stage-2 leakage rule: 'test' drops a
 #   training chain at >= 30% identity over >= 80% of a test chain, 'either'
 #   over >= 80% of the test or the training chain (decision D2).
 #
@@ -32,7 +32,7 @@ cd "$ROOT"
 
 VERSION="2026-06"
 RESCORE=0
-LEAKAGE_RULE="test"
+LEAKAGE_RULE="either"
 while [ $# -gt 0 ]; do
   case "$1" in
     --rescore) RESCORE=1 ;;

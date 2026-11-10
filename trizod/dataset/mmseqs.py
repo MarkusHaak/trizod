@@ -7,14 +7,15 @@ test-set draw (``--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0
 Test-set leakage is defined separately, by :func:`leakage_search_cmd` and
 :func:`is_leak`, under one of two rules (``LEAKAGE_RULES``, decision D2):
 
-* ``"test"`` (the default): a training chain leaks when an alignment to a
+* ``"test"``: a training chain leaks when an alignment to a
   held-out test chain reaches >= 30 % identity over >= 80 % of the TEST chain.
   A longer training construct that contains a test protein is a leak; a
   training fragment of a longer test chain is not.
-* ``"either"``: >= 30 % identity over >= 80 % of the test chain OR of the
-  training chain, i.e. of the shorter of the two (the union of an mmseqs
-  ``--cov-mode 1`` and ``--cov-mode 2`` pass). This also catches a test chain
-  that contains a shorter training chain.
+* ``"either"`` (the default, decision D2): >= 30 % identity over >= 80 % of
+  the test chain OR of the training chain, i.e. of the shorter of the two (the
+  union of an mmseqs ``--cov-mode 1`` and ``--cov-mode 2`` pass). This also
+  catches a test chain that contains a shorter training chain, which the
+  ``"test"`` rule leaves in (and which the release's substring gate rejects).
 
 Coverage is the mmseqs definition, the aligned span ``(end - start + 1) /
 length``, gaps included. ``--cov-mode 0`` would demand 80 % of both chains, so
@@ -63,7 +64,7 @@ LEAKAGE_MIN_TEST_COV = 0.8
 LEAKAGE_MIN_COV = LEAKAGE_MIN_TEST_COV
 LEAKAGE_RULES = ("test", "either")
 # The project owner decides D2; until then the build keeps the committed rule.
-DEFAULT_LEAKAGE_RULE = "test"
+DEFAULT_LEAKAGE_RULE = "either"
 LEAKAGE_RULE_COVERAGE_OF = {
     "test": "the test chain",
     "either": "the test chain or the training chain (at least one of the two)",
@@ -81,6 +82,9 @@ LEAKAGE_COV_MODE = 1
 LEAKAGE_MMSEQS_COV = 0
 # Start/end columns rather than qcov/tcov, which mmseqs rounds to 3 decimals.
 LEAKAGE_FORMAT = "query,target,pident,evalue,bits,qstart,qend,qlen,tstart,tend,tlen"
+# No k-mer prefilter: at -s 7.5 it misses weak homologs (30-50 % identity) that
+# meet the criterion. Aligning every training x test pair costs seconds here.
+LEAKAGE_PREFILTER_MODE = 2
 
 
 def with_cov_mode(opts: list[str], cov_mode: int) -> list[str]:
@@ -165,6 +169,8 @@ def leakage_search_options() -> list[str]:
         "-c",
         str(LEAKAGE_MMSEQS_COV),
         *with_cov_mode(COMMON, LEAKAGE_COV_MODE),
+        "--prefilter-mode",
+        str(LEAKAGE_PREFILTER_MODE),
         "--format-output",
         LEAKAGE_FORMAT,
     ]

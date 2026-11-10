@@ -28,7 +28,7 @@ The fixtures below rebuild both cases from seeded random sequences:
 * unrelated     - a random training chain (no leak)
 
 Leakage rules (decision D2, ``trizod.dataset.mmseqs.LEAKAGE_RULES``):
-"test" (default) = >= 80 % of the test chain; "either" = >= 80 % of the test
+"test" = >= 80 % of the test chain; "either" (default) = >= 80 % of the test
 chain or of the training chain, i.e. of the shorter one. Whatever the rule, the
 release gate also fails on exact-substring containment of >= 20 aa in either
 direction, and it checks the rule the redundancy step recorded.
@@ -204,7 +204,7 @@ def test_test_coverage_is_the_exact_aligned_span(tmp_path):
     hits = {h.train_id: h for h in mm.parse_leakage_hits(tsv)}
     assert hits["t_edge"].test_cov == pytest.approx(2000 / 2501)
     assert hits["t_exact"].test_cov == pytest.approx(0.8)
-    leaks = {h.train_id for h in hits.values() if mm.is_leak(h)}
+    leaks = {h.train_id for h in hits.values() if mm.is_leak(h, rule="test")}
     assert leaks == {"t_exact"}
 
 
@@ -314,10 +314,15 @@ def test_leak_search_reports_test_chain_coverage(fastas, tmp_path):
 def test_stage2_drops_containment_and_length_ratio_leaks(fastas, tmp_path):
     train_fa, test_fa = fastas
     removed = redundancy.stage2_search_removal(
-        train_fa, test_fa, tmp_path / "hits.tsv", tmp_path / "tmp", tmp_path / "log"
+        train_fa,
+        test_fa,
+        tmp_path / "hits.tsv",
+        tmp_path / "tmp",
+        tmp_path / "log",
+        rule="test",
     )
     assert removed == {CONTAIN_TRAIN, RATIO_TRAIN, DELETION_TRAIN}
-    # the default criterion is coverage of the TEST chain: a training fragment
+    # the "test" criterion is coverage of the TEST chain: a training fragment
     # that covers half of a test chain is not a leak, nor is an unrelated chain
     assert FRAG_TRAIN not in removed
     assert MUTFRAG_TRAIN not in removed
@@ -332,7 +337,7 @@ def test_gate_fails_on_containment_and_reports_pairs(tmp_path):
     train, test = _fixture_seqs()
     bundle = _make_bundle(tmp_path, train, test)
     with pytest.raises(SystemExit) as exc:
-        package_release.assert_no_leakage(bundle)
+        package_release.assert_no_leakage(bundle, rule="test")
     msg = str(exc.value)
     assert "LEAKAGE GATE FAILED" in msg
     for tid in (
@@ -356,7 +361,7 @@ def test_gate_fails_on_length_ratio_pair_alone(tmp_path):
     train = {k: train[k] for k in (RATIO_TRAIN, MUTFRAG_TRAIN, UNRELATED_TRAIN)}
     bundle = _make_bundle(tmp_path, train, test)
     with pytest.raises(SystemExit) as exc:
-        package_release.assert_no_leakage(bundle)
+        package_release.assert_no_leakage(bundle, rule="test")
     assert RATIO_TRAIN in str(exc.value) and RATIO_TEST in str(exc.value)
 
 
@@ -366,7 +371,7 @@ def test_gate_fails_on_shorter_training_chain_spanning_test_chain(tmp_path):
     train = {k: train[k] for k in (DELETION_TRAIN, MUTFRAG_TRAIN, UNRELATED_TRAIN)}
     bundle = _make_bundle(tmp_path, train, test)
     with pytest.raises(SystemExit) as exc:
-        package_release.assert_no_leakage(bundle)
+        package_release.assert_no_leakage(bundle, rule="test")
     msg = str(exc.value)
     assert DELETION_TRAIN in msg and DELETION_TEST in msg
     assert MUTFRAG_TRAIN not in msg
@@ -378,7 +383,7 @@ def test_gate_passes_clean_bundle_and_leaves_it_untouched(tmp_path, capsys):
     clean = {k: train[k] for k in (MUTFRAG_TRAIN, UNRELATED_TRAIN)}
     bundle = _make_bundle(tmp_path, clean, test)
     before = sorted(p.relative_to(bundle) for p in bundle.rglob("*"))
-    package_release.assert_no_leakage(bundle)
+    package_release.assert_no_leakage(bundle, rule="test")
     after = sorted(p.relative_to(bundle) for p in bundle.rglob("*"))
     assert before == after  # no mmseqs scratch left inside the bundle
     out = capsys.readouterr().out
@@ -393,7 +398,7 @@ def test_gate_still_fails_on_exact_sequence_match(tmp_path):
     leaked = {"905_1_1_1": test[FRAG_TEST]}
     bundle = _make_bundle(tmp_path, leaked, test)
     with pytest.raises(SystemExit, match="exact-sequence"):
-        package_release.assert_no_leakage(bundle)
+        package_release.assert_no_leakage(bundle, rule="test")
 
 
 # ===================================================== leakage rule (D2)
@@ -414,10 +419,23 @@ def _hit(test_cov: float, train_cov: float) -> mm.LeakageHit:
 
 
 def test_leakage_rules_and_default():
-    """Two rules; the default stays "test" until the project owner decides D2."""
+    """Two rules; decision D2 makes "either" the default, because the "test" rule
+    leaves training chains that sit inside longer test chains (and so fails the
+    release's own substring gate)."""
     assert mm.LEAKAGE_RULES == ("test", "either")
-    assert mm.DEFAULT_LEAKAGE_RULE == "test"
+    assert mm.DEFAULT_LEAKAGE_RULE == "either"
     assert mm.SUBSTRING_MIN_LEN == 20
+
+
+def test_leakage_search_aligns_every_pair_without_the_kmer_prefilter(tmp_path):
+    """The k-mer prefilter at -s 7.5 misses weak homologs (30-50 % identity) that
+    meet the criterion; --prefilter-mode 2 aligns every training x test pair,
+    which costs seconds at this database size."""
+    cmd = mm.leakage_search_cmd(
+        tmp_path / "train.fa", tmp_path / "test.fa", tmp_path / "hits.tsv", tmp_path
+    )
+    assert cmd.count("--prefilter-mode") == 1
+    assert cmd[cmd.index("--prefilter-mode") + 1] == "2"
 
 
 @pytest.mark.parametrize(
@@ -432,7 +450,7 @@ def test_leakage_rules_and_default():
 )
 def test_is_leak_per_rule(test_cov, train_cov, as_test, as_either):
     hit = _hit(test_cov, train_cov)
-    assert mm.is_leak(hit) is as_test  # default rule
+    assert mm.is_leak(hit) is as_either  # default rule ("either", decision D2)
     assert mm.is_leak(hit, rule="test") is as_test
     assert mm.is_leak(hit, rule="either") is as_either
 
@@ -676,7 +694,7 @@ def _make_redundancy_inputs(root: Path) -> Path:
 def test_redundancy_applies_and_records_the_rule(tmp_path, rule):
     work = _make_redundancy_inputs(tmp_path)
     argv = ["--work-dir", str(work), "--root", str(tmp_path)]
-    if rule != "test":
+    if rule != mm.DEFAULT_LEAKAGE_RULE:
         argv += ["--leakage-rule", rule]
     redundancy.main(argv)
     out = work / "mmseqs"
@@ -757,7 +775,7 @@ def test_build_script_passes_leakage_rule_to_redundancy_and_package(tmp_path):
     assert pkg == ["run trizod dataset package --version 9.9 --leakage-rule either"]
 
 
-def test_build_script_default_rule_is_test(tmp_path):
+def test_build_script_default_rule_is_either(tmp_path):
     calls = _run_build_script(tmp_path)
     red = [c for c in calls if "dataset redundancy" in c]
-    assert red == ["run trizod dataset redundancy --leakage-rule test"]
+    assert red == ["run trizod dataset redundancy --leakage-rule either"]
