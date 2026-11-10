@@ -18,6 +18,12 @@ from typing import Optional
 import numpy as np
 import typer
 
+from trizod.dataset.mmseqs import (
+    DEFAULT_LEAKAGE_RULE,
+    LEAKAGE_RULES,
+    LEAKAGE_RULES_HELP,
+)
+
 app = typer.Typer(
     rich_markup_mode=None,
     add_completion=False,
@@ -54,6 +60,11 @@ class ScoreType(str, Enum):
 class KeywordSearchScope(str, Enum):
     sample = "sample"
     all = "all"
+
+
+#: Stage-2 test-set leakage rule: one member per
+#: ``trizod.dataset.mmseqs.LEAKAGE_RULES``, so the two cannot drift apart.
+LeakageRule = Enum("LeakageRule", {rule: rule for rule in LEAKAGE_RULES}, type=str)
 
 
 class MethodFallback(str, Enum):
@@ -502,15 +513,29 @@ def _dataset_testset(
     testset.main(argv)
 
 
+_LEAKAGE_RULE_HELP = f"Stage-2 test-set leakage rule ({LEAKAGE_RULES_HELP})."
+
+
 @dataset_app.command("redundancy")
 def _dataset_redundancy(
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
     root: Optional[str] = typer.Option(None, "--root"),
+    leakage_rule: Optional[LeakageRule] = typer.Option(
+        None,
+        "--leakage-rule",
+        help=(
+            f"{_LEAKAGE_RULE_HELP} Default: {DEFAULT_LEAKAGE_RULE}. "
+            "Recorded in mmseqs/."
+        ),
+    ),
 ):
     """Two-stage test-set leakage removal + mmseqs clustering (-> mmseqs/)."""
     from trizod.dataset import redundancy
 
-    redundancy.main(_wd_argv(work_dir, root))
+    argv = _wd_argv(work_dir, root)
+    if leakage_rule is not None:
+        argv += ["--leakage-rule", leakage_rule.value]
+    redundancy.main(argv)
 
 
 @dataset_app.command("representatives")
@@ -531,6 +556,13 @@ def _dataset_package(
     out: Optional[str] = typer.Option(None, "--out"),
     work_dir: Optional[str] = typer.Option(None, "--work-dir"),
     root: Optional[str] = typer.Option(None, "--root"),
+    leakage_rule: Optional[LeakageRule] = typer.Option(
+        None,
+        "--leakage-rule",
+        help=_LEAKAGE_RULE_HELP
+        + " Default: the rule the redundancy step recorded; a different value "
+        "is an error.",
+    ),
 ):
     """Assemble the Zenodo release bundle + MANIFEST + leakage gate."""
     from trizod.dataset import package_release
@@ -540,6 +572,8 @@ def _dataset_package(
         argv += ["--include-str"]
     if out is not None:
         argv += ["--out", out]
+    if leakage_rule is not None:
+        argv += ["--leakage-rule", leakage_rule.value]
     package_release.main(argv + _wd_argv(work_dir, root))
 
 

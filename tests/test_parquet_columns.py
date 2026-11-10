@@ -139,6 +139,7 @@ def _scored_frame():
         "ionic_strength": [0.15],
         "pH": [7.0],
         "temperature": [298.0],
+        "pressure_bar": [1.01325],
         "bbshift_positions_post": [n],
         "bbshift_types_post": [3],
         "total_bbshifts": [3 * n],
@@ -212,6 +213,34 @@ def test_declared_scores_sources_are_actually_emitted(tmp_path):
 def test_sample_state_annotations_reach_the_parquet(key):
     """Regression pin for the defect: these four stopped at scores.json."""
     assert key in builder.SCORES_JSON_SOURCES
+
+
+def test_pressure_bar_is_appended_to_the_contract():
+    """Sample pressure in bar, appended after every v0.4.0 column, float32 like
+    ph/temperature, and read from the scores.json key of the same name."""
+    names = [c.name for c in builder.COLUMNS]
+    col = builder.COLUMNS[names.index("pressure_bar")]
+    assert (col.name, col.arrow, col.origin, col.source) == (
+        "pressure_bar",
+        "float32",
+        "scores",
+        "pressure_bar",
+    )
+    assert names.index("pressure_bar") == names.index("label_tier") + 1
+    assert "pressure_bar" in builder.SCORES_JSON_SOURCES
+
+
+def test_label_tier_source_is_appended_last():
+    """The tier whose scores.json record supplied the row's labels and offsets
+    (audit I-01): a derived string, appended after every published column."""
+    last = builder.COLUMNS[-1]
+    assert (last.name, last.arrow, last.origin) == (
+        "label_tier_source",
+        "string",
+        "derived",
+    )
+    names = [c.name for c in builder.COLUMNS]
+    assert names.index("label_tier_source") == names.index("pressure_bar") + 1
 
 
 # --------------------------------------------------------------------------- #
@@ -311,12 +340,17 @@ COMPOSITION_HEADER = ["entryID", *sorted(builder.COMPOSITION_SOURCES)]
 
 
 def _write_bundle(root, *, records, test_trizod_header=None):
-    """Minimal bundle: scores + per-tier train/cluster files + test FASTAs."""
-    scores = root / "scores" / "unfiltered"
-    scores.mkdir(parents=True)
-    (scores / "scores.json").write_text(
-        "\n".join(json.dumps(r) for r in records) + "\n"
-    )
+    """Minimal bundle: per-tier scores + train/cluster files + test FASTAs.
+
+    Every chain is scored at unfiltered only, so it is ``excluded`` and its row
+    is read from the unfiltered record; the stricter tiers' ``scores.json`` are
+    present but empty (the builder requires all four).
+    """
+    for tier in builder.TIER_ORDER:
+        scores = root / "scores" / tier
+        scores.mkdir(parents=True)
+        held = records if tier == "unfiltered" else []
+        (scores / "scores.json").write_text("".join(json.dumps(r) + "\n" for r in held))
     for tier in builder.TIER_ORDER:
         tier_dir = root / "train" / tier
         tier_dir.mkdir(parents=True)
@@ -487,6 +521,34 @@ def test_sample_state_columns_are_copied_from_scores_json(tmp_path):
         assert _one(cols, name, 1) is None, name
 
 
+def test_pressure_bar_is_copied_and_null_when_unrecorded(tmp_path):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _record("12345", "12345_1_1_1", pressure_bar=2500.0),
+            _record("23456", "23456_1_1_1", pressure_bar=None),  # NaN -> null
+            _record("99999", "99999_1_1_1"),  # key absent: older scores.json
+        ],
+    )
+    cols = builder.collect_columns(bundle, None)
+    assert _one(cols, "pressure_bar", 0) == pytest.approx(2500.0)
+    assert _one(cols, "pressure_bar", 1) is None
+    assert _one(cols, "pressure_bar", 2) is None
+
+
+def test_pressure_bar_semantics_are_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    metadata = pq.read_schema(sorted_parquet).metadata
+    semantics = metadata[b"pressure_bar_semantics"].decode()
+    assert "bar" in semantics and "never filtered" in semantics
+
+
+def test_label_source_rule_is_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    rule = pq.read_schema(sorted_parquet).metadata[b"label_source"].decode()
+    assert "train_tier" in rule and "label_tier_source" in rule
+
+
 def test_published_columns_still_populate(tmp_path):
     """The additive change must not disturb the 42 existing columns."""
     bundle = _write_bundle(
@@ -512,6 +574,7 @@ def test_published_columns_still_populate(tmp_path):
     assert _one(cols, "mask") == [True, True, False, True]
     assert _one(cols, "n_scored") == 3
     assert _one(cols, "split") == "excluded"
+    assert _one(cols, "label_tier_source") == "unfiltered"
     assert _one(cols, "ph") == pytest.approx(7.4)
     assert _one(cols, "citation_doi") == "10.1000/xyz"
     assert _one(cols, "k") == [3, 3, 3, 3]

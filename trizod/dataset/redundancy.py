@@ -10,17 +10,38 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      script. CheZOD1325 was used at this step (to exclude its clusters
      from the random sample) but is NOT a training-leakage target.
   2. Test-set leakage removal of every tier's deduplicated FASTA against
-     the combined test set (CheZOD117 + TriZOD-348) at 30% id / 80% cov,
-     in TWO stages (matching the manuscript redundancy-reduction figure):
+     the combined test set (CheZOD117 + TriZOD test), in TWO stages
+     (matching the manuscript redundancy-reduction figure):
        2a. stage-1 "remove all cluster members": cluster the unfiltered
-           superset together with the test sequences at 30/80 and drop
-           every training sequence that shares a cluster with a test
-           sequence (catches transitive leakage A~B~test that a direct
-           search misses).
+           superset together with the test sequences at 30% id / 80%
+           coverage of BOTH sequences (--cov-mode 0) and drop every
+           training sequence that shares a cluster with a test sequence
+           (catches transitive leakage A~B~test that a direct search
+           misses).
        2b. stage-2 "search & remove": easy-search the training sequences
-           against the test sets at 30/80 and drop any direct hit.
-     Default mmseqs options: --alignment-mode 3 --cov-mode 0 -s 7.5
-     --comp-bias-corr 0 --mask 0.
+           (query) against the test sets (target) -- once, on the unfiltered
+           superset, whose hits restricted to a tier's IDs are that tier's
+           hits (the tiers nest, and E-values depend only on the test target
+           DB) -- and drop every training chain with an alignment of >= 30%
+           identity over >= 80% of the TEST chain (``--leakage-rule test``)
+           or of the test OR the training chain (``--leakage-rule either``,
+           the default, i.e. of the shorter chain; decision D2). Coverage is
+           the aligned span, gaps included (--cov-mode 1 -c 0 with the 80 %
+           applied to the parsed spans, see
+           ``trizod.dataset.mmseqs.leakage_search_cmd`` / ``is_leak``). This
+           is the leakage criterion: a longer training construct that
+           contains a test protein, or a pair whose length ratio is below
+           0.8 in either direction, is dropped under both rules; a training
+           chain contained in a longer test chain only under "either". The
+           rule is recorded in
+           ``mmseqs/leakage_rule.json``, and the package step's gate checks
+           the same one. Stage 1 keeps --cov-mode 0 on purpose: one-sided
+           coverage in a clustering lets a long multi-domain construct pull
+           fragments of its other domains into the same cluster (single-
+           linkage bridging), which would drop chains unrelated to any test
+           chain; the direct containment cases are covered by stage 2.
+     Shared mmseqs options: --alignment-mode 3 -s 7.5 --comp-bias-corr 0
+     --mask 0, with --cov-mode 0 everywhere except the stage-2 search.
   3. Cluster the strict residual at 50% / 80% to seed the training
      representatives.
   4. clusterupdate to add moderate → tolerant → unfiltered, in this
@@ -32,6 +53,7 @@ Outputs go to ``<work-dir>/mmseqs/``.
 Usage
 -----
     uv run python -m trizod.dataset.redundancy [--work-dir DIR] [--root DIR]
+        [--leakage-rule {test,either}]
 """
 
 from __future__ import annotations
@@ -40,11 +62,35 @@ import argparse
 import shutil
 from pathlib import Path
 
-from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
+from trizod.dataset.mmseqs import (
+    COMMON,
+    DEFAULT_LEAKAGE_RULE,
+    LEAKAGE_RULE_FILE,
+    LEAKAGE_RULES,
+    LEAKAGE_RULES_HELP,
+    check_rule,
+    cluster_tsv_groups,
+    describe_rule,
+    find_leaks,
+    run,
+    write_leakage_rule,
+)
 from trizod.dataset.paths import resolve_paths
-from trizod.io.fasta import count_fasta, fasta_ids
+from trizod.io.fasta import count_fasta, fasta_ids, read_fasta
 
 TIERS = ["strict", "moderate", "tolerant", "unfiltered"]
+
+#: Per-tier stage-2 search logs of the old layout (one search per tier). Stage 2
+#: now searches the unfiltered superset once, so these are only ever left over
+#: from an earlier run and would read as the record of the current one.
+STALE_SEARCH_LOGS = tuple(f"{t}_easy_search.log" for t in TIERS if t != "unfiltered")
+
+
+def remove_stale_outputs(out: Path) -> None:
+    """Delete the outputs of an earlier run that this run no longer writes."""
+    for name in STALE_SEARCH_LOGS:
+        (out / name).unlink(missing_ok=True)
+
 
 # Header prefix used to tag test sequences when they are co-clustered with the
 # training superset in stage-1, so they never collide with a training header.
@@ -76,6 +122,15 @@ def filter_fasta_by_ids(fa_in: Path, remove_ids: set[str], fa_out: Path) -> int:
             elif write_record:
                 o.write(line)
     return kept
+
+
+def filter_tsv_by_query(tsv_in: Path, keep_ids: set[str], tsv_out: Path) -> None:
+    """Copy the rows of an mmseqs hit TSV whose query (first column) is in
+    ``keep_ids``, in their original order."""
+    with open(tsv_in) as f, open(tsv_out, "w") as o:
+        for line in f:
+            if line.strip() and line.split("\t", 1)[0] in keep_ids:
+                o.write(line)
 
 
 def build_combined_testset(sources: list[Path], out: Path) -> dict[str, str]:
@@ -157,6 +212,33 @@ def stage1_cluster_member_removal(
     return leaked
 
 
+def stage2_search_removal(
+    train_fa: Path,
+    combined_test: Path,
+    hits: Path,
+    tmp: Path,
+    log: Path,
+    rule: str = DEFAULT_LEAKAGE_RULE,
+) -> set[str]:
+    """Stage-2 "search & remove".
+
+    Return the training IDs with an alignment to any test chain of >= 30 %
+    identity over >= 80 % of the TEST chain (rule ``"test"``) or of the test
+    or the training chain (rule ``"either"``). The search runs training
+    (query) against test (target) without a coverage threshold inside mmseqs
+    (which would skip pairs by length ratio) and keeps alignments whose span
+    covers >= 80 % of the test chain, so a training chain that contains a
+    test protein is caught however long it is, and a shorter one whose gapped
+    alignment spans the test chain is caught too. Under ``"either"`` an
+    alignment that covers >= 80 % of the training chain also counts, which
+    catches a training fragment of a longer test chain.
+    """
+    return {
+        h.train_id
+        for h in find_leaks(train_fa, combined_test, hits, tmp, log, rule=rule)
+    }
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -171,7 +253,18 @@ def main(argv=None):
         default=None,
         help="repository root (default: auto-detected)",
     )
+    ap.add_argument(
+        "--leakage-rule",
+        choices=LEAKAGE_RULES,
+        default=DEFAULT_LEAKAGE_RULE,
+        help=(
+            "stage-2 leakage rule ("
+            + LEAKAGE_RULES_HELP.replace("%", "%%")
+            + "; default: %(default)s)"
+        ),
+    )
     args = ap.parse_args(argv)
+    rule = check_rule(args.leakage_rule)
     paths = resolve_paths(args.work_dir, args.root)
     final = paths.final_dataset
     out = paths.mmseqs
@@ -180,6 +273,10 @@ def main(argv=None):
     trizod_test = paths.testset / "TriZOD_test_set.fasta"
 
     out.mkdir(parents=True, exist_ok=True)
+    # The rule record is written only once the run has finished, so a failed
+    # or interrupted run never leaves a record that vouches for stale outputs.
+    (out / LEAKAGE_RULE_FILE).unlink(missing_ok=True)
+    remove_stale_outputs(out)
     # mmseqs refuses to overwrite existing DB outputs, so start from a clean
     # scratch dir on every run (makes the script idempotent / re-runnable).
     if tmp.exists():
@@ -189,6 +286,7 @@ def main(argv=None):
     if not shutil.which("mmseqs"):
         raise SystemExit("mmseqs binary not found in PATH")
 
+    print(f"Leakage rule: {rule} ({describe_rule(rule)})")
     print("Inputs:")
     print(f"  CheZOD117:    {chezod}  ({count_fasta(chezod)} sequences)")
     print(f"  TriZOD test:  {trizod_test}  ({count_fasta(trizod_test)} sequences)")
@@ -213,33 +311,42 @@ def main(argv=None):
     print()
 
     # ---------------- Step A: stage-2 easy-search vs test sets ----------
+    # One search, of the unfiltered superset. Every tier FASTA is a subset of
+    # it -- same IDs, same sequences (build names each sequence by its global
+    # representative in every tier) -- and the training chains are the queries,
+    # so each one is aligned independently, with E-values computed against the
+    # test target DB alone: a tier's hits are the superset's hits restricted to
+    # the tier's IDs, which is what a per-tier search would report.
+    print(f"=== Step A: stage-2 easy-search vs test sets ({describe_rule(rule)}) ===")
+    unfiltered_hits = out / "unfiltered_testset_hits.tsv"
+    all_hit_ids = stage2_search_removal(
+        unfiltered_fa,
+        combined,
+        unfiltered_hits,
+        tmp,
+        out / "unfiltered_easy_search.log",
+        rule=rule,
+    )
+    superset = read_fasta(unfiltered_fa)
+    print()
     for tier in TIERS:
         fa = final / tier / f"{tier}.fasta"
-        hits = out / f"{tier}_testset_hits.tsv"
         out_fa = out / f"{tier}_no_testset.fasta"
-        log = out / f"{tier}_easy_search.log"
-
-        print(f"=== Step A ({tier}): stage-2 easy-search vs test sets ===")
-        run(
-            [
-                "mmseqs",
-                "easy-search",
-                str(fa),
-                str(combined),
-                str(hits),
-                str(tmp),
-                "--min-seq-id",
-                "0.3",
-                "-c",
-                "0.8",
-                *COMMON,
-                "--format-output",
-                "query,target,pident,evalue,bits",
-            ],
-            log,
-        )
-        hit_ids = {ln.split("\t", 1)[0] for ln in open(hits) if ln.strip()}
-        tier_ids = set(fasta_ids(fa))
+        print(f"=== Step A ({tier}): stage-2 hits within the tier ===")
+        tier_seqs = read_fasta(fa)
+        not_nested = [i for i, q in tier_seqs.items() if superset.get(i) != q]
+        if not_nested:
+            raise SystemExit(
+                f"{tier}.fasta is not a subset of unfiltered.fasta: "
+                f"{len(not_nested)} IDs absent or with another sequence, e.g. "
+                f"{not_nested[:5]}"
+            )
+        tier_ids = set(tier_seqs)
+        if tier != "unfiltered":
+            filter_tsv_by_query(
+                unfiltered_hits, tier_ids, out / f"{tier}_testset_hits.tsv"
+            )
+        hit_ids = all_hit_ids & tier_ids
         leaked_tier = leaked & tier_ids
         removed = leaked_tier | hit_ids
         kept = filter_fasta_by_ids(fa, removed, out_fa)
@@ -401,7 +508,9 @@ def main(argv=None):
             f"{count_unique_first_column(ct):>10}"
             f"{count_fasta(rt):>8}"
         )
-    print(f"\nAll artefacts under {out}")
+    record = write_leakage_rule(out, rule)
+    print(f"\nLeakage rule '{rule}' recorded in {record}")
+    print(f"All artefacts under {out}")
 
 
 if __name__ == "__main__":

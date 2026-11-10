@@ -120,21 +120,177 @@ _COSOLVENT_PREFIX_TOKENS = (
     "hexafluoroisopropanol",
     "hexafluoro-2-propanol",
 )
+#: Alcohols and organic solvents, in the tier filter's spelling and order (they
+#: are the last entries of ``trizod.trizod.COSOLVENT_TOKENS`` and name its
+#: columns) and shared with the ``cosolvent_evidence`` annotation, so the two
+#: lists cannot disagree. The pattern-matched names are keys of
+#: ``COSOLVENT_PATTERNS``; the rest are plain whole words
+#: (``ORGANIC_SOLVENT_WORD_TOKENS``). Evidence, per spelling:
+#:
+#: * Methanol and ethanol (pattern; 2-mercaptoethanol, ethanolamine and
+#:   trifluoroethanol are not ethanol): melittin in 100 % methanol (bmr26334),
+#:   ubiquitin in 45 % methanol at 2,500 bar (bmr18611). ``CD3OH`` / ``CD3OD`` /
+#:   ``MeOH`` are the deposited methanol spellings that contain no 'methanol'
+#:   (bmr15323 'CD3OH' 100 %, bmr25162 'CD3OD' 33 %, bmr5580 'MeOH' 37 %) and
+#:   ``EtOH`` the ethanol one (bmr51165); whole words, so ``etoh`` does not fire
+#:   inside 'acetohydroxamic acid'.
+#: * NMR-STAR audit I-07, the organic solvents that still passed every tier:
+#:   acetonitrile (pattern, see ``ACETONITRILE_PATTERN``), ``CD3CN`` (bmr5633,
+#:   30 %) and ``ACN`` (bmr36521, a pinned test chain, '30% deuterated ACN'; whole
+#:   word, so not NaCN or 'Propionibacterium acnes'); ``chloroform`` /
+#:   ``CDCl3`` / ``CHCl3`` (not a chloroformate); ``isopropanol`` (not
+#:   hexafluoroisopropanol, which is HFIP), the propanol patterns (bmr19216
+#:   'CDCl3/2-propanol') and ``isopropyl alcohol`` (bmr17810, 25 %); the
+#:   DSS-guarded alkanes (bmr25640 pentane reverse micelle, bmr5387 'd-pentane'
+#:   98 %) and the percentage-gated ``dioxane`` (see ``DIOXANE_PATTERN``).
+ORGANIC_SOLVENT_TOKENS = (
+    "methanol",
+    "ethanol",
+    "CD3OH",
+    "CD3OD",
+    "MeOH",
+    "EtOH",
+    "acetonitrile",
+    "CD3CN",
+    "ACN",
+    "chloroform",
+    "CDCl3",
+    "CHCl3",
+    "isopropanol",
+    "2-propanol",
+    "isopropyl alcohol",
+    "n-propanol",
+    "1-propanol",
+    "hexane",
+    "pentane",
+    "dioxane",
+)
+
+#: Trifluoroethanol in every deposited spelling: ``Triflouroethanol`` (bmr50683,
+#: 17.5 % v/v), ``trifluorethanol`` (bmr26679), ``trifluroethanol``,
+#: ``trifluethanol`` (bmr5837, 30 %), ``Trifluoro Ethanol D2OH`` (bmr15559),
+#: ``trifluoro-ethanol``, and the formula ``CF3CD2OH`` / ``CF3CH2OH`` (bmr4723,
+#: bmr4724 and bmr15937, 50 %). Lower-case source: compile it IGNORECASE or
+#: match it against lower-cased text.
+TRIFLUOROETHANOL_PATTERN = (
+    r"(?:trifl?(?:uo|ou|u|o)r?[\s-]*o?[\s-]*ethanol|cf3c[hd]2o[hd])"
+)
+
+#: Substituents that turn methanol/ethanol into a different compound when they
+#: precede it as a separate word: 2-mercapto ethanol (bmr30782), B mercapto
+#: ethanol (bmr27165), beta-mercapto-ethanol (bmr26700) are the reducing agent
+#: at 2 mM / 0.1 %, and Trifluoro Ethanol is TFE. Spelled without the separator
+#: (2-mercaptoethanol, ethanolamine) the word boundary already rejects them.
+_ALCOHOL_SUBSTITUENTS = ("mercapto", "fluoro", "chloro", "bromo", "amino")
+
+
+def alcohol_pattern(name):
+    """Word-boundary pattern for a bare alcohol ``name`` that rejects substituted
+    names: a substituent word just before it (``2-mercapto ethanol``) or a
+    closing bracket (``(3-methylphenyl)methanol``, a ligand)."""
+    guards = "".join(
+        rf"(?<!{prefix}{sep})" for prefix in _ALCOHOL_SUBSTITUENTS for sep in (" ", "-")
+    )
+    return rf"(?<![a-z0-9)\]]){guards}{re.escape(name)}(?![a-z0-9])"
+
+
+#: Acetonitrile (bmr18578, a CheZOD117 chain, 30 %; bmr50871/50900, pinned test
+#: chains, 50 %) in every deposited spelling: ``acetonitril`` (bmr16452),
+#: ``perdeuterated acetonitrile`` (bmr36457-36462), ``d3-acetonitrile``
+#: (bmr25269) and ``2:1acetonitrile-d3`` (bmr52500) -- a digit may sit right
+#: before it, so the left boundary is letters only. Not the ligand of bmr7375's
+#: 1.8 mM Cu(I) source 'tetrakis(acetonitrile)copper(I) hexafluorophosphate':
+#: a closing bracket glued to the next name rejects it.
+ACETONITRILE_PATTERN = r"(?<![a-z)\]])acetonitrile?(?![a-z0-9])(?!\)[a-z0-9])"
+
+#: Suffixes that turn an alkane name into a different compound when they follow
+#: it as a separate word: the MPD crystallisation additive written
+#: 'methyl-2,4-pentane diol' (bmr30088, 45 %) or 'Methyl Pentane diol' (bmr15156,
+#: 16873), 'hexane-1,6-diol', a '-1-sulfonate'. Spelled without the separator
+#: (2-methyl-2,4-pentanediol, 1,6-hexanediol) the word boundary rejects them.
+_ALKANE_SUFFIX_GUARD = (
+    r"(?![\s-]*(?:\d+(?:,\d+)*-)?"
+    r"(?:(?:di|tri)?ol|(?:di)?one|thiol|amine|sulfon\w*|carbox\w*|(?:di)?oic)"
+    r"(?![a-z0-9]))"
+)
+
+
+def alkane_pattern(name):
+    """Word-boundary pattern for an alkane solvent ``name`` that rejects DSS --
+    2,2-dimethyl-2-SILAPENTANE-5-sulfonate, the shift reference, whose glued
+    spelling the boundary already rejects and whose ``sila-pentane`` /
+    ``sila pentane`` spellings the guard does -- and substituted names (a diol,
+    a sulfonate, see ``_ALKANE_SUFFIX_GUARD``)."""
+    return (
+        rf"(?<![a-z0-9)\]])(?<!sila-)(?<!sila ){re.escape(name)}(?![a-z0-9])"
+        + _ALKANE_SUFFIX_GUARD
+    )
+
+
+#: Dioxane counts only when written as a solvent fraction of at least 1 %:
+#: bmr4411 ('8% dioxane-d8') and bmr25887 ('5% dioxane-d6'). At 1-13 mM it is the
+#: 1H/13C shift reference -- bmr4831 ("a small amount of dioxane for 1H chemical
+#: shift referencing"), bmr15447 and bmr15973 (1 mM), bmr15565 (13 mM) -- and a
+#: component name carries no concentration, so a bare 'dioxane' never matches.
+#: The percentage comes first ('5 % v/v 1,4-dioxane') or right after the name
+#: ('dioxane-d8 (10 %)'). A prefix glued to the name ('1,4-', '[2H8]') may sit
+#: between them, but not a slash: in '90% H2O/10% D2O/dioxane' the 10 % is D2O's.
+_AT_LEAST_ONE_PERCENT = r"(?<![\d.])[1-9]\d*(?:\.\d+)?\s*%"
+DIOXANE_PATTERN = (
+    rf"{_AT_LEAST_ONE_PERCENT}\s*(?:\(?v/v\)?\s*)?(?:\[[^\]]*\]\s*)?"
+    r"(?:(?:per)?deuterated\s+)?[^\s/]*?(?<![a-z0-9])dioxane(?![a-z0-9])"
+    r"|(?<![a-z0-9])dioxane(?:-d\d)?\s*[(\[]?\s*[1-9]\d*(?:\.\d+)?\s*%"
+)
+
+
+#: Tokens whose match rule is a pattern rather than a plain substring or word
+#: boundary. Shared with the tier filter (``trizod.trizod.COSOLVENT_PATTERN_RES``)
+#: so the two lists cannot disagree on what counts as methanol or TFE.
+COSOLVENT_PATTERNS = {
+    "trifluoroethanol": TRIFLUOROETHANOL_PATTERN,
+    "methanol": alcohol_pattern("methanol"),
+    "ethanol": alcohol_pattern("ethanol"),
+    # NMR-STAR audit I-07: the organic solvents that still passed every tier.
+    "acetonitrile": ACETONITRILE_PATTERN,
+    # bmr19216 'CDCl3/2-propanol'; the substituent guard keeps
+    # 1,1,1,3,3,3-hexafluoro-2-propanol (HFIP) and 3-mercapto-1-propanol out
+    "2-propanol": alcohol_pattern("2-propanol"),
+    "1-propanol": alcohol_pattern("1-propanol"),
+    "n-propanol": alcohol_pattern("n-propanol"),
+    # bmr25640 (pentane reverse micelle), bmr5387 ('d-pentane', 98 %)
+    "pentane": alkane_pattern("pentane"),
+    "hexane": alkane_pattern("hexane"),
+    "dioxane": DIOXANE_PATTERN,
+}
+
+#: The ``ORGANIC_SOLVENT_TOKENS`` matched as plain whole words (lower case): the
+#: ones without a ``COSOLVENT_PATTERNS`` entry. The tier filter's
+#: ``WORD_BOUNDARY_COSOLVENTS`` is built from this too.
+ORGANIC_SOLVENT_WORD_TOKENS = tuple(
+    token.lower()
+    for token in ORGANIC_SOLVENT_TOKENS
+    if token.lower() not in COSOLVENT_PATTERNS
+)
+
 #: Whole words -- ``urea`` must NOT fire on ``urease``, and ``hfip`` must not be
 #: reachable from inside a longer token. ``hexafluoro`` is deliberately absent:
-#: it would fire on bmr7375's copper(I) hexafluorophosphate.
+#: it would fire on bmr7375's copper(I) hexafluorophosphate. ``trifluoroethanol``
+#: is not here: its spelling-tolerant pattern (``COSOLVENT_PATTERNS``) matches
+#: wherever the whole word would.
 _COSOLVENT_WORD_TOKENS = (
     "urea",
     "tfe",
-    "trifluoroethanol",
     "hfip",
     "dmso",
     "sds",
     "gdn-hcl",
     "gdncl",
+    *ORGANIC_SOLVENT_WORD_TOKENS,
 )
 
-COSOLVENT_EVIDENCE_TOKENS = _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS
+COSOLVENT_EVIDENCE_TOKENS = (
+    _COSOLVENT_PREFIX_TOKENS + _COSOLVENT_WORD_TOKENS + tuple(COSOLVENT_PATTERNS)
+)
 
 # Lookarounds rather than `\b`, matching the convention of the sibling matcher
 # `trizod.trizod._word_boundary_pattern`: `_` is a word character to `\b`, so
@@ -152,6 +308,7 @@ _COSOLVENT_EVIDENCE_RE = re.compile(
             rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
             for token in _COSOLVENT_WORD_TOKENS
         ]
+        + list(COSOLVENT_PATTERNS.values())
     ),
     re.IGNORECASE,
 )
@@ -218,8 +375,9 @@ def has_cosolvent_evidence(texts):
     """Does any of ``texts`` name a perturbing cosolvent?
 
     ``texts`` are sample-descriptive strings: ``_Sample_component.Mol_common_name``
-    values plus the entry/assembly/entity/sample free text. Word-boundary matched,
-    so ``urea`` does not fire on ``urease``.
+    values, ``_Sample.Solvent_system`` and the entry/assembly/entity/sample free
+    text. Word-boundary matched, so ``urea`` does not fire on ``urease`` and
+    ``ethanol`` not on 2-mercaptoethanol.
     """
     return any(
         text and _COSOLVENT_EVIDENCE_RE.search(str(text)) is not None for text in texts

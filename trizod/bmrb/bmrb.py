@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import namedtuple
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pandas as pd
 import pynmrstar
 
 from trizod.constants import AA3TO1, BACKBONE_ATOMS
+from trizod.provenance import bmrb_parser_version
 
 # One ``_Entity_assembly`` record, with the tags that describe *how* an entity
 # appears in an assembly. ``Assembly.entities`` keeps its historical 4-tuple
@@ -176,12 +178,164 @@ class ChemComp:
         return f"<ChemComp {self.id}>"
 
 
+#: bar per deposited pressure unit. Keys are the deposited
+#: ``_Sample_condition_variable.Val_units`` lower-cased with whitespace removed,
+#: so ``mm Hg`` is ``mmhg`` and ``ATM`` is ``atm``. Every unit deposited in the
+#: corpus is here except the meaningless ones ('.', '1'), which stay unknown.
+PRESSURE_UNITS_TO_BAR = {
+    "bar": 1.0,
+    "mbar": 1e-3,
+    "kbar": 1e3,
+    "pa": 1e-5,
+    "hpa": 1e-3,
+    "kpa": 1e-2,
+    "mpa": 10.0,
+    "atm": 1.01325,
+    "mmhg": 133.322387415e-5,
+    "torr": 1.01325 / 760.0,
+    "psi": 6894.757293168e-5,
+}
+
+#: Deposited non-numeric pressure values that do mean one standard atmosphere
+#: (50 condition lists deposit 'ambient', unit atm). A recorded value, not a gap.
+AMBIENT_PRESSURE_VALUES = frozenset({"ambient", "atmospheric"})
+
+#: pH-like ``_Sample_condition_variable.Type`` values, keyed lower-case without
+#: whitespace, mapped to the scale they report. The NMR-STAR dictionary allows
+#: all three: ``pH``, ``pH*`` (a glass-electrode reading in D2O, uncorrected)
+#: and ``pD``. The archive holds 255 pH* and 89 pD rows, and a row typed pH may
+#: name its scale in Val_units instead (72 rows say ``pD``, 91 say ``pH*``).
+PH_SCALES = {"ph": "pH", "ph*": "pH*", "pd": "pD"}
+
+#: Which pH-like row a condition list is read from when it holds several
+#: (bmr4052 deposits both 'pH 5.1' and 'pH* 5.5'): a plain pH row first, then a
+#: pH* reading, then a pD -- among the rows whose value holds a number, so an
+#: unparseable 'pH n/a' never hides a recorded pH*. Within one rank the last
+#: row wins, as it always did.
+PH_SCALE_RANK = {"pH": 0, "pH*": 1, "pD": 2}
+
+#: pD -> pH* offset. A glass electrode calibrated in H2O buffers reads about 0.4
+#: units *below* the pD of a D2O sample (pD = meter reading + 0.4; Glasoe & Long
+#: 1960, Rubinson 2017 Anal. Methods SI), so a deposited pD is brought onto the
+#: meter-reading scale as pD - 0.4. A pH* (meter) reading is then used as pH
+#: unchanged, the usual NMR convention: the electrode isotope effect and the
+#: D2O shift of the side-chain pKa values roughly cancel.
+PD_TO_PH_STAR_OFFSET = 0.4
+
+#: Physically possible values. A value recorded outside them (bmr18863 deposits
+#: pH 0.000; 59 condition lists deposit temperatures of 110-248 K or 380-398 K)
+#: is INVALID, not missing: the getters return NaN for it at every tier, never
+#: the default, so the tier windows keep rejecting the entry and unfiltered does
+#: not score it under invented conditions. Defaults stay reserved for values
+#: that are absent (or not a number at all). Temperature is checked in K, after
+#: unit conversion; pH after the pD conversion.
+PH_RANGE = (0.5, 14.0)
+TEMPERATURE_RANGE_K = (250.0, 373.0)
+
+#: Ionic-strength units that are the ionic-strength symbol mu itself, i.e. a
+#: value already in M -- not "micro" (bmr4065: '0.150 mu' is 0.15 M). Greek
+#: small mu and the micro sign are both accepted.
+IONIC_STRENGTH_MU_UNITS = frozenset({"mu", "\u03bc", "\u00b5"})
+
+_NUMBER = r"(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?"
+_UNIT_IN_VALUE = "[A-Za-z\u00b0\u00b5\u03bc%]+"  # letters, degree, micro, mu, %
+_SINGLE_VALUE_RE = re.compile(rf"^([-+]?{_NUMBER})\s*({_UNIT_IN_VALUE})?$")
+_RANGE_VALUE_RE = re.compile(
+    rf"^({_NUMBER})\s*(?:-|\u2013|\u2014|to)\s*({_NUMBER})\s*({_UNIT_IN_VALUE})?$"
+)
+
+
+def _number(text):
+    """float() that also reads a decimal comma ('293,15', '0,092')."""
+    if "," in text:
+        whole, _, frac = text.partition(",")
+        # '1,000' is a thousands separator as often as a decimal comma, so a
+        # comma before exactly three digits is ambiguous -- unless the integer
+        # part is 0 ('0,092' M), which no thousands separator follows.
+        if len(re.match(r"\d*", frac).group()) == 3 and whole.lstrip("+-") not in (
+            "",
+            "0",
+        ):
+            return np.nan
+        text = text.replace(",", ".")
+    return float(text)
+
+
+def parse_condition_value(val):
+    """``(number, unit)`` read from a deposited ``_Sample_condition_variable.Val``.
+
+    Anything ``float()`` accepts is returned as before, with no unit. Otherwise
+    the deposited free text is read leniently: a unit written into the value
+    ('281.5K', '298 K') is split off and returned, a decimal comma is read as a
+    decimal point, and a range ('298-303', '230 to 283', '7.5-8') is read as its
+    **midpoint** -- the best single value for a condition the depositor only
+    bracketed. Bounds ('<0.1'), words and anything else are ``(nan, "")``.
+    """
+    if val is None:
+        return np.nan, ""
+    try:
+        return float(val), ""
+    except (TypeError, ValueError):
+        pass
+    text = str(val).strip()
+    match = _SINGLE_VALUE_RE.match(text)
+    if match:
+        return _number(match.group(1)), match.group(2) or ""
+    match = _RANGE_VALUE_RE.match(text)
+    if match:
+        low, high = _number(match.group(1)), _number(match.group(2))
+        # a range is read as its midpoint ('298-303' K -> 300.5 K)
+        return (low + high) / 2.0, match.group(3) or ""
+    return np.nan, ""
+
+
+def _key(text):
+    """Lookup key of a deposited Type/unit: lower case, all whitespace removed,
+    ``""`` for None ('mm Hg' -> 'mmhg', ' pH* ' -> 'ph*')."""
+    return "".join(str(text or "").split()).lower()
+
+
+def _ph_scale(type_, unit):
+    """``'pH'``, ``'pH*'`` or ``'pD'`` for a pH-like condition row, else None.
+
+    The Type decides; only a row typed plain pH is re-scaled by its unit (eight
+    chains are typed 'pH' with the unit 'pD'). A pD row deposited with the unit
+    'pH' (72 rows) is still a pD.
+    """
+    scale = PH_SCALES.get(_key(type_))
+    if scale == "pH":
+        scale = PH_SCALES.get(_key(unit), "pH")
+    return scale
+
+
+def _no_number(val):
+    """1 when a deposited value holds no number, else 0: the first key when a
+    condition list holds several rows for one quantity, so a row with a value
+    beats one without whatever their types."""
+    return int(np.isnan(parse_condition_value(val)[0]))
+
+
+def _temperature_rank(type_):
+    """Preference of a temperature-like Type: a plain 'temperature' row (0)
+    over any other (1) over a controller/setting row (2), so that a
+    'temperature controller setting' (bmr50428: 265 K) never overrides the
+    calibrated sample temperature (283 K) but is still used when it is the
+    only temperature deposited (bmr15380, 16484, 18809, ...)."""
+    if type_ in ("temperature", "temp"):
+        return 0
+    if "controller" in type_ or "setting" in type_:
+        return 2
+    return 1
+
+
 class SampleConditions:
     def __init__(self, sf):
         super().__init__()
         self.id = get_tag_vals(sf, "_Sample_condition_list.ID", indices=0)
         self.ionic_strength = (None, None)
         self.pH = (None, None)
+        #: scale of the row ``self.pH`` was read from ('pH', 'pH*', 'pD'), or None
+        self.pH_scale = None
         self.pressure = (None, None)
         self.temperature = (None, None)
         info = list(
@@ -191,30 +345,59 @@ class SampleConditions:
                 get_tag_vals(sf, "_Sample_condition_variable.Val_units", default=[]),
             )
         )
+        ph_rank = temperature_rank = None
         for t, val, unit in info:
-            if "ionic strength" in t.lower():
+            # 'ionic_strength' (bmr4345) is 'ionic strength'.
+            t_norm = " ".join(str(t).replace("_", " ").split()).lower()
+            ph_scale = _ph_scale(t_norm, unit)
+            if "ionic strength" in t_norm:
                 self.ionic_strength = (val, unit)
-            elif t.lower() == "ph":
-                self.pH = (val, unit)
-            elif t.lower() == "pressure":
+            elif ph_scale is not None:
+                rank = (_no_number(val), PH_SCALE_RANK[ph_scale])
+                if ph_rank is None or rank <= ph_rank:
+                    self.pH, self.pH_scale, ph_rank = (val, unit), ph_scale, rank
+            elif t_norm == "pressure":
                 self.pressure = (val, unit)
-            elif "temp" in t.lower():
-                self.temperature = (val, unit)
+            elif "temp" in t_norm:
+                rank = (_no_number(val), _temperature_rank(t_norm))
+                if temperature_rank is None or rank <= temperature_rank:
+                    self.temperature, temperature_rank = (val, unit), rank
             else:
                 logging.getLogger("trizod.bmrb").debug(
                     f"Skipping sample condition {t} = {val} {unit}"
                 )
 
-    def convert_val(self, val):
-        try:
-            val = float(val)
-        except (ValueError, TypeError):
+    def convert_val(self, val, return_unit=False):
+        """The number in a deposited value (see ``parse_condition_value``), NaN
+        when there is none; with ``return_unit``, ``(number, unit-in-value)``."""
+        num, unit = parse_condition_value(val)
+        if np.isnan(num):
             logging.getLogger("trizod.bmrb").debug(f"failed to convert value {val}")
-            val = np.nan
-        return val
+        return (num, unit) if return_unit else num
+
+    def get_pH_scale(self):
+        """Scale of the row ``get_pH`` reads -- 'pH', 'pH*' or 'pD' -- or None
+        when the condition list records no pH-like row."""
+        scale = getattr(self, "pH_scale", None)
+        if scale is None and self.pH[0] is not None:
+            # set directly (tests build bare instances): infer from the unit
+            scale = _ph_scale("pH", self.pH[1])
+        return scale
 
     def get_pH(self, return_default=True):
+        """pH, with a pH* reading used as is and a pD converted to pD - 0.4
+        (``PD_TO_PH_STAR_OFFSET``). An absent value is 7.0 with
+        ``return_default``, else NaN; a recorded value outside ``PH_RANGE`` is
+        invalid and NaN regardless of ``return_default``."""
         val = self.convert_val(self.pH[0])
+        if self.get_pH_scale() == "pD":
+            # rounded so a pD of 6.8 is stored as 6.4, not 6.3999999999999995
+            val = round(val - PD_TO_PH_STAR_OFFSET, 10)
+        if not np.isnan(val) and not PH_RANGE[0] <= val <= PH_RANGE[1]:
+            logging.getLogger("trizod.bmrb").info(
+                f"Impossible pH {val} for sample condition {self.id}, invalid (NaN)"
+            )
+            return np.nan
         if np.isnan(val) and return_default:
             logging.getLogger("trizod.bmrb").info(
                 f"No information on pH for sample condition {self.id}, assuming 7.0"
@@ -222,26 +405,36 @@ class SampleConditions:
             return 7.0
         return val
 
+    def _missing_temperature(self, return_default):
+        if return_default:
+            logging.getLogger("trizod.bmrb").info(
+                f"No information on temperature for sample condition {self.id}, assuming 298 K"
+            )
+            return 298.0
+        return np.nan
+
     def get_temperature(self, return_default=True, assume_si=True, fix_outliers=True):
-        val = self.convert_val(self.temperature[0])
+        """Temperature in K. A unit written into the value ('281.5K') is used
+        over Val_units. An absent value is 298 K with ``return_default``, else
+        NaN; a recorded value outside ``TEMPERATURE_RANGE_K`` is invalid and NaN
+        regardless of ``return_default``."""
+        val, unit_in_val = self.convert_val(self.temperature[0], return_unit=True)
         if np.isnan(val):
-            if return_default:
-                logging.getLogger("trizod.bmrb").info(
-                    f"No information on temperature for sample condition {self.id}, assuming 298 K"
-                )
-                return 298.0
-            else:
-                return np.nan
-        if "C" in self.temperature[1]:
+            return self._missing_temperature(return_default)
+        unit = self.temperature[1] or ""
+        unit_in_val = unit_in_val.lstrip("\u00b0").upper()  # '298k', '25\u00b0C'
+        if unit_in_val in ("K", "C", "F"):
+            unit = unit_in_val
+        if "C" in unit:
             const0, const1, factor = 0.0, 273.15, 1.0
-        elif "F" in self.temperature[1]:
+        elif "F" in unit:
             const0, const1, factor = -32.0, 273.15, 5.0 / 9.0
-        elif self.temperature[1] == "K":
+        elif unit == "K":
             const0, const1, factor = 0.0, 0.0, 1.0
         elif assume_si:
             const0, const1, factor = 0.0, 0.0, 1.0
             logging.getLogger("trizod.bmrb").info(
-                f"Temperature unit unknown: {self.temperature[1]}, assuming K"
+                f"Temperature unit unknown: {unit}, assuming K"
             )
         else:
             return None
@@ -256,12 +449,28 @@ class SampleConditions:
                 logging.getLogger("trizod.bmrb").info(
                     f"Low temperature: {val}, assuming unit should be °F"
                 )
-        return (val + const0) * factor + const1
+        kelvin = (val + const0) * factor + const1
+        if not TEMPERATURE_RANGE_K[0] <= kelvin <= TEMPERATURE_RANGE_K[1]:
+            logging.getLogger("trizod.bmrb").info(
+                f"Impossible temperature {kelvin} K for sample condition {self.id}, invalid (NaN)"
+            )
+            return np.nan
+        return kelvin
 
     def get_ionic_strength(
         self, return_default=True, assume_si=True, fix_outliers=True
     ):
-        val = self.convert_val(self.ionic_strength[0])
+        val, unit_in_val = self.convert_val(self.ionic_strength[0], return_unit=True)
+        # a unit written into the value ('5 mM') is used over Val_units
+        unit = self.ionic_strength[1]
+        if unit_in_val in ("M", "mM") or unit_in_val.lower() in IONIC_STRENGTH_MU_UNITS:
+            unit = unit_in_val
+        if not np.isnan(val) and val < 0:
+            # recorded but impossible: invalid (NaN) at every tier, no default
+            logging.getLogger("trizod.bmrb").info(
+                f"Negative ionic strength {val} for sample condition {self.id}, invalid (NaN)"
+            )
+            return np.nan
         if np.isnan(val):
             if return_default:
                 logging.getLogger("trizod.bmrb").info(
@@ -270,16 +479,17 @@ class SampleConditions:
                 return 0.1
             else:
                 return None
-        if self.ionic_strength[1] == "M":
+        if unit == "M":
             const1, factor = 0.0, 1.0
-        elif self.ionic_strength[1] == "mM":
+        elif unit == "mM":
             const1, factor = 0.0, 0.001
-        elif self.ionic_strength[1] == "mu":
-            const1, factor = 0.0, 0.000001
+        elif str(unit or "").strip().lower() in IONIC_STRENGTH_MU_UNITS:
+            # the symbol mu: already molar (was scaled as micromolar)
+            const1, factor = 0.0, 1.0
         elif assume_si:
             const1, factor = 0.0, 1.0
             logging.getLogger("trizod.bmrb").info(
-                f"Ionic strength unit unknown: {self.ionic_strength[1]}, assuming M"
+                f"Ionic strength unit unknown: {unit}, assuming M"
             )
         else:
             return np.nan
@@ -289,6 +499,27 @@ class SampleConditions:
             )
             factor = 0.001
         return val * factor + const1
+
+    def get_pressure_bar(self):
+        """Sample pressure in bar, or NaN when it is not recorded or not convertible.
+
+        Converted literally from the deposited unit (``PRESSURE_UNITS_TO_BAR``).
+        Unlike pH, temperature and ionic strength there is deliberately **no**
+        default and **no** unit repair: an absent value, a value without a
+        known unit, or a non-numeric one other than ``ambient`` is NaN (null
+        downstream), and an implausible value is not re-interpreted: the 89
+        condition lists depositing ``1 Pa`` (almost certainly one atmosphere)
+        read 1e-5 bar, as deposited. The value only annotates; no tier filters
+        on it.
+        """
+        val, unit = self.pressure
+        factor = PRESSURE_UNITS_TO_BAR.get(_key(unit))
+        if factor is None:
+            return np.nan
+        text = str(val if val is not None else "").strip().lower()
+        if text in AMBIENT_PRESSURE_VALUES:
+            return PRESSURE_UNITS_TO_BAR["atm"]
+        return self.convert_val(text) * factor  # NaN stays NaN
 
     def __str__(self):
         return f"(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)"
@@ -304,6 +535,12 @@ class Sample:
         self.name = get_tag_vals(sf, "_Sample.Name", indices=0)
         self.framecode = get_tag_vals(sf, "_Sample.Sf_framecode", indices=0)
         self.details = get_tag_vals(sf, "_Sample.Details", indices=0)
+        # Free text such as '90% H2O/10% D2O' or 'trifluoroethanol/water' (an
+        # ADIT-NMR pick-list value, deposited by 173 entries). Read by the
+        # perturbing-cosolvent filter beside Details and the component names:
+        # bmr34568, 34011 and 34322 name their TFE only here and in Details,
+        # never as a _Sample_component.
+        self.solvent_system = get_tag_vals(sf, "_Sample.Solvent_system", indices=0)
         self.type = get_tag_vals(sf, "_Sample.Type", indices=0)
         self.sub_type = get_tag_vals(sf, "_Sample.Sub_type", indices=0)
         self.components = list(
@@ -399,6 +636,10 @@ class BmrbEntry:
     def __init__(self, id_, bmrb_dir):
         super().__init__()
         self.source = None
+        # Which parser produced this object. The pickle cache re-parses any
+        # entry stamped differently (pipeline.load_cached_entry), so a field
+        # added here later can never be missing from a cached entry.
+        self.parser_version = bmrb_parser_version()
 
         self.id = id_
         self.type = None

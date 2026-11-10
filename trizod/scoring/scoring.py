@@ -374,3 +374,30 @@ def get_offset_corrected_shifts(seq, shifts, predshiftdct, rereference_mode="bot
         offsets_initial,
         lacs_offsets,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Deprecated pre-2026-04 names, kept for PeptoneBench, whose trizod_gscores.py
+# imports compute_pscores and get_offset_corrected_wSCS from this module.
+# --------------------------------------------------------------------------- #
+
+#: Deprecated name of :func:`compute_gscores` (the same function).
+compute_pscores = compute_gscores
+
+
+def get_offset_corrected_wSCS(
+    seq, shifts, predshiftdct, *, rereference_mode="potenci-only"
+):
+    """Deprecated: :func:`get_offset_corrected_shifts` under its old contract.
+
+    Not a plain alias. The old function had no LACS step and returned nine
+    values; the new one runs LACS by default (``"both"``) and appends the LACS
+    offsets as a tenth value, so a caller that unpacks nine would raise. This
+    keeps both halves of the old contract -- POTENCI/AIC offset correction only
+    (``"potenci-only"``) and nine values, or None on failure. Pass
+    ``rereference_mode="both"`` for the current TriZOD default.
+    """
+    ret = get_offset_corrected_shifts(
+        seq, shifts, predshiftdct, rereference_mode=rereference_mode
+    )
+    return None if ret is None else ret[:9]

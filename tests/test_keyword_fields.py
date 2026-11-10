@@ -27,6 +27,9 @@ class _Conditions:
     def get_temperature(self, **kwargs):
         return 298.0
 
+    def get_pressure_bar(self):
+        return float("nan")
+
 
 class _Named:
     """Stand-in for Assembly/Entity/Sample: only the free-text fields matter."""
@@ -37,6 +40,7 @@ class _Named:
         self.framecode = framecode
         self.seq = None  # skips the backbone-shift block in fill_row_data
         self.paramagnetic = None
+        self.solvent_system = None
         self.components = []
 
 

@@ -30,18 +30,50 @@ from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
 from trizod.io.atomic import atomic_write
 from trizod.offsets import off_sigma_col
-from trizod.provenance import scoring_cache_version
+from trizod.provenance import bmrb_parser_version, scoring_cache_version
 
 
 class ZscoreComputationError(Exception):
     pass
 
 
-def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str"):
+def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str", exclude_withdrawn=True):
     """
     If the given path contains at least one bmr<id>_3.str file, only files in this directory are returned.
     Else, all subdirectories are searched for bmr<id>_3.str files.
+
+    Entries BMRB no longer lists (``trizod/dataset/data/withdrawn_entries.tsv``)
+    are skipped unless ``exclude_withdrawn`` is False, so a withdrawn deposition
+    is never scored and reaches no artefact of the release.
     """
+    bmrb_files = _find_bmrb_files(input_dir, pattern)
+    if exclude_withdrawn:
+        from trizod.dataset.withdrawn import load_withdrawn
+
+        # matched on the entry number, so a custom pattern that captures more
+        # than the bare ID ('bmr36170') still skips the withdrawn entry
+        withdrawn_ids = set(load_withdrawn())
+        withdrawn = sorted(
+            (k for k in bmrb_files if _entry_number(k) in withdrawn_ids),
+            key=lambda k: (len(_entry_number(k)), _entry_number(k)),
+        )
+        for entry_id in withdrawn:
+            del bmrb_files[entry_id]
+        if withdrawn:
+            logging.getLogger("trizod").info(
+                f"skipping {len(withdrawn)} withdrawn BMRB entries: {', '.join(withdrawn)}"
+            )
+    return bmrb_files
+
+
+def _entry_number(file_id):
+    """The BMRB entry number in an ID the file pattern captured ('36170' for
+    '36170' or 'bmr36170'); the ID itself when it holds no digits."""
+    match = re.search(r"\d+", str(file_id))
+    return match.group() if match else str(file_id)
+
+
+def _find_bmrb_files(input_dir, pattern):
     bmrb_files = {}
     input_dir = Path(input_dir)
     for p in input_dir.iterdir():
@@ -69,6 +101,53 @@ def parse_bmrb_file(row, cache_dir=None):
     return entry
 
 
+def load_cached_entry(cache_fp):
+    """Unpickle a cached ``BmrbEntry``, or ``None`` if absent, corrupt or stale.
+
+    Stale means stamped by other parsing code (or by none: pickles written
+    before the stamp existed). Such an entry may lack a field the parser has
+    since learned -- ``_Sample.Solvent_system``, which the cosolvent filter
+    reads -- so it is a cache miss and gets re-parsed (and re-pickled).
+    """
+    cache_fp = Path(cache_fp)
+    if not cache_fp.exists():
+        return None
+    try:
+        with cache_fp.open("rb") as f:
+            entry = pickle.load(f)
+    except Exception:
+        logging.getLogger("trizod.bmrb").debug(
+            f"cache file {cache_fp} corrupt or formatted wrong"
+        )
+        return None
+    if getattr(entry, "parser_version", None) != bmrb_parser_version():
+        logging.getLogger("trizod.bmrb").debug(
+            f"cache file {cache_fp} written by other parsing code, re-parsing"
+        )
+        return None
+    return entry
+
+
+def wscs_cache_path(
+    cache_dir, entry_id, stID, entity_assemID, entityID, rereference_mode
+):
+    """``<cache_dir>/wSCS/<chain>_<mode>_v<scoring>_p<parser>.npz``.
+
+    Both code versions are part of the key, so stale entries are invalidated by
+    construction. The scoring version covers the LACS/scoring math (issue #20:
+    a key without it silently reused offsets computed by different code). The
+    parser version covers the inputs: the key names the chain by IDs, not by
+    the conditions and shifts the parser read from it, so a parser change (a
+    pH* read as pH, a unit written into a value) must miss the cache too.
+    """
+    return (
+        Path(cache_dir)
+        / "wSCS"
+        / f"{entry_id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}"
+        f"_v{scoring_cache_version()}_p{bmrb_parser_version()}.npz"
+    )
+
+
 def load_bmrb_entries(bmrb_files, cache_dir=None):
     entries, failed = {}, []
     columns = ["entry", "dir"]
@@ -78,16 +157,7 @@ def load_bmrb_entries(bmrb_files, cache_dir=None):
         cache_base = Path(cache_dir) / "bmrb_entries"
         for id_, fp in bmrb_files.items():
             cache_fp = cache_base / f"{id_}.pkl"
-            entry = None
-            if cache_fp.exists():
-                try:
-                    with cache_fp.open("rb") as f:
-                        entry = pickle.load(f)
-                except Exception:
-                    logging.getLogger("trizod.bmrb").debug(
-                        f"cache file {cache_fp} corrupt or formatted wrong"
-                    )
-            entries[id_] = (entry, fp.parent, cache_fp)
+            entries[id_] = (load_cached_entry(cache_fp), fp.parent, cache_fp)
     else:
         for id_, fp in bmrb_files.items():
             entries[id_] = (None, fp.parent)
@@ -490,15 +560,12 @@ def compute_scores(
     if score_types is None:
         score_types = ["zscores"]
     exe_times = [np.nan, np.nan, np.nan]
-    # The scoring-code version is part of the key so that a change to the
-    # LACS/scoring math invalidates stale cache entries by construction
-    # (issue #20): a key without it silently reused offsets computed by
-    # different code.
     shifts_cache_path = (
-        cache_dir
-        / "wSCS"
-        / f"{entry.id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}"
-        f"_v{scoring_cache_version()}.npz"
+        wscs_cache_path(
+            cache_dir, entry.id, stID, entity_assemID, entityID, rereference_mode
+        )
+        if cache_dir
+        else None
     )
     if cache_dir and shifts_cache_path.exists():
         try:

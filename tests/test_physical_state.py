@@ -51,6 +51,9 @@ class _Conditions:
     def get_temperature(self, **kwargs):
         return 298.0
 
+    def get_pressure_bar(self):
+        return float("nan")
+
 
 class _Named:
     """Stand-in for Assembly/Entity/Sample: only the free-text fields matter."""
@@ -62,6 +65,7 @@ class _Named:
         self.entities = entities if entities is not None else [("1", "1", "$e", None)]
         self.seq = None  # skips the backbone-shift block in fill_row_data
         self.paramagnetic = None
+        self.solvent_system = None
         self.components = []
         self.type = "solution"
 
@@ -469,9 +473,16 @@ def test_real_non_native_entries_are_denied_from_tolerant_up(entry_id, state):
         c[3] for s_ in entry.samples.values() for c in s_.components
     ]
     corroborated = sample_state.has_cosolvent_evidence(texts)
-    assert corroborated is (state in sample_state.PHYSICAL_STATE_AMBIGUOUS)
+    if state in sample_state.PHYSICAL_STATE_AMBIGUOUS:
+        assert corroborated is True
+    # The two molten globules are denied on the tag alone, evidence or not. Both
+    # carry evidence since methanol/ethanol joined the evidence tokens (5158 is in
+    # 10 % ethanol, 5119 in chloroform/methanol/water 4:4:1), so check the tag
+    # without it too.
     for deny in (TOLERANT_DENY, MODERATE_DENY, STRICT_DENY):
         assert is_physical_state_denied(state, deny, corroborated=corroborated) is True
+        if state not in sample_state.PHYSICAL_STATE_AMBIGUOUS:
+            assert is_physical_state_denied(state, deny, corroborated=False) is True
 
     # ... and the real pipeline drops the row, not just the predicate.
     stID, entity_assemID, entityID = next(iter(entry.get_peptide_shifts()))

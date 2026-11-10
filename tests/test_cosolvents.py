@@ -31,73 +31,14 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-import trizod.bmrb.bmrb as bmrb
+from tests._stubs import Entry as _Entry
+from tests._stubs import Sample as _Sample
+from tests._stubs import fill, fill_real
 from tests.conftest import requires_bmrb_data
-from trizod import paths
 from trizod.cli.main import app
-from trizod.trizod import MEMBRANE_MIMETIC_TOKENS, fill_row_data, filter_defaults
+from trizod.trizod import MEMBRANE_MIMETIC_TOKENS, filter_defaults
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
-
-
-class _Conditions:
-    def get_ionic_strength(self, **kwargs):
-        return 0.1
-
-    def get_pH(self, **kwargs):
-        return 7.0
-
-    def get_temperature(self, **kwargs):
-        return 298.0
-
-
-class _Sample:
-    """Stand-in for ``bmrb.Sample``: only ``components`` matters here.
-
-    A component is ``(ID, Assembly_ID, Entity_ID, Mol_common_name, conc, units)``.
-    """
-
-    def __init__(self, components=(), name=None):
-        self.name = name
-        self.details = None
-        self.framecode = "sample_1"
-        self.type = "solution"
-        self.components = list(components)
-
-
-class _Named:
-    def __init__(self, name=None):
-        self.name = name
-        self.details = None
-        self.seq = None
-        self.paramagnetic = None
-        self.entities = [("1", "1", "$e", None)]
-
-
-class _ExperimentList:
-    experiments = [("1", "2D 1H-15N HSQC", None, "1", None, "isotropic")]
-
-
-class _Entry:
-    def __init__(self, samples, referenced=("1",)):
-        self.id = "1"
-        self.title = None
-        self.details = None
-        self.citation_title = None
-        self.citation_DOI = None
-        self.exp_method = "NMR"
-        self.exp_method_subtype = "solution"
-        self.citation_keywords = []
-        self.struct_keywords = []
-        self.entities = {"1": _Named(name="entity")}
-        self.assemblies = {"1": _Named(name="assembly")}
-        self.samples = samples
-        self.conditions = {"1": _Conditions()}
-        self.experiment_list = _ExperimentList()
-        self._referenced = list(referenced)
-
-    def get_peptide_shifts(self):
-        return {("1", "1", "1"): (None, "1", "1", self._referenced)}
 
 
 def _component(name, entity_id=""):
@@ -105,13 +46,7 @@ def _component(name, entity_id=""):
 
 
 def _fill(entry, cosolvents):
-    row = pd.Series(
-        {"entryID": "1", "stID": "1", "entity_assemID": "1", "entityID": "1"}
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=["1"])
-    return fill_row_data(
-        row, perturbing_cosolvents=cosolvents, keywords=[], bmrb_entries=bmrb_entries
-    )
+    return fill(entry, cosolvents)
 
 
 def _entry_with(*names, referenced=("1",)):
@@ -274,14 +209,14 @@ def test_urea_is_matched_on_word_boundaries(name, expected):
     assert _fill(_entry_with(name), ["urea"])["urea"] is expected
 
 
-def test_trifluoro_ethanol_with_a_space_needs_its_own_token():
-    # bmr15559/15579/15580 deposit 'Trifluoro Ethanol D2OH' at 50 % v/v, which
-    # neither 'TFE' nor 'trifluoroethanol' contains.
-    tokens = ["TFE", "trifluoroethanol", "trifluoro ethanol"]
+def test_trifluoro_ethanol_with_a_space_is_reached_by_the_fuzzy_token():
+    # bmr15559/15579/15580 deposit 'Trifluoro Ethanol D2OH' at 50 % v/v. It once
+    # needed its own literal 'trifluoro ethanol' token; the spelling-tolerant
+    # 'trifluoroethanol' token now reaches it (and 'Triflouroethanol', bmr50683).
+    tokens = ["TFE", "trifluoroethanol"]
     row = _fill(_entry_with("Trifluoro Ethanol D2OH"), tokens)
     assert row["TFE"] is False
-    assert row["trifluoroethanol"] is False
-    assert row["trifluoro ethanol"] is True
+    assert row["trifluoroethanol"] is True
 
 
 @pytest.mark.parametrize(
@@ -405,20 +340,7 @@ def test_sodium_dodecyl_sulfate_matches_dodecyl_not_sds():
 
 
 def _fill_real(entry_id, stID, cosolvents):
-    entry = bmrb.BmrbEntry(entry_id, paths.RAW_BMRB / f"bmr{entry_id}")
-    key = next(k for k in entry.get_peptide_shifts() if k[0] == stID)
-    row = pd.Series(
-        {
-            "entryID": entry_id,
-            "stID": key[0],
-            "entity_assemID": key[1],
-            "entityID": key[2],
-        }
-    )
-    bmrb_entries = pd.DataFrame({"entry": [entry]}, index=[entry_id])
-    return fill_row_data(
-        row, perturbing_cosolvents=cosolvents, keywords=[], bmrb_entries=bmrb_entries
-    )
+    return fill_real(entry_id, stID, cosolvents)
 
 
 @requires_bmrb_data
@@ -448,7 +370,7 @@ def _fill_real(entry_id, stID, cosolvents):
         ("26598", "1", "urea", False),  # 'bis-pyridylurea inhibitor', 1 mM
         ("50434", "1", "urea", False),  # 'palmitate, laureate, and stearate'
         # the spellings a token used to miss
-        ("15559", "1", "trifluoro ethanol", True),  # 'Trifluoro Ethanol D2OH', 50 %
+        ("15559", "1", "trifluoroethanol", True),  # 'Trifluoro Ethanol D2OH', 50 %
         ("7387", "1", "dimethyl sulfoxide", True),  # 'Dimethyl sulfoxide', 100 %
         ("7388", "1", "dimethylsulfoxide", True),  # 'dimethylsulfoxide', 50 %
     ],

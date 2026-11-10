@@ -10,6 +10,9 @@ from tqdm import tqdm
 
 import trizod.bmrb.bmrb as bmrb
 from trizod.bmrb.sample_state import (
+    COSOLVENT_PATTERNS,
+    ORGANIC_SOLVENT_TOKENS,
+    ORGANIC_SOLVENT_WORD_TOKENS,
     PHYSICAL_STATE_MODERATE_DENY,
     PHYSICAL_STATE_STRICT_DENY,
     PHYSICAL_STATE_TOLERANT_DENY,
@@ -60,8 +63,31 @@ class FilterException(Exception):
 #: ``unbound`` / ``boundaries`` ("Unbound Med25ACID", "Human Pdx1 Homeodomain in
 #: the Unbound State"), i.e. exactly the free-state depositions the strict tier
 #: wants to KEEP. Prefix keywords such as ``denatur`` and ``unfold`` deliberately
-#: stay substring matches.
+#: stay substring matches -- see ``KEYWORD_NEGATIONS`` for the phrases they
+#: must not read.
 WORD_BOUNDARY_KEYWORDS = frozenset({"bound"})
+
+#: Phrases removed from the free text before a keyword prefix is matched,
+#: because in them the prefix says the opposite of what the keyword tests.
+#: "intrinsically/natively unfolded" is IDP vocabulary -- the signal the dataset
+#: exists to capture (bmr6436 Xc4149, the synucleins 15298/16300/16301) -- and
+#: "non-denaturing" is a negation (bmr27021 medin, "in non-denaturing
+#: conditions"). Only these phrases go: "pressure unfolded" or "cold-denatured"
+#: still match. The keywords are deliberately NOT gated on cosolvent evidence:
+#: in free text "unfolded" usually describes a genuinely non-native sample with
+#: no cosolvent (pressure-, cold-, acid-unfolded), and gating re-admitted 33
+#: such moderate chains in the 2026-10 audit's what-if, against +4 for this rule.
+KEYWORD_NEGATIONS = {
+    "unfold": re.compile(r"(?:intrinsically|natively)[\s-]+unfold\w*"),
+    # ... and a denaturant named as absent: bmr5076 (YB1 cold shock domain,
+    # "unfolded states ... No denaturants are added"), bmr17513 ("in the
+    # abscence of denaturant", sic). "absence and presence of denaturant" stays.
+    "denatur": re.compile(
+        r"non[\s-]?denatur\w*"
+        r"|(?<![a-z0-9])(?:no|without|absence\s+of|abscence\s+of)\s+denaturants?"
+        r"(?![a-z0-9])"
+    ),
+}
 
 #: Detergents/lipids that make a sample a membrane mimetic rather than a
 #: perturbing cosolvent. Annotated as the ``membrane_mimetic`` column, never
@@ -94,9 +120,41 @@ MEMBRANE_MIMETIC_TOKENS = (
 #: (+2 tolerant rows, +2 moderate, +1 strict). ``hfip`` is insurance rather than
 #: a fix -- all 14 corpus components containing it are genuine HFIP, so the
 #: boundary costs nothing -- but a four-letter acronym is precisely the token
-#: class where a substring match goes wrong. The rest stay substring matches:
-#: ``guanidin`` must reach ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
-WORD_BOUNDARY_COSOLVENTS = frozenset({"urea", "hfip"})
+#: class where a substring match goes wrong. So must every alcohol and organic
+#: solvent (``sample_state.ORGANIC_SOLVENT_WORD_TOKENS``): ``acn`` sits inside
+#: NaCN, ``isopropanol`` inside hexafluoroisopropanol, ``etoh`` inside
+#: 'acetohydroxamic acid'. The bare alcohols, the propanols, acetonitrile, the
+#: alkanes and dioxane need more than a word boundary (``ethanol`` would still
+#: fire on '2-mercapto ethanol', ``pentane`` on 'sila-pentane' DSS), so they are
+#: matched by ``COSOLVENT_PATTERN_RES`` instead, which ``_token_matches`` checks
+#: first. The rest stay substring matches: ``guanidin`` must reach
+#: ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
+WORD_BOUNDARY_COSOLVENTS = frozenset({"urea", "hfip", *ORGANIC_SOLVENT_WORD_TOKENS})
+
+#: Cosolvent tokens matched by a pattern, which takes precedence over the
+#: substring / word-boundary rule: the spelling-tolerant ``trifluoroethanol``
+#: and ``acetonitrile``, the substituent-guarded alcohols and propanols, the
+#: DSS-guarded alkanes and the percentage-gated ``dioxane``. One definition,
+#: shared with the ``cosolvent_evidence`` annotation
+#: (``sample_state.COSOLVENT_PATTERNS``).
+COSOLVENT_PATTERN_RES = {
+    token: re.compile(pattern) for token, pattern in COSOLVENT_PATTERNS.items()
+}
+
+#: Token prefixes of the denaturant family. A denaturant named in free text that
+#: narrates a refolding protocol is not a sample component: bmr19377 (a pinned
+#: test chain, IL-10) dissolves inclusion bodies in 6 M GdmCl and refolds them
+#: before an NMR sample in phosphate buffer, and bmr50471 describes "a mild
+#: unfolding-refolding step using guanidine hydrochloride" for H/D back-exchange.
+#: Helix inducers (TFE, HFIP, DMSO, alcohols) play no part in refolding, so the
+#: guard is limited to this family, and it never applies to a component name.
+DENATURANT_TOKEN_PREFIXES = ("guanid", "gdm", "gdn", "urea")
+
+#: A cosolvent named right after "no" / "without" in free text is absent, not
+#: present: bmr15936's 0 % point of a TFE titration has Details "no TFE
+#: (2,2,2-trifluoroehtanol)". Only the one negated word is removed, so "no salt
+#: added, 30 % TFE" still reads TFE.
+_NEGATED_MENTION_RE = re.compile(r"(?<![a-z0-9])(?:no|without)\s+\S+")
 
 _WORD_BOUNDARY_PATTERNS = {}
 
@@ -116,15 +174,19 @@ def _word_boundary_pattern(token):
     return pattern
 
 
-def _token_matches(token, texts, word_boundary):
+def _token_matches(token, texts, word_boundary, patterns=None):
     """Does ``token`` occur in any of ``texts`` (all lower-cased already)?
 
     ``word_boundary`` is the set of tokens that must match as whole words --
     ``WORD_BOUNDARY_KEYWORDS`` for the state keywords scanned over the
     sample-descriptive free text, ``WORD_BOUNDARY_COSOLVENTS`` for the cosolvent
-    tokens scanned over ``_Sample_component.Mol_common_name``. Which fields are
-    searched is the caller's business; the matching rule is the same one.
+    tokens scanned over the sample's component names, solvent system and
+    details. ``patterns`` maps tokens to a compiled regex that replaces both
+    rules (``COSOLVENT_PATTERN_RES``). Which fields are searched is the
+    caller's business; the matching rule is the same one.
     """
+    if patterns and token in patterns:
+        return any(patterns[token].search(text) for text in texts)
     if token in word_boundary:
         pattern = _word_boundary_pattern(token)
         return any(pattern.search(text) for text in texts)
@@ -160,9 +222,12 @@ def _token_matches(token, texts, word_boundary):
 # Biophys 31:297) opens by noting that alcohol cosolvents "have been used for
 # many decades to denature proteins".
 #
-#: Tokens searched in ``_Sample_component.Mol_common_name``, identical at
-#: tolerant, moderate and strict (``unfiltered`` filters nothing). Matched as
-#: substrings except for those in ``WORD_BOUNDARY_COSOLVENTS``.
+#: Tokens searched in the samples the scored shift table references:
+#: ``_Sample_component.Mol_common_name`` of non-polymer components,
+#: ``_Sample.Solvent_system`` and ``_Sample.Details`` (the last two with the
+#: refolding-protocol and negation guards above). Identical at tolerant,
+#: moderate and strict (``unfiltered`` filters nothing). Matched as substrings
+#: except for those in ``WORD_BOUNDARY_COSOLVENTS`` and ``COSOLVENT_PATTERN_RES``.
 COSOLVENT_TOKENS = (
     # Guanidinium. `guanidin` carries the filter: it uniquely removes 2 rows,
     # bmr11329 ('Guanidine oxalate', 75 mM) and bmr6236 ('Guanidinium Chloride',
@@ -184,11 +249,13 @@ COSOLVENT_TOKENS = (
     # Thanabal 1994 (J Biomol NMR 4:47) had to publish separate 13C random-coil
     # tables for 10/20/30 % TFE -- the reference itself moves with [TFE], and
     # dG(helix) is linear in TFE mole fraction, so no threshold is principled.
-    # `trifluoroethanol` does not contain `tfe`, and neither spelling contains
-    # `trifluoro ethanol`, which bmr15559/15579/15580 deposit at 50 % v/v.
+    # `trifluoroethanol` does not contain `tfe`, so both are needed; the second
+    # is the spelling-tolerant sample_state.TRIFLUOROETHANOL_PATTERN (the
+    # deposited spellings and their entries are listed there). It also reaches
+    # 'Trifluoro Ethanol D2OH', so the former literal `trifluoro ethanol` token
+    # is gone.
     "TFE",
     "trifluoroethanol",
-    "trifluoro ethanol",
     # HFIP -- a STRONGER helix inducer than TFE (Hirota, Mizuno & Goto 1998,
     # JMB 275:365). 22 entries deposit it and not one is below 25 % v/v, so six
     # strict rows were being admitted at 25-40 % HFIP while 5 % TFE was
@@ -211,6 +278,19 @@ COSOLVENT_TOKENS = (
     "DMSO",
     "dimethyl sulfoxide",
     "dimethylsulfoxide",
+    # Alcohols and organic solvents (sample_state.ORGANIC_SOLVENT_TOKENS, where
+    # the deposits behind each spelling are listed). Methanol and ethanol are
+    # the classic alcohol cosolvents of Buck 1998 (above) and were in no list;
+    # acetonitrile, chloroform, the propanols, the alkanes and dioxane (NMR-STAR
+    # audit I-07) still passed every tier after the alcohols went in, among them
+    # the pinned test chains 50871, 50900 and 36521 and the CheZOD117 chain
+    # 18578. Neither POTENCI nor the LACS tables say anything about them. Each
+    # is a whole word or a guarded pattern (WORD_BOUNDARY_COSOLVENTS,
+    # COSOLVENT_PATTERN_RES). Ungated by concentration like the rest, so the few
+    # dilute deposits (bmr19921, 0.5 % methanol from an oleate stock) go too --
+    # except dioxane: at 1-13 mM it is the 1H/13C shift reference (bmr4831,
+    # 15447, 15565, 15973), so it counts only written as >= 1 % of the solvent.
+    *ORGANIC_SOLVENT_TOKENS,
 )
 
 
@@ -332,6 +412,9 @@ def fill_row_data(
     row["temperature"] = entry.conditions[condID].get_temperature(
         return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers
     )
+    # Annotation only, from the same condition list as pH/temperature: bar, NaN
+    # when not recorded, never a default and never filtered on.
+    row["pressure_bar"] = entry.conditions[condID].get_pressure_bar()
     seq = entry.entities[row["entityID"]].seq
     row["seq"] = seq
     # retrieve # backbone shifts (H,HA,HB,C,CA,CB,N)
@@ -383,9 +466,14 @@ def fill_row_data(
         assembly, row["entity_assemID"], row["entityID"]
     )
     row["physical_state"] = physical_state if physical_state else pd.NA
-    # A shift table that references no sample is searched against every sample
-    # of the entry. Resolved once, here, so the cosolvent evidence below and
-    # the component scan further down see the same sample set.
+    # Multi-sample entries: the samples searched are the ones THIS row's shift
+    # table references (_Chem_shift_experiment.Sample_ID, else the Sample_ID of
+    # the experiments it lists -- see BmrbEntry.get_peptide_shifts), so a TFE
+    # titration's 0 % shift table is judged on its own aqueous sample. A shift
+    # table that references no sample is searched against every sample of the
+    # entry -- the entry-level fallback, since nothing says which one was used.
+    # Resolved once, here, so the cosolvent evidence below and the cosolvent
+    # scan further down see the same sample set.
     if len(sampleIDs) == 0 and entry.samples:
         sampleIDs = list(entry.samples.keys())
     # `denatured`/`unfolded` are ambiguous depositor vocabulary -- alpha-synuclein
@@ -406,11 +494,16 @@ def fill_row_data(
     ]
     sample_texts, framecodes = [], []
     all_component_names, component_names = [], []
+    # _Sample.Solvent_system, and with _Sample.Details the free text searched for
+    # perturbing cosolvents beside the component names
+    solvent_systems, solvent_texts = [], []
     for sID in sampleIDs:
         sample = entry.samples.get(sID)
         if sample is None:
             continue
         sample_texts.extend([sample.name, sample.details])
+        solvent_systems.append(sample.solvent_system)
+        solvent_texts.extend([sample.solvent_system, sample.details])
         framecodes.append(sample.framecode)
         for comp in sample.components:
             all_component_names.append(comp[3])
@@ -420,7 +513,7 @@ def fill_row_data(
             if comp[3] and not comp[2]:
                 component_names.append(comp[3].lower())
     row["cosolvent_evidence"] = has_cosolvent_evidence(
-        base_fields + sample_texts + all_component_names
+        base_fields + sample_texts + solvent_systems + all_component_names
     )
     # Is this solution NMR or solid-state NMR, judging by _Sample.Type,
     # _Experiment.Sample_state and the experiment names?
@@ -450,13 +543,27 @@ def fill_row_data(
     )
     fields = [field.lower() for field in fields if field]  # field can be None
     for keyword in keywords:
-        row[keyword] = _token_matches(keyword.lower(), fields, WORD_BOUNDARY_KEYWORDS)
+        keyword_lower = keyword.lower()
+        negation = KEYWORD_NEGATIONS.get(keyword_lower)
+        texts = fields if negation is None else [negation.sub(" ", f) for f in fields]
+        row[keyword] = _token_matches(keyword_lower, texts, WORD_BOUNDARY_KEYWORDS)
     # check if perturbing cosolvents are present. The column is named after the
     # chemical itself (`urea`, `DMSO`, ...), which the rename deliberately left
     # alone -- only the category name was wrong.
+    free_texts = [
+        _NEGATED_MENTION_RE.sub(" ", text.lower()) for text in solvent_texts if text
+    ]
+    # a refolding protocol names its denaturant without it being in the tube
+    protocol_free_texts = [text for text in free_texts if "refold" not in text]
     for token in perturbing_cosolvents:
+        token_lower = token.lower()
+        texts = component_names + (
+            protocol_free_texts
+            if token_lower.startswith(DENATURANT_TOKEN_PREFIXES)
+            else free_texts
+        )
         row[token] = _token_matches(
-            token.lower(), component_names, WORD_BOUNDARY_COSOLVENTS
+            token_lower, texts, WORD_BOUNDARY_COSOLVENTS, COSOLVENT_PATTERN_RES
         )
     # Membrane mimetics are annotated, never filtered: the matched token(s), not
     # a bool, so an SDS micelle stays distinguishable from DDM solubilisation.
@@ -690,6 +797,7 @@ def output_dataset(
                 "ionic_strength",
                 "pH",
                 "temperature",
+                "pressure_bar",
             ]
             + OFFSET_COLUMNS
             + [

@@ -32,10 +32,22 @@ Membership / split (defaults):
   is a subset of the already-leakage-free train). Default ``--val-fraction 0``
   emits only train + test.
 
-Per-residue G-scores are tier-independent (the tier governs entry *inclusion*,
-not the scores), and every train+test ID resolves in
-``data/interim/scored/tolerant/scores.json`` (strict subset of tolerant), so a single
-tier's ``scores.json`` supplies the labels for both splits.
+Which ``scores.json`` supplies the labels: per-residue G-scores are NOT
+tier-independent. Tolerant is the only tier that combines a finite
+``--max-offset`` (3 sigma) with ``--reject-shift-type-only``, so it masks an
+over-limit atom type out of the score (and nulls its offset) where the
+unfiltered run applies the offset and scores the type; in release 2026-10 that
+makes 1,073 of 15,073 tolerant records differ from the unfiltered ones, 478 of
+them training representatives (audit issue I-01). Each record's labels
+therefore come from the tier that selected the chain, by
+:func:`trizod.dataset.tiers.label_source_tier` -- the same rule
+``scripts/build_parquet_dataset.py`` applies to the Parquet's
+``label_tier_source``, so the two artefacts agree chain for chain whatever
+``--tier`` is (see :data:`trizod.dataset.tiers.LABEL_SOURCE_RULE`). For the
+default ``--tier tolerant`` that is the tolerant record for every train and
+test chain: a chain held by moderate or strict was never masked at tolerant
+(moderate/strict reject an over-limit offset outright), so its moderate/strict
+record is the tolerant one.
 
 The script is self-validating: it asserts every ID resolves, that
 TARGET/MASK/sequence lengths agree, that train and test are disjoint, and that
@@ -45,7 +57,13 @@ Usage
 -----
     uv run python -m trizod.dataset.deploy_fasta
         [--tier tolerant] [--out PATH] [--work-dir DIR] [--root DIR]
-        [--train-fasta PATH] [--test-fasta PATH] [--scores PATH]
+        [--train-fasta PATH] [--test-fasta PATH]
+        [--scored-dir DIR] [--reps-dir DIR]
+
+``--scored-dir`` holds ``<tier>/scores.json`` for all four tiers (default
+``<root>/data/interim/scored``) and ``--reps-dir`` the four
+``train_<tier>_best.fasta`` files (default ``<work-dir>/mmseqs``); a release
+bundle's ``scores/`` and ``train/`` directories work as well.
 """
 
 from __future__ import annotations
@@ -56,9 +74,17 @@ import random
 from pathlib import Path
 
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.tiers import LABEL_SOURCE_RULE, TIER_ORDER, label_source_tier
 from trizod.io.fasta import fasta_ids
 
 SENTINEL = "999.0"  # masked / no-score per-residue value (matches reference)
+
+
+def rep_fasta(reps_dir: Path, tier: str) -> Path:
+    """``train_<tier>_best.fasta`` in the work-dir (flat ``mmseqs/``) or the
+    release-bundle (``train/<tier>/``) layout."""
+    flat = reps_dir / f"train_{tier}_best.fasta"
+    return flat if flat.exists() else reps_dir / tier / f"train_{tier}_best.fasta"
 
 
 def load_scores(path: Path) -> dict[str, dict]:
@@ -101,7 +127,8 @@ def main(argv=None) -> None:
     ap.add_argument(
         "--tier",
         default="tolerant",
-        help="release tier whose scores.json supplies the G-score labels",
+        help="release tier whose training representatives are emitted as "
+        "SET=train (labels follow LABEL_SOURCE_RULE, per chain)",
     )
     ap.add_argument(
         "--work-dir",
@@ -120,10 +147,23 @@ def main(argv=None) -> None:
         type=Path,
         default=None,
         help="training FASTA whose headers list the train IDs "
-        "(default: <work-dir>/mmseqs/train_<tier>_best.fasta)",
+        "(default: <reps-dir>/train_<tier>_best.fasta)",
     )
     ap.add_argument("--test-fasta", type=Path, default=None)
-    ap.add_argument("--scores", type=Path, default=None)
+    ap.add_argument(
+        "--scored-dir",
+        type=Path,
+        default=None,
+        help="directory holding <tier>/scores.json for all four tiers "
+        "(default: <root>/data/interim/scored)",
+    )
+    ap.add_argument(
+        "--reps-dir",
+        type=Path,
+        default=None,
+        help="directory holding train_<tier>_best.fasta for all four tiers, flat "
+        "or as <tier>/train_<tier>_best.fasta (default: <work-dir>/mmseqs)",
+    )
     ap.add_argument(
         "--val-fraction",
         type=float,
@@ -146,13 +186,20 @@ def main(argv=None) -> None:
     )
     args = ap.parse_args(argv)
 
+    if args.tier not in TIER_ORDER:
+        raise SystemExit(f"--tier must be one of {TIER_ORDER}: {args.tier!r}")
     paths = resolve_paths(args.work_dir, args.root)
-    train_fasta = args.train_fasta or (paths.mmseqs / f"train_{args.tier}_best.fasta")
+    scored_dir = args.scored_dir or paths.scored
+    reps_dir = args.reps_dir or paths.mmseqs
+    rep_paths = {t: rep_fasta(reps_dir, t) for t in TIER_ORDER}
+    score_paths = {t: scored_dir / t / "scores.json" for t in TIER_ORDER}
+    train_fasta = args.train_fasta or rep_paths[args.tier]
     test_fasta = args.test_fasta or (paths.testset / "TriZOD_test_set.fasta")
-    scores_path = args.scores or (paths.scored / args.tier / "scores.json")
     out = args.out or paths.deploy_out
 
-    for p in (train_fasta, test_fasta, scores_path):
+    # all four tiers, always: falling back to one tier's records would silently
+    # re-introduce the unfiltered-vs-tolerant label split (I-01)
+    for p in (train_fasta, test_fasta, *rep_paths.values(), *score_paths.values()):
         if not p.exists():
             raise SystemExit(f"missing required input: {p}")
 
@@ -178,7 +225,8 @@ def main(argv=None) -> None:
         rng = random.Random(args.seed)
         val_ids = set(rng.sample(sorted(train_ids, key=natural_key), n_val))
 
-    scores = load_scores(scores_path)
+    scores = {t: load_scores(p) for t, p in score_paths.items()}
+    reps = {t: set(fasta_ids(p)) for t, p in rep_paths.items()}
 
     # (ID, SET) work list; emitted sorted by natural ID.
     tagged = [(i, "val" if i in val_ids else "train") for i in train_ids]
@@ -190,14 +238,17 @@ def main(argv=None) -> None:
     out_of_range: list[tuple[str, float]] = []
     lines: list[str] = []
     n_by_set = {"train": 0, "val": 0, "test": 0}
+    source_counts = dict.fromkeys(TIER_ORDER, 0)
     total_res = 0
     total_sentinel = 0
 
     for rec_id, set_name in tagged:
-        e = scores.get(rec_id)
-        if e is None:
+        tier = label_source_tier(rec_id, reps, scores)
+        if tier is None:
             missing.append(rec_id)
             continue
+        e = scores[tier][rec_id]
+        source_counts[tier] += 1
         seq = e["seq"]
         gscores = e["gscores"]
         if len(seq) != len(gscores):
@@ -219,7 +270,8 @@ def main(argv=None) -> None:
 
     if missing:
         raise SystemExit(
-            f"{len(missing)} IDs absent from {scores_path}: {missing[:10]}"
+            f"{len(missing)} IDs absent from every scores.json under "
+            f"{scored_dir}: {missing[:10]}"
         )
     if out_of_range:
         raise SystemExit(
@@ -241,7 +293,10 @@ def main(argv=None) -> None:
         "tier": args.tier,
         "train_fasta": _rel(train_fasta),
         "test_fasta": _rel(test_fasta),
-        "scores": _rel(scores_path),
+        "scored_dir": _rel(scored_dir),
+        "reps_dir": _rel(reps_dir),
+        "label_source": LABEL_SOURCE_RULE,
+        "label_tier_source_counts": source_counts,
         "out": str(out),
         "val_fraction": args.val_fraction,
         "seed": args.seed if n_val > 0 else None,
@@ -265,6 +320,7 @@ def main(argv=None) -> None:
             f"({args.val_fraction:.0%} of train, seed={args.seed})"
         )
     print(f"  test  (SET=test) : {summary['n_test']}")
+    print(f"  labels by selecting tier: {source_counts}")
     print(
         f"  residues: {total_res} total, {total_sentinel} masked "
         f"({summary['sentinel_fraction'] * 100:.1f}% sentinel 999.0)"

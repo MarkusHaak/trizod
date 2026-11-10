@@ -1,0 +1,20 @@
+# BMRB entries in TriZOD's local snapshot that BMRB no longer lists publicly.
+# `trizod dataset build` drops every entry listed here before deduplication
+# (NMR-STAR parsing audit 2026-11, issue I-06), so none reaches a tier pool,
+# a training set or a test set. Every status listed here is excluded.
+# status: withdrawn = /v2/instant labels it "Entry has been withdrawn by the author."
+#         on_hold   = /v2/instant labels it "Entry is on hold"
+#         unlisted  = absent from /v2/list_entries with no instant-search label
+# Refresh (network): python -m trizod.dataset.withdrawn --bmrb-dir data/raw/bmrb_entries
+# then review the diff and commit it; the build itself never calls the network.
+entry_id	status	date_checked	source	detail
+30167	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 404; instant: Entry has been withdrawn by the author.
+30168	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 404; instant: Entry has been withdrawn by the author.
+30794	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 404; instant: Entry has been withdrawn by the author.
+34337	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 404; instant: Entry has been withdrawn by the author.
+36144	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 200; instant: Entry has been withdrawn by the author.
+36170	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 200; instant: Entry has been withdrawn by the author.
+36288	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 200; instant: Entry has been withdrawn by the author.
+36392	on_hold	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 200; instant: Entry is on hold. Release: Released
+50748	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 404; instant: Entry has been withdrawn by the author.
+50838	withdrawn	2026-11-06	BMRB API /v2/list_entries?database=macromolecules; /v2/entry; /v2/instant	absent from list_entries; /v2/entry HTTP 404; instant: Entry has been withdrawn by the author.

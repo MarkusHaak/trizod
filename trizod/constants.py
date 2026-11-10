@@ -1,4 +1,7 @@
 BACKBONE_ATOMS = ["C", "CA", "CB", "HA", "H", "N", "HB"]
+# Deprecated pre-2026-04 name, kept for PeptoneBench (trizod_gscores.py imports
+# it from here). The same list object, not a copy.
+BBATNS = BACKBONE_ATOMS
 # Expected RMSD of secondary chemical shifts (observed - POTENCI predicted) for
 # intrinsically disordered residues, in ppm. These are the POTENCI-updated
 # equivalents of the sigma values in Eq. 2 of Nielsen & Mulder 2016

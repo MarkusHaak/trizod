@@ -12,6 +12,11 @@ traceable:
   under-invalidation: the cache is a speed optimisation, but silently reusing
   offsets computed by different code is a correctness bug (see issue #20).
 
+* ``bmrb_parser_version()`` — the same idea for the ``tmp/bmrb_entries/``
+  pickle cache: a digest of the parser source, stamped on every parsed
+  ``BmrbEntry`` so a pickle from older parsing code is re-parsed instead of
+  reused without the fields the parser has since learned.
+
 * ``git_revision()`` — the current commit, stamped into release/manifest
   metadata so a ``scores.json`` can always be traced back to the code that
   produced it.
@@ -61,6 +66,32 @@ def scoring_cache_version() -> str:
     except OSError:
         return "nover"
     return h.hexdigest()[:12]
+
+
+#: The module whose classes are pickled into ``tmp/bmrb_entries/``.
+_PARSER_FILE = _PKG_ROOT / "bmrb" / "bmrb.py"
+
+
+@lru_cache(maxsize=1)
+def bmrb_parser_version() -> str:
+    """Return a short hash of the BMRB parser source (``trizod/bmrb/bmrb.py``).
+
+    ``BmrbEntry`` stamps it on every parsed entry, and the pickle cache treats an
+    entry carrying any other stamp as a miss. The pickle holds the parsed
+    *object*, not the file, so a field the parser learns later (e.g.
+    ``_Sample.Solvent_system``) is simply absent from every older pickle -- a
+    re-filter on the warm cache would otherwise crash on it, or with a default,
+    filter as if nobody had declared it. Same trade-off as
+    ``scoring_cache_version``: a comment-only edit costs one re-parse, which is
+    cheap next to silently filtering on stale objects. Also part of the
+    ``tmp/wSCS/`` key (``pipeline.wscs_cache_path``): the scoring math does not
+    depend on the parser, but its inputs do -- the conditions and shifts read
+    from the entry -- and that key names a chain by IDs only.
+    """
+    try:
+        return hashlib.sha256(_PARSER_FILE.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "nover"
 
 
 @lru_cache(maxsize=1)

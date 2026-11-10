@@ -4,15 +4,32 @@ Consolidates the multi-file staged release bundle (per-tier FASTA + per-tier
 ``scores.json`` JSONL + ``clusters_best.tsv`` + test FASTAs) into ONE
 self-contained Parquet table, one row per scored protein chain.
 
-Design (see docs): the per-tier ``scores.json`` files are byte-identical for a
-given chain and nest perfectly (strict subset tolerant subset ... unfiltered),
-and the per-tier training-representative sets and clustering pools also nest.
-So a single row per chain plus a handful of ordinal/categorical columns encodes
-every published view with no information loss:
+Design (see docs): the per-tier ``scores.json`` files nest (strict subset
+moderate subset tolerant subset unfiltered), and so do the per-tier
+training-representative sets and clustering pools, so a single row per chain
+plus a handful of ordinal/categorical columns encodes every published view's
+membership:
 
   * ``split``       one of train / redundant / test_chezod117 / test_trizod / excluded
   * ``train_tier``  strictest tier at which the chain is a training representative
   * ``pool_tier``   strictest tier whose redundancy-reduction pool contains the chain
+
+A chain's per-tier *records* are NOT interchangeable, though (audit issue I-01).
+Tolerant is the only tier that combines a finite ``--max-offset`` (3 sigma) with
+``--reject-shift-type-only``: it masks an over-limit atom type out of the score
+and nulls that type's ``off_<a>_sigma`` / ``total_off_<a>_ppm``, where the
+unfiltered run applies the offset and scores the type -- 1,073 of the 15,073
+tolerant records of release 2026-10 differ from the unfiltered run, 478 of them
+training representatives. Moderate and strict reject such a chain outright, so
+their records equal the unfiltered ones. Each row is therefore read, labels and
+offsets alike, from ONE record: that of the tier that selected the chain, named
+in ``label_tier_source`` -- its ``train_tier`` if it is a training
+representative, otherwise the strictest tier whose ``scores.json`` holds it
+(``LABEL_SOURCE_RULE`` in ``trizod.dataset.tiers``, shared with
+``trizod.dataset.deploy_fasta`` so the deploy FASTA agrees chain for chain,
+and published as the ``label_source`` metadata key).
+``tests/test_release_label_consistency.py`` checks a built Parquet against the
+bundle's per-tier files.
 
 Per-residue labels are stored as equal-length list columns aligned 1:1 to the
 sequence; unscored positions are NaN in the score columns and False in the
@@ -64,6 +81,12 @@ from trizod import paths
 from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
+from trizod.dataset.tiers import (
+    LABEL_SOURCE_RULE,
+    TIER_ORDER,
+    label_source_tier,
+    strictest_tier,
+)
 from trizod.offsets import (
     lacs_off_ppm_col,
     legacy_lacs_off_col,
@@ -80,9 +103,6 @@ from trizod.shifts import (
     write_shift_parquet,
 )
 from trizod.shifts.parquet import import_pyarrow
-
-# Tiers ordered loosest -> strictest. "strictest membership" = last match.
-TIER_ORDER = ["unfiltered", "tolerant", "moderate", "strict"]
 
 # Publication order of the per-atom offset columns. Deliberately NOT
 # ``BACKBONE_ATOMS`` (whose order is the internal shift-array column order):
@@ -225,15 +245,6 @@ def read_cluster_map(path: Path) -> tuple[set[str], dict[str, str], dict[str, fl
             except (KeyError, ValueError, TypeError):
                 quality[m] = None
     return members, best, quality
-
-
-def strictest(id_: str, membership: dict[str, set[str]]) -> str | None:
-    """Loosest->strictest scan; return the strictest tier whose set has id_."""
-    found = None
-    for tier in TIER_ORDER:
-        if id_ in membership[tier]:
-            found = tier
-    return found
 
 
 def as_float(value) -> float | None:
@@ -436,6 +447,14 @@ COLUMNS: list[Column] = [
     Column(
         "label_tier", "string", origin="testset", source="label_tier", convert=clean_str
     ),
+    # --- appended 2026-10 ----------------------------------------------------
+    # Sample pressure in bar from the scored shift table's own condition list,
+    # like ph/temperature. Annotation only: no tier has a pressure ceiling.
+    _scores("pressure_bar", "float32", "pressure_bar", as_float),
+    # --- appended 2026-11 ----------------------------------------------------
+    # Tier whose scores.json record supplied every "scores" column of the row,
+    # labels and offsets included (LABEL_SOURCE_RULE; audit I-01).
+    Column("label_tier_source", "string", derive=lambda c: c["label_tier_source"]),
 ]
 
 #: ``scores.json`` keys carried into the Parquet, derived from ``COLUMNS`` so
@@ -476,27 +495,92 @@ def normalize_offset_keys(record: dict) -> dict:
     return out
 
 
+def load_tier_scores(in_bundle: Path) -> dict[str, dict[str, dict]]:
+    """``tier -> {chain ID: record}`` for all four tiers' ``scores.json``.
+
+    All four are required: falling back to the unfiltered record for a missing
+    tier would silently re-introduce I-01. Every tier must also nest inside the
+    unfiltered superset, which is what the rows are enumerated from.
+    """
+    scores: dict[str, dict[str, dict]] = {}
+    for tier in TIER_ORDER:
+        path = in_bundle / "scores" / tier / "scores.json"
+        if not path.is_file():
+            raise SystemExit(
+                f"missing {path}: every tier's scores.json is needed, because a "
+                f"chain's labels come from the tier that selected it ({tier} "
+                "records are not interchangeable with the unfiltered ones)"
+            )
+        scores[tier] = {
+            rec["ID"]: normalize_offset_keys(rec) for rec in read_jsonl(path)
+        }
+    for tier in TIER_ORDER[1:]:
+        stray = sorted(set(scores[tier]) - set(scores["unfiltered"]))
+        if stray:
+            raise SystemExit(
+                f"{len(stray)} {tier} chains are not in the unfiltered "
+                f"scores.json, which must be the superset: {stray[:10]}"
+            )
+    return scores
+
+
+def read_train_reps(in_bundle: Path) -> dict[str, set[str]]:
+    """``tier -> training-representative IDs`` from ``train_<tier>_best.fasta``."""
+    return {
+        t: read_fasta_ids(in_bundle / "train" / t / f"train_{t}_best.fasta")
+        for t in TIER_ORDER
+    }
+
+
+def label_records(
+    in_bundle: Path, reps: dict[str, set[str]] | None = None
+) -> dict[str, tuple[str, dict]]:
+    """``chain ID -> (label_tier_source, that tier's scores.json record)``.
+
+    One entry per chain of the unfiltered superset, in its file order; the
+    tier follows ``LABEL_SOURCE_RULE``. Both the main table and the shift table
+    read a chain from here, so their labels and offsets are the same record.
+    """
+    scores = load_tier_scores(in_bundle)
+    if reps is None:
+        reps = read_train_reps(in_bundle)
+    out: dict[str, tuple[str, dict]] = {}
+    absent = []
+    for rid in scores["unfiltered"]:
+        tier = label_source_tier(rid, reps, scores)
+        rec = scores[tier].get(rid)
+        if rec is None:
+            absent.append(f"{rid} ({tier})")
+            continue
+        out[rid] = (tier, rec)
+    if absent:
+        raise SystemExit(
+            f"{len(absent)} training representatives are missing from their "
+            f"train_tier's scores.json -- the bundle is inconsistent: {absent[:10]}"
+        )
+    return out
+
+
 def arrow_schema(pa):
     """The Parquet schema, built from ``COLUMNS`` (needs an imported pyarrow)."""
     return pa.schema([(c.name, ARROW_TYPES[c.arrow](pa)) for c in COLUMNS])
 
 
-def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dict:
+def collect_columns(
+    in_bundle: Path,
+    composition_csv: Path | None = None,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> dict:
     """Assemble every ``COLUMNS`` entry into a name -> list-of-values dict.
 
     Pure Python, no pyarrow: the join/null behaviour is the part worth testing,
-    and pyarrow is an optional extra.
+    and pyarrow is an optional extra. ``labelled`` is
+    ``label_records(in_bundle)``, when already loaded.
     """
-    scores = [
-        normalize_offset_keys(rec)
-        for rec in read_jsonl(in_bundle / "scores" / "unfiltered" / "scores.json")
-    ]
-    print(f"loaded {len(scores)} scored chains (unfiltered = superset)")
-
-    reps = {
-        t: read_fasta_ids(in_bundle / "train" / t / f"train_{t}_best.fasta")
-        for t in TIER_ORDER
-    }
+    reps = read_train_reps(in_bundle)
+    if labelled is None:
+        labelled = label_records(in_bundle, reps)
+    print(f"loaded {len(labelled)} scored chains (unfiltered = superset)")
     pool = {}
     best_repr_map: dict[str, str] = {}
     quality_map: dict[str, float] = {}
@@ -536,16 +620,15 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
     cols: dict[str, list] = {c.name: [] for c in COLUMNS}
     n_comp_hits = 0
 
-    for rec in scores:
-        rid = rec["ID"]
+    for rid, (source_tier, rec) in labelled.items():
         seq = rec["seq"]
         raw_g = rec.get("gscores") or []
         raw_z = rec.get("zscores") or []
         raw_k = rec.get("k") or []
         mask = [g is not None for g in raw_g]
 
-        train_tier = strictest(rid, reps)
-        pool_tier = strictest(rid, pool)
+        train_tier = strictest_tier(rid, reps)
+        pool_tier = strictest_tier(rid, pool)
         if rid in test_chezod:
             split = "test_chezod117"
         elif rid in test_trizod:
@@ -575,6 +658,7 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
             "pool_tier": pool_tier,
             "cluster_repr": best_repr_map.get(rid),
             "quality": quality_map.get(rid),
+            "label_tier_source": source_tier,
         }
         for col in COLUMNS:
             if col.derive is not None:
@@ -588,8 +672,12 @@ def collect_columns(in_bundle: Path, composition_csv: Path | None = None) -> dic
             )
 
     print(
-        f"composition joined for {n_comp_hits}/{len(scores)} chains; "
+        f"composition joined for {n_comp_hits}/{len(labelled)} chains; "
         f"label_tier for {sum(x is not None for x in cols['label_tier'])}"
+    )
+    print(
+        "labels by selecting tier (label_tier_source):",
+        dict(Counter(cols["label_tier_source"])),
     )
     return cols
 
@@ -599,8 +687,9 @@ def build(
     out_path: Path,
     composition_csv: Path | None = None,
     row_group_size: int = ROW_GROUP_SIZE,
+    labelled: dict[str, tuple[str, dict]] | None = None,
 ) -> None:
-    cols = collect_columns(in_bundle, composition_csv)
+    cols = collect_columns(in_bundle, composition_csv, labelled)
 
     pa, pq = import_pyarrow()
     schema = arrow_schema(pa)
@@ -619,6 +708,8 @@ def build(
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
         b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
         b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
+        b"label_source": LABEL_SOURCE_RULE.encode(),
+        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted literally from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm); null when not recorded or the unit is missing/unknown; annotation only, never filtered",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
         b"sort_order": sort_order_doc(row_group_size).encode(),
     }
@@ -647,23 +738,29 @@ def build(
     print("train_tier counts (strictest):", dict(tier_counts))
 
 
-def build_shifts(in_bundle: Path, out_path: Path, pkl_dir: Path) -> None:
+def build_shifts(
+    in_bundle: Path,
+    out_path: Path,
+    pkl_dir: Path,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> None:
     """Write the chemical-shift table for the bundle's chains.
 
     Every assigned shift on a canonical residue of every released chain,
     backbone and side chain (shifts on non-canonical residues are excluded --
     see :func:`trizod.bmrb.bmrb.get_deposited_shifts`), with ``val_ppm`` as
-    deposited and ``val_corrected_ppm`` beside it. The offsets
-    come from the same unfiltered ``scores.json`` the main table is built from
-    (unfiltered is a superset of every tier, and the offsets are per chain, not
-    per tier — verified identical for all 4,113 strict chains), so the table
-    joins on ``id`` with no orphans on either side.
+    deposited and ``val_corrected_ppm`` beside it. Each chain's offsets come
+    from the same record as its main-table row (:func:`label_records`, the
+    ``label_tier_source`` tier), so an atom type the tolerant tier masked, and
+    whose offset it therefore nulled, is not corrected here either: its rows
+    get ``offset_source`` ``none`` and a NULL ``val_corrected_ppm``. Every
+    chain of the main table is enumerated, so the two join on ``id`` with no
+    orphans on either side. ``labelled`` is ``label_records(in_bundle)``, when
+    already loaded.
     """
-    records = [
-        normalize_offset_keys(rec)
-        for rec in read_jsonl(in_bundle / "scores" / "unfiltered" / "scores.json")
-    ]
-    offsets = {rec["ID"]: chain_offsets(rec) for rec in records}
+    if labelled is None:
+        labelled = label_records(in_bundle)
+    offsets = {rid: chain_offsets(rec) for rid, (_, rec) in labelled.items()}
     print(f"\nbuilding shift table for {len(offsets)} chains from {pkl_dir} ...")
     if not pkl_dir.is_dir():
         raise SystemExit(f"BMRB pickle cache not found: {pkl_dir}")
@@ -755,6 +852,7 @@ def main() -> None:
     if not args.out and not args.shifts_out:
         ap.error("nothing to do: pass --out and/or --shifts-out")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    composition_csv = None
     if args.out:
         # The composition cache lives in the build work dir, not in the bundle
         # (package_release.py stages only the published artefacts). Missing it is
@@ -773,9 +871,12 @@ def main() -> None:
                 "run `trizod dataset build` first, pass --composition-csv, or "
                 "pass --skip-composition to accept null composition columns"
             )
-        build(args.in_bundle, args.out, composition_csv)
+    # the four tiers' scores.json, loaded once for the main and the shift table
+    labelled = label_records(args.in_bundle)
+    if args.out:
+        build(args.in_bundle, args.out, composition_csv, labelled=labelled)
     if args.shifts_out:
-        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir)
+        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)
 
 
 if __name__ == "__main__":
