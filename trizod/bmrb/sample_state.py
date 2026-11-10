@@ -233,11 +233,12 @@ def alkane_pattern(name):
 #: shift referencing"), bmr15447 and bmr15973 (1 mM), bmr15565 (13 mM) -- and a
 #: component name carries no concentration, so a bare 'dioxane' never matches.
 #: The percentage comes first ('5 % v/v 1,4-dioxane') or right after the name
-#: ('dioxane-d8 (10 %)').
+#: ('dioxane-d8 (10 %)'). A prefix glued to the name ('1,4-', '[2H8]') may sit
+#: between them, but not a slash: in '90% H2O/10% D2O/dioxane' the 10 % is D2O's.
 _AT_LEAST_ONE_PERCENT = r"(?<![\d.])[1-9]\d*(?:\.\d+)?\s*%"
 DIOXANE_PATTERN = (
     rf"{_AT_LEAST_ONE_PERCENT}\s*(?:\(?v/v\)?\s*)?(?:\[[^\]]*\]\s*)?"
-    r"(?:(?:per)?deuterated\s+)?\S*?(?<![a-z0-9])dioxane(?![a-z0-9])"
+    r"(?:(?:per)?deuterated\s+)?[^\s/]*?(?<![a-z0-9])dioxane(?![a-z0-9])"
     r"|(?<![a-z0-9])dioxane(?:-d\d)?\s*[(\[]?\s*[1-9]\d*(?:\.\d+)?\s*%"
 )
 

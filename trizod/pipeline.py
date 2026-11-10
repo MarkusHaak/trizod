@@ -50,7 +50,13 @@ def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str", exclude_withdrawn=Tru
     if exclude_withdrawn:
         from trizod.dataset.withdrawn import load_withdrawn
 
-        withdrawn = sorted(set(bmrb_files) & set(load_withdrawn()), key=int)
+        # matched on the entry number, so a custom pattern that captures more
+        # than the bare ID ('bmr36170') still skips the withdrawn entry
+        withdrawn_ids = set(load_withdrawn())
+        withdrawn = sorted(
+            (k for k in bmrb_files if _entry_number(k) in withdrawn_ids),
+            key=lambda k: (len(_entry_number(k)), _entry_number(k)),
+        )
         for entry_id in withdrawn:
             del bmrb_files[entry_id]
         if withdrawn:
@@ -58,6 +64,13 @@ def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str", exclude_withdrawn=Tru
                 f"skipping {len(withdrawn)} withdrawn BMRB entries: {', '.join(withdrawn)}"
             )
     return bmrb_files
+
+
+def _entry_number(file_id):
+    """The BMRB entry number in an ID the file pattern captured ('36170' for
+    '36170' or 'bmr36170'); the ID itself when it holds no digits."""
+    match = re.search(r"\d+", str(file_id))
+    return match.group() if match else str(file_id)
 
 
 def _find_bmrb_files(input_dir, pattern):

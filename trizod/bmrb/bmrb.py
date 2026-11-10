@@ -209,7 +209,9 @@ PH_SCALES = {"ph": "pH", "ph*": "pH*", "pd": "pD"}
 
 #: Which pH-like row a condition list is read from when it holds several
 #: (bmr4052 deposits both 'pH 5.1' and 'pH* 5.5'): a plain pH row first, then a
-#: pH* reading, then a pD. Within one rank the last row wins, as it always did.
+#: pH* reading, then a pD -- among the rows whose value holds a number, so an
+#: unparseable 'pH n/a' never hides a recorded pH*. Within one rank the last
+#: row wins, as it always did.
 PH_SCALE_RANK = {"pH": 0, "pH*": 1, "pD": 2}
 
 #: pD -> pH* offset. A glass electrode calibrated in H2O buffers reads about 0.4
@@ -306,6 +308,13 @@ def _ph_scale(type_, unit):
     return scale
 
 
+def _no_number(val):
+    """1 when a deposited value holds no number, else 0: the first key when a
+    condition list holds several rows for one quantity, so a row with a value
+    beats one without whatever their types."""
+    return int(np.isnan(parse_condition_value(val)[0]))
+
+
 def _temperature_rank(type_):
     """Preference of a temperature-like Type: a plain 'temperature' row (0)
     over any other (1) over a controller/setting row (2), so that a
@@ -344,13 +353,13 @@ class SampleConditions:
             if "ionic strength" in t_norm:
                 self.ionic_strength = (val, unit)
             elif ph_scale is not None:
-                rank = PH_SCALE_RANK[ph_scale]
+                rank = (_no_number(val), PH_SCALE_RANK[ph_scale])
                 if ph_rank is None or rank <= ph_rank:
                     self.pH, self.pH_scale, ph_rank = (val, unit), ph_scale, rank
             elif t_norm == "pressure":
                 self.pressure = (val, unit)
             elif "temp" in t_norm:
-                rank = _temperature_rank(t_norm)
+                rank = (_no_number(val), _temperature_rank(t_norm))
                 if temperature_rank is None or rank <= temperature_rank:
                     self.temperature, temperature_rank = (val, unit), rank
             else:
@@ -451,7 +460,11 @@ class SampleConditions:
     def get_ionic_strength(
         self, return_default=True, assume_si=True, fix_outliers=True
     ):
-        val = self.convert_val(self.ionic_strength[0])
+        val, unit_in_val = self.convert_val(self.ionic_strength[0], return_unit=True)
+        # a unit written into the value ('5 mM') is used over Val_units
+        unit = self.ionic_strength[1]
+        if unit_in_val in ("M", "mM") or unit_in_val.lower() in IONIC_STRENGTH_MU_UNITS:
+            unit = unit_in_val
         if not np.isnan(val) and val < 0:
             # recorded but impossible: invalid (NaN) at every tier, no default
             logging.getLogger("trizod.bmrb").info(
@@ -466,19 +479,17 @@ class SampleConditions:
                 return 0.1
             else:
                 return None
-        if self.ionic_strength[1] == "M":
+        if unit == "M":
             const1, factor = 0.0, 1.0
-        elif self.ionic_strength[1] == "mM":
+        elif unit == "mM":
             const1, factor = 0.0, 0.001
-        elif str(self.ionic_strength[1] or "").strip().lower() in (
-            IONIC_STRENGTH_MU_UNITS
-        ):
+        elif str(unit or "").strip().lower() in IONIC_STRENGTH_MU_UNITS:
             # the symbol mu: already molar (was scaled as micromolar)
             const1, factor = 0.0, 1.0
         elif assume_si:
             const1, factor = 0.0, 1.0
             logging.getLogger("trizod.bmrb").info(
-                f"Ionic strength unit unknown: {self.ionic_strength[1]}, assuming M"
+                f"Ionic strength unit unknown: {unit}, assuming M"
             )
         else:
             return np.nan

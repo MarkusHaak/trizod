@@ -25,6 +25,15 @@ def test_withdrawn_entries_are_not_scored(tmp_path):
     assert set(found) == {"4205", "15000"}
 
 
+def test_withdrawn_entries_are_skipped_whatever_the_pattern_captures(tmp_path):
+    # a custom --BMRB-file-pattern may capture more than the bare entry ID
+    _touch_entries(tmp_path, ["4205", "36170"])
+
+    found = find_bmrb_files(tmp_path, pattern=r"(bmr\d+)_3\.str")
+
+    assert set(found) == {"bmr4205"}
+
+
 def test_withdrawn_entries_can_be_scored_on_request(tmp_path):
     _touch_entries(tmp_path, ["4205", "36170"])
 

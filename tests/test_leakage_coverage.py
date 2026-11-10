@@ -850,3 +850,17 @@ def test_build_script_default_rule_is_either(tmp_path):
     calls = _run_build_script(tmp_path)
     red = [c for c in calls if "dataset redundancy" in c]
     assert red == ["run trizod dataset redundancy --leakage-rule either"]
+
+
+def test_redundancy_removes_search_logs_of_the_old_per_tier_layout(tmp_path):
+    # stage 2 now writes one search log; older runs left one per tier
+    from trizod.dataset.redundancy import STALE_SEARCH_LOGS, remove_stale_outputs
+
+    for name in STALE_SEARCH_LOGS:
+        (tmp_path / name).write_text("old run\n")
+    kept = tmp_path / "unfiltered_easy_search.log"
+    kept.write_text("current run\n")
+
+    remove_stale_outputs(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [kept.name]

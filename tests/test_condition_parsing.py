@@ -157,6 +157,25 @@ def test_controller_setting_is_used_when_it_is_the_only_temperature():
     assert cond.get_temperature() == pytest.approx(280.0)
 
 
+@pytest.mark.parametrize("plain_first", [True, False])
+def test_unparseable_plain_temperature_does_not_hide_a_recorded_one(plain_first):
+    plain = ("temperature", "ambient", "K")
+    ctrl = ("temperature controller setting", "288", "K")
+    rows = (plain, ctrl) if plain_first else (ctrl, plain)
+    cond = _conditions(*rows)
+    assert cond.get_temperature(return_default=False) == pytest.approx(288.0)
+
+
+@pytest.mark.parametrize("plain_first", [True, False])
+def test_unparseable_plain_ph_does_not_hide_a_ph_star(plain_first):
+    plain = ("pH", "n/a", "pH")
+    star = ("pH*", "6.5", "pH*")
+    rows = (plain, star) if plain_first else (star, plain)
+    cond = _conditions(*rows, _TEMP)
+    assert cond.get_pH(return_default=False) == pytest.approx(6.5)
+    assert cond.get_pH_scale() == "pH*"
+
+
 # --------------------------------------------------------------------------- #
 # I-03 (b): ionic-strength unit 'mu' is the symbol mu, i.e. molar
 # --------------------------------------------------------------------------- #
@@ -172,6 +191,20 @@ def test_ionic_strength_unit_mu_is_molar(unit):
     ("val", "unit", "molar"), [("0.15", "M", 0.15), ("150", "mM", 0.15)]
 )
 def test_ionic_strength_m_and_mm_unchanged(val, unit, molar):
+    cond = _conditions(("ionic strength", val, unit))
+    assert cond.get_ionic_strength() == pytest.approx(molar)
+
+
+@pytest.mark.parametrize(
+    ("val", "unit", "molar"),
+    [
+        ("5 mM", "", 0.005),  # unit only in the value
+        ("150 mM", "M", 0.15),  # the unit in the value wins, as for temperature
+        ("0.15 M", "mM", 0.15),
+        ("0.150 mu", "", 0.15),
+    ],
+)
+def test_ionic_strength_unit_written_in_the_value(val, unit, molar):
     cond = _conditions(("ionic strength", val, unit))
     assert cond.get_ionic_strength() == pytest.approx(molar)
 

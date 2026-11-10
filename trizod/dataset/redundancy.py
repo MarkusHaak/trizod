@@ -80,6 +80,18 @@ from trizod.io.fasta import count_fasta, fasta_ids, read_fasta
 
 TIERS = ["strict", "moderate", "tolerant", "unfiltered"]
 
+#: Per-tier stage-2 search logs of the old layout (one search per tier). Stage 2
+#: now searches the unfiltered superset once, so these are only ever left over
+#: from an earlier run and would read as the record of the current one.
+STALE_SEARCH_LOGS = tuple(f"{t}_easy_search.log" for t in TIERS if t != "unfiltered")
+
+
+def remove_stale_outputs(out: Path) -> None:
+    """Delete the outputs of an earlier run that this run no longer writes."""
+    for name in STALE_SEARCH_LOGS:
+        (out / name).unlink(missing_ok=True)
+
+
 # Header prefix used to tag test sequences when they are co-clustered with the
 # training superset in stage-1, so they never collide with a training header.
 TEST_PREFIX = "TESTSET__"
@@ -264,6 +276,7 @@ def main(argv=None):
     # The rule record is written only once the run has finished, so a failed
     # or interrupted run never leaves a record that vouches for stale outputs.
     (out / LEAKAGE_RULE_FILE).unlink(missing_ok=True)
+    remove_stale_outputs(out)
     # mmseqs refuses to overwrite existing DB outputs, so start from a clean
     # scratch dir on every run (makes the script idempotent / re-runnable).
     if tmp.exists():

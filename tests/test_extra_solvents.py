@@ -424,6 +424,8 @@ def test_details_are_matched(details, token):
         "0.1 % dioxane as internal reference",
         "10% D2O, 0.1 mM DSS, 20 mM sodium phosphate",
         "0.01 % w/v DSS, 90% H2O/10% D2O",
+        # the 10 % belongs to D2O; the dioxane is the shift reference
+        "90% H2O/10% D2O/dioxane",
         # bmr30088: MPD crystallisation, the alcohol is isopropyl alcohol
         "45 % methyl-2,4-pentane diol, 12.5 mM sodium phosphate",
     ],
