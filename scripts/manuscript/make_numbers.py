@@ -6,7 +6,10 @@ Every dataset number the TriZOD manuscript quotes is computed here from the froz
 types a number into prose and a post-rebuild refresh is a single re-run (writing
 plan, item (j)).
 
-Inputs (all read-only; resolved under ``--root``, the checkout that holds ``data/``):
+Inputs (all read-only; resolved under ``--root``, the checkout that holds ``data/``). The
+build-specific ones below are the 2026-10 defaults; ``TRIZOD_BUILD_DIR``,
+``TRIZOD_RELEASE_DIR``, ``TRIZOD_BUNDLE``, ``TRIZOD_REBUILD_LOG``, ``TRIZOD_PKL_DIR`` and
+``TRIZOD_SIDECHAIN_DOC`` select a later build (see :class:`Paths`):
 
 * ``data/interim/build/parquet-2026-10-simplify/{trizod_dataset,trizod_shifts}.parquet``
 * ``data/interim/build/release_bundle/trizod-dataset-2026-10/`` (MANIFEST, per-tier
@@ -73,6 +76,7 @@ from trizod.offsets import (  # noqa: E402
 )
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
+REL = "2026-10"  # release label of the build, reset from its MANIFEST in main()
 TCAP = {t: t.capitalize() for t in TIERS}
 RANK = {t: i for i, t in enumerate(TIERS)}
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
@@ -274,23 +278,71 @@ def find_root(start: Path) -> Path:
     raise SystemExit("could not find a checkout with data/interim/build; pass --root")
 
 
+def env_path(name: str, default: Path) -> Path:
+    """``$name`` as a path when set and non-empty, else ``default``."""
+    v = os.environ.get(name)
+    return Path(v).expanduser().resolve() if v else default
+
+
 class Paths:
+    """Input locations. The defaults are the frozen 2026-10 build under ``--root``; a later
+    build is selected with the same environment variables as ``style_paper.py``
+    (``scripts/figures/paper/README.md``, "Selecting the build"):
+
+    * ``TRIZOD_BUILD_DIR``: build directory (``final_dataset/``, ``testset/``, ``mmseqs/``);
+    * ``TRIZOD_RELEASE_DIR``: ``trizod_dataset.parquet`` + ``trizod_shifts.parquet`` (and the
+      deploy FASTA and ``sidechain-coverage.md`` of the post-build steps);
+    * ``TRIZOD_BUNDLE``: the release bundle (MANIFEST, ``scores/``, ``train/``, ``test/``);
+    * ``TRIZOD_REBUILD_LOG``: the build log (``print_filter_losses()`` blocks, step summaries);
+    * ``TRIZOD_PKL_DIR``: the build's BmrbEntry pickle cache (default ``<root>/tmp/bmrb_entries``);
+    * ``TRIZOD_DRAW_DIR``: the 2026-08-11 test-set draw (``_tmp/``, ``TriZOD_test_set_clu.tsv``),
+      which a rebuild does not redo (default: the build's ``testset/`` when it holds ``_tmp/``,
+      else ``<root>/data/interim/build/testset``);
+    * ``TRIZOD_SIDECHAIN_DOC``: the side-chain coverage report (default: the release
+      directory's ``sidechain-coverage.md`` when ``TRIZOD_RELEASE_DIR`` holds one, else
+      ``docs/dataset/sidechain-coverage.md``).
+
+    Release, bundle and log default to fixed 2026-10 names inside the build directory, so
+    setting only ``TRIZOD_BUILD_DIR`` fails loudly instead of mixing two builds."""
+
     def __init__(self, root: Path, work: Path):
         self.root = root
         L = paths.layout(root)
-        self.build = L.interim_build
-        self.pq = self.build / "parquet-2026-10-simplify" / "trizod_dataset.parquet"
-        self.shifts = self.build / "parquet-2026-10-simplify" / "trizod_shifts.parquet"
-        self.bundle = self.build / "release_bundle" / "trizod-dataset-2026-10"
+        self.build = env_path("TRIZOD_BUILD_DIR", L.interim_build)
+        self.release = env_path(
+            "TRIZOD_RELEASE_DIR", self.build / "parquet-2026-10-simplify"
+        )
+        self.pq = self.release / "trizod_dataset.parquet"
+        self.shifts = self.release / "trizod_shifts.parquet"
+        self.bundle = env_path(
+            "TRIZOD_BUNDLE", self.build / "release_bundle" / "trizod-dataset-2026-10"
+        )
         self.manifest = self.bundle / "MANIFEST.json"
         self.fds = self.build / "final_dataset" / "final_dataset_summary.json"
         self.testset = self.build / "testset"
-        self.log = self.build / "rebuild_2026-10.log"
+        # the 2026-08-11 test-set draw (testset/_tmp, testset/TriZOD_test_set_clu.tsv); a later
+        # build re-resolves the pinned set without redrawing it, so the draw intermediates stay
+        # in the build that drew it ($TRIZOD_DRAW_DIR, default: this build's testset/ when it
+        # holds them, else <root>/data/interim/build/testset)
+        self.draw = env_path(
+            "TRIZOD_DRAW_DIR",
+            self.testset
+            if (self.testset / "_tmp").is_dir()
+            else L.interim_build / "testset",
+        )
+        self.log = env_path("TRIZOD_REBUILD_LOG", self.build / "rebuild_2026-10.log")
+        self.pkl = env_path("TRIZOD_PKL_DIR", L.pkl_dir)
         self.chezod_ver = L.interim_chezod_verification
         self.panav = L.ext_panav
         self.cz1325 = L.ext_chezod_1325
         self.raw = L.raw_bmrb
-        self.sidechain_doc = REPO / "docs" / "dataset" / "sidechain-coverage.md"
+        sc_release = self.release / "sidechain-coverage.md"
+        self.sidechain_doc = env_path(
+            "TRIZOD_SIDECHAIN_DOC",
+            sc_release
+            if os.environ.get("TRIZOD_RELEASE_DIR") and sc_release.is_file()
+            else REPO / "docs" / "dataset" / "sidechain-coverage.md",
+        )
         self.filtering_doc = REPO / "docs" / "filtering.md"
         self.work = work
 
@@ -656,11 +708,31 @@ def sec_snapshot(C):
         if PATHS.raw.is_dir()
         else None
     )
-    assert n_dirs in (None, n_files)
+    # builds after 2026-10 skip the entries on withdrawn_entries.tsv before loading
+    m_w = re.search(r"skipping (\d+) withdrawn BMRB entries", C.log)
+    n_withdrawn = int(m_w.group(1)) if m_w else 0
+    assert n_dirs in (None, n_files + n_withdrawn), (n_dirs, n_files, n_withdrawn)
+    if m_w:
+        R.add(
+            "nBMRBWithdrawnSkipped",
+            I(n_withdrawn),
+            "withdrawn BMRB entries in the snapshot that the build skips before loading",
+            f"{src_log} 'skipping N withdrawn BMRB entries'",
+            STABLE,
+            "r1",
+        )
+        R.add(
+            "nBMRBDirs",
+            I(n_dirs) if n_dirs is not None else I(n_files + n_withdrawn),
+            "BMRB entry directories in the raw snapshot (= loaded files + skipped withdrawn entries)",
+            "count of data/raw/bmrb_entries",
+            STABLE,
+            "r1",
+        )
     R.add(
         "nBMRBFiles",
         I(n_files),
-        "BMRB NMR-STAR files in the 2026-10 snapshot",
+        f"BMRB NMR-STAR files the {REL} build loads from the snapshot",
         f"{src_log} ('Failed loading ... of N'); count of data/raw/bmrb_entries",
         STABLE,
         "r1",
@@ -1135,9 +1207,22 @@ def sec_tiers(C):
             "r5",
             plans["excl"][j],
         )
-        assert excl == f["dropped_short"] + f["dropped_bound"] + (
+        # builds after 2026-10 also drop withdrawn entries and placeholder sequences
+        # (> max_unknown_fraction unknown residues) before deduplication
+        n_wd, n_ph = f.get("dropped_withdrawn", 0), f.get("dropped_placeholder", 0)
+        assert excl == f["dropped_short"] + f["dropped_bound"] + n_wd + n_ph + (
             f["kept_rows_after_filters"] - f["unique_sequences_kept"]
-        ) + tot - len(tst)
+        ) + tot - len(tst), (t_, excl, f, tot, len(tst))
+        if "dropped_placeholder" in f:
+            R.add(
+                f"nDroppedPlaceholder{T}",
+                I(n_ph),
+                f"{t_}: placeholder sequences (> {C.fds.get('max_unknown_fraction', 0.2):g} "
+                "unknown residues) dropped before deduplication",
+                rel(PATHS.fds),
+                st_sc,
+                "r5",
+            )
         R.add(
             f"nOverrides{T}",
             I(ovr[t_][1]),
@@ -1256,10 +1341,35 @@ def sec_tiers(C):
         "r5",
         "1,261",
     )
+    # 2026-10: "leakage gate: OK -- 0 shared IDs & 0 exact-sequence matches vs 575 test ...";
+    # later builds: "leakage gate: OK (rule 'either': ...) -- 0 shared IDs, 0 exact-sequence
+    # matches, 0 exact-substring containments >= 20 aa (either direction) & 0 training records
+    # covering ... vs 568 test sequences"
     m = re.search(
-        r"leakage gate: OK .*?(\d+) shared IDs & (\d+) exact-sequence matches vs (\d+) test",
+        r"leakage gate: OK .*?(\d+) shared IDs(?:,| &) (\d+) exact-sequence matches.*? vs (\d+) test",
         C.log,
     )
+    m_x = re.search(
+        r"leakage gate: OK .*?(\d+) exact-substring containments >= (\d+) aa.*?& (\d+) training records covering",
+        C.log,
+    )
+    if m_x:
+        R.add(
+            "nGateSubstring",
+            I(m_x.group(1)),
+            f"packaging gate: exact-substring containments >= {m_x.group(2)} aa between training and test (either direction)",
+            f"{src_log} Step 5",
+            PENDING,
+            "r5",
+        )
+        R.add(
+            "nGateCoverageRule",
+            I(m_x.group(3)),
+            "packaging gate: training records within the leakage rule of a test chain (>= 30 % identity over >= 80 % of either chain)",
+            f"{src_log} Step 5",
+            PENDING,
+            "r5",
+        )
     R.add(
         "nGateSharedIDs",
         I(m.group(1)),
@@ -1282,6 +1392,9 @@ def sec_tiers(C):
     ex = df[df.split == "excluded"]
     tests_seq = set(df.loc[df.split.str.startswith("test"), "sequence"])
     pool_seq = set(df.loc[df.pool_tier.notna(), "sequence"])
+    # builds after 2026-10 drop placeholder sequences (mostly unknown residues) after the
+    # length and bound cuts; they get their own reason instead of falling through to "homolog"
+    placeholder = set(C.fds.get("placeholder_dropped_ids", []))
     reason = np.where(
         ex.is_bound.fillna(False),
         "bound",
@@ -1289,13 +1402,27 @@ def sec_tiers(C):
             ex.length < 20,
             "short",
             np.where(
-                ex.sequence.isin(tests_seq),
-                "testdup",
-                np.where(ex.sequence.isin(pool_seq), "pooldup", "homolog"),
+                ex.id.isin(placeholder),
+                "placeholder",
+                np.where(
+                    ex.sequence.isin(tests_seq),
+                    "testdup",
+                    np.where(ex.sequence.isin(pool_seq), "pooldup", "homolog"),
+                ),
             ),
         ),
     )
     rc = Counter(reason)
+    if placeholder:
+        R.add(
+            "nExcludedReasonPlaceholder",
+            I(rc["placeholder"]),
+            "excluded chains (unfiltered view) whose first exclusion reason is: placeholder sequence "
+            f"(> {C.fds.get('max_unknown_fraction', 0.2):g} unknown residues)",
+            "Parquet split, is_bound, length, id x final_dataset_summary.json placeholder_dropped_ids",
+            PENDING,
+            "r5",
+        )
     for k_, name, d, p_ in [("bound", "nExcludedReasonBound", "bound / multi-molecule (any length)", "4,488"), ("pooldup", "nExcludedReasonPoolDuplicate", "exact duplicate of a pool sequence", "1,495"),
                             ("short", "nExcludedReasonShort", "shorter than 20 aa (not bound)", "1,050"), ("homolog", "nExcludedReasonTestHomolog", "removed as a test-set homolog", "958"),
                             ("testdup", "nExcludedReasonTestDuplicate", "exact copy of a test sequence", "184")]:  # fmt: skip
@@ -1323,6 +1450,16 @@ def sec_filter_losses(C):
         ".*hexafluoroisopropanol.*": "CsHexafluoroisopropanol", ".*hexafluoro-2-propanol.*": "CsHexafluoroTwoPropanol",
         ".*HFIP.*": "CsHFIP", ".*DMSO.*": "CsDMSO", ".*dimethyl sulfoxide.*": "CsDimethylSulfoxide",
         ".*dimethylsulfoxide.*": "CsDimethylsulfoxide", "paramagnetic": "Paramagnetic",
+        # cosolvent tokens added after 2026-10 (audit I-07: alcohols, acetonitrile, chloroform,
+        # propanols, alkanes, dioxane)
+        ".*methanol.*": "CsMethanol", ".*ethanol.*": "CsEthanol", ".*CD3OH.*": "CsCDThreeOH",
+        ".*CD3OD.*": "CsCDThreeOD", ".*MeOH.*": "CsMeOH", ".*EtOH.*": "CsEtOH",
+        ".*acetonitrile.*": "CsAcetonitrile", ".*CD3CN.*": "CsCDThreeCN", ".*ACN.*": "CsACN",
+        ".*chloroform.*": "CsChloroform", ".*CDCl3.*": "CsCDClThree", ".*CHCl3.*": "CsCHClThree",
+        ".*isopropanol.*": "CsIsopropanol", ".*2-propanol.*": "CsTwoPropanol",
+        ".*isopropyl alcohol.*": "CsIsopropylAlcohol", ".*n-propanol.*": "CsNPropanol",
+        ".*1-propanol.*": "CsOnePropanol", ".*hexane.*": "CsHexane", ".*pentane.*": "CsPentane",
+        ".*dioxane.*": "CsDioxane",
         "error in computation": "ErrorInComputation", "rejected due to any offset": "OffsetEntryLevel",
     }  # fmt: skip
     src = rel(PATHS.log) + " print_filter_losses()"
@@ -1654,7 +1791,7 @@ def sec_test_sets(C):
         "0",
     )
     # draw (2026-08-11, seed 42) from testset/_tmp
-    tmp = PATHS.testset / "_tmp"
+    tmp = PATHS.draw / "_tmp"
     try:
         allseq = read_fasta(tmp / "strict_plus_chezod.fasta")
         hdr = list(allseq)
@@ -1669,7 +1806,7 @@ def sec_test_sets(C):
         n_free_mem = int(clu[clu.rep.isin(g.index[~g])].shape[0])
         n_sampled_mem = len(read_fasta(tmp / "sampled_members.fasta"))
         tclu = pd.read_csv(
-            PATHS.testset / "TriZOD_test_set_clu.tsv",
+            PATHS.draw / "TriZOD_test_set_clu.tsv",
             sep="\t",
             header=None,
             names=["rep", "mem"],
@@ -5906,13 +6043,13 @@ def sec_chezod(C):
     }
     srcb = (
         rel(s17.BOTH)
-        + " (2026-10 released labels, rereference-mode both) vs CheZOD1325; per-entry alignment "
+        + f" ({REL} released labels, rereference-mode both) vs CheZOD1325; per-entry alignment "
         "and categories of trizod.figures.chezod via scripts/figures/paper/supp_s17_chezod_reproduction.py"
     )
     R.add(
         "nCheZODReproducedBoth",
         I(bo["n"]),
-        "CheZOD1325 entries scored and aligned in the released mode (2026-10 labels)",
+        f"CheZOD1325 entries scored and aligned in the released mode ({REL} labels)",
         srcb,
         STABLE,
         "r3",
@@ -5993,7 +6130,7 @@ def sec_chezod(C):
     R.add(
         "maeCheZODBoth",
         F(bo["mae_median"], 3),
-        "median per-entry mean absolute error in the released mode (both: LACS + POTENCI/AIC; 2026-10 labels)",
+        f"median per-entry mean absolute error in the released mode (both: LACS + POTENCI/AIC; {REL} labels)",
         srcb,
         STABLE,
         "r3",
@@ -6058,7 +6195,7 @@ def sec_chezod(C):
         R.add(
             f"nCheZODOutcome{name}Both",
             I(bo["categories"][k_]),
-            f"reproduction outcome '{k_}' (released mode, 2026-10 labels)",
+            f"reproduction outcome '{k_}' (released mode, {REL} labels)",
             srcb,
             STABLE,
             "r3",
@@ -7806,7 +7943,7 @@ def write_index(path: Path, C) -> None:
 
 # ----------------------------------------------------------------------------------
 def main(argv=None):
-    global PATHS
+    global PATHS, REL
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
         "--root",
@@ -7823,8 +7960,14 @@ def main(argv=None):
     ap.add_argument(
         "--work-dir",
         type=Path,
-        default=paths.TMP / "manuscript_numbers",
-        help="cache for raw scan and mmseqs runs (default: %(default)s)",
+        default=(
+            Path(os.environ["TRIZOD_CACHE_DIR"]).expanduser()
+            if os.environ.get("TRIZOD_CACHE_DIR")
+            else paths.TMP
+        )
+        / "manuscript_numbers",
+        help="cache for raw scan and mmseqs runs (default: %(default)s; "
+        "$TRIZOD_CACHE_DIR/manuscript_numbers when that is set)",
     )
     ap.add_argument(
         "--refresh", action="store_true", help="recompute cached intermediates"
@@ -7861,6 +8004,7 @@ def main(argv=None):
         return
     C = load_context(a.refresh)
     C.refresh = a.refresh
+    REL = C.manifest.get("version", REL)
     steps = [sec_snapshot, sec_tiers, sec_filter_losses, sec_test_sets, sec_residues, sec_tolerant_labels, sec_annotations, sec_offsets,
              sec_panav, sec_shifts, sec_sidechain_doc, sec_chezod, sec_clusters_and_leakage, sec_ubiquitin, sec_replicates,
              sec_fig3_replicates, sec_failures, sec_discussion_revision, sec_cosolvents_pressure, sec_conditions_chain, sec_results_b_revision, sec_front_revision, sec_fig1_revision, sec_methods_b_revision, sec_organisms, sec_review_supp_text, sec_supp_figs_revision, sec_params,
@@ -7911,7 +8055,7 @@ def candidate_record_counts(refresh: bool):
     them: one record per BmrbEntry.get_peptide_shifts() tuple over the build's pickle
     cache (``<root>/tmp/bmrb_entries``, the ``--cache-dir tmp`` of build_dataset.sh).
     Runs in a child process that never imports pyarrow. Returns None without the cache."""
-    cache = paths.layout(PATHS.root).pkl_dir
+    cache = PATHS.pkl
     if not cache.is_dir():
         return None
 
@@ -8148,7 +8292,7 @@ def sec_review_supp_text(C):
     cz = s17.load_chezod(s17.sp.CHEZOD_1325)
     for mode, path, T, st_, srcx in (
         ("potenci_only", s17.PO, "PotenciOnly", PREVIEW, rel(s17.PO) + " (pre-2026-10 code; re-run on 2026-10)"),
-        ("both", s17.BOTH, "Both", STABLE, rel(s17.BOTH) + " (2026-10 released labels)"),
+        ("both", s17.BOTH, "Both", STABLE, rel(s17.BOTH) + f" ({REL} released labels)"),
     ):  # fmt: skip
         d_ = s17.per_entry(cz, s17.load_trizod(path), mode)
         ok = d_.mae <= 0.5
@@ -8310,8 +8454,8 @@ def sec_rev_results_a(C):
     for mode, path, status, tag, src_ in (
         ("PotenciOnly", s17.PO, PREVIEW, "re-referencing disabled (potenci-only), pre-2026-10 code",
          rel(s17.PO) + " (pre-2026-10 code; re-run on 2026-10) vs CheZOD1325, via supp_s17_chezod_reproduction.per_entry"),
-        ("Both", s17.BOTH, STABLE, "released mode (both: LACS + POTENCI/AIC), 2026-10 labels",
-         rel(s17.BOTH) + " (2026-10 released labels) vs CheZOD1325, via supp_s17_chezod_reproduction.per_entry"),
+        ("Both", s17.BOTH, STABLE, f"released mode (both: LACS + POTENCI/AIC), {REL} labels",
+         rel(s17.BOTH) + f" ({REL} released labels) vs CheZOD1325, via supp_s17_chezod_reproduction.per_entry"),
     ):  # fmt: skip
         d = s17.per_entry(cz, s17.load_trizod(path), mode)
         e = d[d.seq_match.astype(bool)]
@@ -8574,12 +8718,15 @@ RB_PREFIX_PINNED = {
     "nSubstringTestChains": ("22", "test chains in such exact containment, FROZEN 2026-10 split"),
     "nSubstringTestChainsTriZOD": ("15", "of them TriZOD test chains, FROZEN 2026-10 split"),
     "nSubstringTestChainsCheZOD": ("7", "of them CheZOD117 chains, FROZEN 2026-10 split"),
+    "fidentMissPair": ("79.8\\%", "identity of the bidirectional-rule miss pair 27177_1_1_1 (train, 124 aa) / 27176_1_1_1 (test, 99 aa), FROZEN 2026-10 split"),
+    "lenRatioMissPair": ("0.798", "length ratio (test / train) of that pair, FROZEN 2026-10 split"),
 }  # fmt: skip
 
 
 def _rb_prefix_name(live: str) -> str:
     for a, b in (("nLeakTestCovCommon", "nLeakTestCovPreFix"), ("nLeakBidirCommon", "nLeakBidirPreFix"),
-                 ("idContain", "idContainPreFix"), ("lenContain", "lenContainPreFix"), ("nSubstring", "nSubstringPreFix")):  # fmt: skip
+                 ("idContain", "idContainPreFix"), ("lenContain", "lenContainPreFix"), ("nSubstring", "nSubstringPreFix"),
+                 ("fidentMissPair", "fidentMissPairPreFix"), ("lenRatioMissPair", "lenRatioMissPairPreFix")):  # fmt: skip
         if live.startswith(a):
             return b + live[len(a) :]
     raise KeyError(live)
@@ -8721,7 +8868,7 @@ def sec_results_b_revision(C):
     R.add("pctDisorderedInMostlyDisorderedTestTriZOD", P(100 * per[mostly, 1].sum() / d_, 0), "share of the TriZOD test set's disordered residues (G > 0.65) that lie in its chains more than half disordered (\\nChainsMostlyDisorderedTestTriZOD)", srcd, STABLE, "r5")  # fmt: skip
     R.add("nChainsAnyDisorderedTestTriZOD", I((per[:, 1] > 0).sum()), "TriZOD test chains with at least one residue at G > 0.65", srcd, STABLE, "r5")  # fmt: skip
     clu = pd.read_csv(
-        PATHS.testset / "_tmp" / "c30_cluster.tsv",
+        PATHS.draw / "_tmp" / "c30_cluster.tsv",
         sep="\t",
         header=None,
         names=["rep", "mem"],
@@ -8730,8 +8877,15 @@ def sec_results_b_revision(C):
     clu["clu_cz"] = clu.rep.map(clu.groupby("rep").cz.any())
     strict_mem = clu[~clu.cz]
     did = df.set_index("id")
-    assert strict_mem.mem.isin(did.index).all()
     srcc = "testset/_tmp/c30_cluster.tsv (test-set draw, 30 % id / 80 % cov) x Parquet labels (unfiltered = strict labels for these chains)"
+    gone = ~strict_mem.mem.isin(did.index)
+    if C.manifest.get("pipeline_version") == RB_FROZEN_BUILD:
+        assert not gone.any()
+    elif gone.any():
+        # draw members that a later build no longer releases (withdrawn, placeholder or
+        # re-filtered chains) carry no labels; they are left out of the shares below
+        R.add("nDrawStrictMembersNotReleased", I(gone.sum()), "strict sequences of the 2026-08-11 test-set draw that this build no longer releases (left out of the draw-cluster disorder shares)", srcc, STABLE, "r5")  # fmt: skip
+        strict_mem = strict_mem[~gone]
     for flag, tag, dd in (
         (True, "CheZOD", "with a CheZOD member"),
         (False, "CheZODFree", "without a CheZOD member"),
@@ -8988,14 +9142,35 @@ def sec_methods_a_revision(C):
         if len(si) >= gate and len(si) < len(sb) and si in sb
     ]
     src_r = f"{srcq} sequence, split (training representatives of >= {gate} aa that are exact substrings of a longer test chain)"
-    R.add("nRevSubstringPairs", I(len(rev)), "test chain / shorter training representative pairs with exact containment (frozen split)", src_r, PENDING, "r5")  # fmt: skip
-    R.add("nRevSubstringTestChains", I(len({b for b, _ in rev})), "test chains that contain a shorter training representative verbatim (frozen split)", src_r, PENDING, "r5")  # fmt: skip
+    on_frozen = C.manifest.get("pipeline_version") == RB_FROZEN_BUILD
+    split_d = "frozen split" if on_frozen else f"{C.manifest.get('version')} split"
+    R.add("nRevSubstringPairs", I(len(rev)), f"test chain / shorter training representative pairs with exact containment ({split_d})", src_r, PENDING, "r5")  # fmt: skip
+    R.add("nRevSubstringTestChains", I(len({b for b, _ in rev})), f"test chains that contain a shorter training representative verbatim ({split_d})", src_r, PENDING, "r5")  # fmt: skip
+    # the frozen split's values, pinned so that the account of the reverse containment survives
+    # the rebuild (as RB_PREFIX_PINNED for the forward containment)
+    pinned_rev = {"nRevSubstringPairs": "16", "nRevSubstringTestChains": "12"}
+    live_rev = {
+        "nRevSubstringPairs": I(len(rev)),
+        "nRevSubstringTestChains": I(len({b for b, _ in rev})),
+    }
+    for live, val in pinned_rev.items():
+        if on_frozen:
+            assert live_rev[live] == val, (live, live_rev[live], val)
+        R.add(live.replace("nRevSubstring", "nRevSubstringPreFix"), val, f"{live} on the FROZEN 2026-10 split (before fix (a))", f"pinned in make_numbers.py (checked against \\{live} while {RB_FROZEN_BUILD} is the current build)", STABLE, "r5")  # fmt: skip
     ex = "51677_1_1_1"
     reps_ex = sorted({i for b, i in rev if b == ex}, key=lambda x: int(x.split("_")[0]))
-    assert len(reps_ex) == 3, reps_ex
-    R.add("idRevContainTest", S(ex), "example test chain that contains shorter training representatives verbatim", src_r, PENDING, "r5")  # fmt: skip
-    R.add("lenRevContainTest", I(len(d.sequence[ex])), "its length (aa)", src_r, PENDING, "r5")  # fmt: skip
-    R.add("idRevContainReps", S(", ".join(reps_ex[:-1]) + " and " + reps_ex[-1]), "the training representatives it contains", src_r, PENDING, "r5")  # fmt: skip
+    if on_frozen:
+        assert len(reps_ex) == 3, reps_ex
+        R.add("idRevContainTest", S(ex), "example test chain that contains shorter training representatives verbatim", src_r, PENDING, "r5")  # fmt: skip
+        R.add("lenRevContainTest", I(len(d.sequence[ex])), "its length (aa)", src_r, PENDING, "r5")  # fmt: skip
+        R.add("idRevContainReps", S(", ".join(reps_ex[:-1]) + " and " + reps_ex[-1]), "the training representatives it contains", src_r, PENDING, "r5")  # fmt: skip
+    else:
+        # the example is a property of the frozen split; a fixed build removes such
+        # representatives, so its values are pinned
+        src_p = f"pinned in make_numbers.py (FROZEN 2026-10 split; this build has {len(reps_ex)} such representatives for {ex})"
+        R.add("idRevContainTest", S(ex), "example test chain that contained shorter training representatives verbatim (FROZEN 2026-10 split)", src_p, STABLE, "r5")  # fmt: skip
+        R.add("lenRevContainTest", "371", "its length (aa)", src_p, STABLE, "r5")  # fmt: skip
+        R.add("idRevContainReps", "51674\\_1\\_1\\_1, 51675\\_1\\_1\\_1 and 51676\\_1\\_1\\_1", "the training representatives it contained (FROZEN 2026-10 split)", src_p, STABLE, "r5")  # fmt: skip
     p_ = PATHS.work / "search_leak_common_unfiltered.json"
     if p_.exists():
         rows = json.loads(p_.read_text())

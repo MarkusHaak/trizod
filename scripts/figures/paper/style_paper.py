@@ -28,10 +28,13 @@ figures share one look and one set of inputs:
   its sub-folders; an optional PNG preview goes to a scratch directory for visual
   checks only.
 
-Data are read from the frozen 2026-10 build through :mod:`trizod.paths`. The data
-root is ``$TRIZOD_DATA_ROOT`` when set, else the first of the code checkout and its
+Data are read through :mod:`trizod.paths`, by default from the frozen 2026-10 build. The
+data root is ``$TRIZOD_DATA_ROOT`` when set, else the first of the code checkout and its
 parents that holds ``data/interim/build`` (a git worktree shares the main
-checkout's ``data/``), else the :mod:`trizod.paths` default.
+checkout's ``data/``), else the :mod:`trizod.paths` default. A later build is selected
+with ``$TRIZOD_BUILD_DIR``, ``$TRIZOD_RELEASE_DIR``, ``$TRIZOD_BUNDLE`` and
+``$TRIZOD_REBUILD_LOG``, and the caches are moved with ``$TRIZOD_CACHE_DIR``
+(``README.md``, "Selecting the build").
 
 Run generators from the code checkout with
 ``uv run --extra figures --with pyarrow python scripts/figures/paper/<script>.py --out-dir <draft>/Figures/paper``
@@ -62,7 +65,13 @@ from trizod import paths  # noqa: E402
 # paths
 # ----------------------------------------------------------------------------------
 REPO = paths.ROOT  # the code checkout: scripts/, docs/, trizod/
-TMP = paths.TMP  # git-ignored caches of the generators (raw scan, mmseqs, PANAV loops)
+# git-ignored caches of the generators (raw scan, mmseqs, PANAV loops); $TRIZOD_CACHE_DIR
+# moves them, so the caches of two builds never mix
+TMP = (
+    Path(os.environ["TRIZOD_CACHE_DIR"]).expanduser()
+    if os.environ.get("TRIZOD_CACHE_DIR")
+    else paths.TMP
+)
 
 
 def _find_root(start: Path) -> Path:
@@ -73,15 +82,44 @@ def _find_root(start: Path) -> Path:
     return start
 
 
+def _env_path(name: str, default: Path) -> Path:
+    """``$name`` as a path when set and non-empty, else ``default``."""
+    v = os.environ.get(name)
+    return Path(v).expanduser() if v else default
+
+
 ROOT = Path(os.environ.get("TRIZOD_DATA_ROOT") or _find_root(REPO))
 _L = paths.layout(ROOT)
 DATA = _L.data
-BUILD = _L.interim_build
-# the frozen 2026-10 build that the draft describes
-PQ_DIR = BUILD / "parquet-2026-10-simplify"
+# The build the figures describe. The defaults are the frozen 2026-10 build; a later build
+# is selected with environment variables (README.md, "Selecting the build"), all optional:
+#   TRIZOD_BUILD_DIR    build directory (final_dataset/, testset/, mmseqs/)
+#   TRIZOD_RELEASE_DIR  trizod_dataset.parquet + trizod_shifts.parquet
+#   TRIZOD_BUNDLE       release bundle (MANIFEST.json, scores/, train/, test/)
+#   TRIZOD_REBUILD_LOG  the build log with the four print_filter_losses() reports
+# The last three default to fixed names inside the BUILD directory, so pointing only
+# TRIZOD_BUILD_DIR at another build fails loudly instead of mixing two builds.
+BUILD = _env_path("TRIZOD_BUILD_DIR", _L.interim_build)
+PQ_DIR = _env_path("TRIZOD_RELEASE_DIR", BUILD / "parquet-2026-10-simplify")
 PQ_MAIN = PQ_DIR / "trizod_dataset.parquet"
 PQ_SHIFTS = PQ_DIR / "trizod_shifts.parquet"
-BUNDLE = BUILD / "release_bundle" / "trizod-dataset-2026-10"
+BUNDLE = _env_path("TRIZOD_BUNDLE", BUILD / "release_bundle" / "trizod-dataset-2026-10")
+REBUILD_LOG = _env_path("TRIZOD_REBUILD_LOG", BUILD / "rebuild_2026-10.log")
+# The frozen build the draft was written on; its split predates rebuild fix (a).
+FROZEN_PIPELINE = "trizod-5b8147a"
+
+
+def _manifest() -> dict:
+    try:
+        return json.loads((BUNDLE / "MANIFEST.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+_MANIFEST = _manifest()
+RELEASE = _MANIFEST.get("version", "2026-10")  # release label, e.g. "2026-11"
+PIPELINE = _MANIFEST.get("pipeline_version", FROZEN_PIPELINE)
+IS_FROZEN = PIPELINE == FROZEN_PIPELINE  # True only for the pre-fix 2026-10 split
 CHEZOD_VER = _L.interim_chezod_verification
 CHEZOD = _L.ext_chezod
 CHEZOD_1325 = _L.ext_chezod_1325

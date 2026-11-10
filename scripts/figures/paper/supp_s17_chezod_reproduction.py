@@ -142,7 +142,7 @@ def main():
     po = load_trizod(PO)
     both = load_trizod(BOTH)
     d_po = per_entry(chezod, po, "potenci-only")
-    d_bo = per_entry(chezod, both, "both (2026-10 release)")
+    d_bo = per_entry(chezod, both, f"both ({sp.RELEASE} release)")
     summ = {}
     for name, d in (("potenci_only", d_po), ("both_2026_10", d_bo)):
         summ[name] = {

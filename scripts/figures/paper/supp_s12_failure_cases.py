@@ -23,7 +23,9 @@ Panels
      (median and interquartile band of non-bound, solution, ``native`` chains of the
      same 76-residue sequence from other entries). Below: the tiers at which 18611 is
      scored in the frozen build, and where the planned fixes (b) and (e) would leave it
-     (expected from the filter logic, not recomputed).
+     (expected from the filter logic, not recomputed). On a later build
+     (``style_paper.IS_FROZEN`` false) the second row is that build's own scored tiers
+     and the "expected" rows are dropped.
 
 Inputs (read-only): release Parquet + shifts Parquet, bundle per-tier scores.json IDs.
 
@@ -300,8 +302,16 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
     # tier-reach strip
     axs = fig.add_axes([0.55, 0.012, 0.43, 0.085])
     scored_now = [t for t in sp.TIERS if UBQ_CHAIN in tier_ids[t]]
-    assert scored_now == TIER_REACH[0][1], scored_now
-    for i, (name, reach) in enumerate(TIER_REACH):
+    if sp.IS_FROZEN:
+        assert scored_now == TIER_REACH[0][1], scored_now
+        reach_rows, expected = TIER_REACH, True
+    else:
+        # a later build has the fixes applied: the frozen row (pinned) and the build's own
+        reach_rows, expected = (
+            [TIER_REACH[0], (f"{sp.RELEASE} build", scored_now)],
+            False,
+        )
+    for i, (name, reach) in enumerate(reach_rows):
         yy = len(TIER_REACH) - 1 - i
         for j, t in enumerate(sp.TIERS):
             on = t in reach
@@ -311,7 +321,7 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
         axs.text(
             3.75,
             yy + 0.5,
-            name + (" (expected)" if i else ""),
+            name + (" (expected)" if i and expected else ""),
             va="center",
             ha="left",
             fontsize=5,

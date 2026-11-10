@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Fig. 3c -- the held-out sets: split integrity (c1) and disorder content (c2).
 
-(c1) Split integrity of the FROZEN 2026-10 split, i.e. the state BEFORE rebuild fix (a).
-For each of the 575 held-out chains (460 TriZOD test + 115 CheZOD117), a permissive
+(c1) Split integrity of the build's split. On the FROZEN 2026-10 split (the default build)
+this is the state BEFORE rebuild fix (a); on a later build (``style_paper.IS_FROZEN`` false)
+it is that build's released split, and the counts table is labelled with its release.
+For each held-out chain (TriZOD test + CheZOD117; 460 + 115 = 575 in 2026-10), a permissive
 ``mmseqs easy-search`` against the training representatives of each tier
 (``train/<tier>/train_<tier>_best.fasta``) returns every alignment with identity >= 20 %
 and e < 1e-3, with no coverage filter. The search uses the build's own ``COMMON`` block
@@ -349,7 +351,8 @@ def draw(P: pd.DataFrame, counts: dict, strip: list, n_total: int):
              color=sp.CAT["neutral"], va="top", linespacing=1.05)  # fmt: skip
     # counts table (pre-fix)
     yt = 44.0
-    fig.text(xr / W, yt / H, "In shaded region\n(frozen split, pre-fix)", fontsize=FS_SMALL,
+    split_label = "frozen split, pre-fix" if sp.IS_FROZEN else f"{sp.RELEASE} split"
+    fig.text(xr / W, yt / H, f"In shaded region\n({split_label})", fontsize=FS_SMALL,
              color=REGION_TEXT, va="top", linespacing=1.05)  # fmt: skip
     cx = [xr + 13.5, xr + 25.0]
     yy = yt - 6.0
@@ -462,8 +465,13 @@ def main(argv=None) -> None:
     out = {
         "definition": {
             "search": f"mmseqs easy-search {' '.join(MMSEQS_ARGS)} (mmseqs {mmseqs_version()}); one search per tier",
-            "query": "575 held-out chains (TriZOD_test_set.fasta + CheZOD117_test_set.fasta)",
-            "target": "train/<tier>/train_<tier>_best.fasta (frozen 2026-10 split, BEFORE fix (a))",
+            "query": f"{len(set_of)} held-out chains (TriZOD_test_set.fasta + CheZOD117_test_set.fasta)",
+            "target": "train/<tier>/train_<tier>_best.fasta ("
+            + (
+                "frozen 2026-10 split, BEFORE fix (a))"
+                if sp.IS_FROZEN
+                else f"{sp.RELEASE} split, pipeline {sp.PIPELINE})"
+            ),
             "test_coverage_30_80": "identity >= 0.30 and test-chain coverage (qcov) >= 0.80 (the corrected criterion; shaded)",
             "bidirectional_30_80": "identity >= 0.30 and qcov >= 0.80 and tcov >= 0.80 (the pipeline's current stage-2 definition)",
             "id50_testcov50": "identity >= 0.50 and qcov >= 0.50",

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Supplementary Fig. S3 -- per-criterion filter losses per tier (2026-10 rebuild log).
+"""Supplementary Fig. S3 -- per-criterion filter losses per tier (the build log).
 
-Source: the four ``print_filter_losses()`` reports in
-``data/interim/build/rebuild_2026-10.log`` (one per tier, in tier order). Every count is
+Source: the four ``print_filter_losses()`` reports in the build log
+(``style_paper.REBUILD_LOG``: ``$TRIZOD_REBUILD_LOG``, default
+``data/interim/build/rebuild_2026-10.log``; one report per tier, in tier order). Every count is
 a number of candidate records (entry x shift table x assembly x entity; 17,843 in the
 snapshot). "filtered" counts the records a criterion removes; "unique" counts those that
 no other criterion of the same stage would have removed.
@@ -35,7 +36,7 @@ import numpy as np  # noqa: E402
 import style_paper as sp  # noqa: E402
 from matplotlib.colors import to_rgba  # noqa: E402
 
-LOG = sp.BUILD / "rebuild_2026-10.log"
+LOG = sp.REBUILD_LOG
 TIERS = sp.TIERS
 
 # ----------------------------------------------------------------------------------
@@ -304,9 +305,31 @@ def main():
         )
 
     # ---- figure ---------------------------------------------------------------------
+    # Rows follow the log: a criterion no tier reports is dropped (e.g. 'trifluoro ethanol',
+    # merged into a misspelling-tolerant pattern after 2026-10), and a keyword or cosolvent
+    # criterion that PRE_ROWS does not list (e.g. the alcohols, acetonitrile, chloroform,
+    # propanols, alkanes and dioxane added after 2026-10) is appended to its section in log order.
+    in_log = {k for t in TIERS for k in B[t]["pre"]}
+    listed = {k for _sec, items in PRE_ROWS for k, _lab in items}
+    log_sec = {"keyword": "Keyword in the sample description",
+               "perturbing cosolvent": "Perturbing cosolvent"}  # fmt: skip
+    extra = OrderedDict((s, []) for s in log_sec.values())
+    for t in TIERS:
+        for key, (_f, _u, _thr, sec) in B[t]["pre"].items():
+            s = log_sec.get(sec)
+            if s and key not in listed and key not in extra[s]:
+                extra[s].append(key)
+    for s, keys in extra.items():
+        if keys:
+            print(f"  {s}: rows added from the log: {', '.join(keys)}")
+    dropped = sorted(listed - in_log)
+    if dropped:
+        print(f"  rows dropped (no tier reports them): {', '.join(dropped)}")
     pre_rows, post_rows = [], []
     for sec, items in PRE_ROWS:
         pre_rows.append(("section", None, sec, False))
+        items = [(k, lab) for k, lab in items if k in in_log]
+        items += [(k, k) for k in extra.get(sec, [])]
         for key, lab in items:
             pre_rows.append(
                 (

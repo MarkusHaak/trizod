@@ -6,9 +6,10 @@ These scripts make the artwork and the numbers of the TriZOD paper:
   quoted number) and `numbers_index.md`.
 - The generators in this folder write the figure PDFs and their data tables.
 
-All of them **read the frozen 2026-10 build** and **never run the scoring pipeline**.
-The build is `data/interim/build/`: `parquet-2026-10-simplify/`,
-`release_bundle/trizod-dataset-2026-10/` and `rebuild_2026-10.log`.
+All of them **read one finished build** and **never run the scoring pipeline**. By default
+that is the frozen 2026-10 build in `data/interim/build/`: `parquet-2026-10-simplify/`,
+`release_bundle/trizod-dataset-2026-10/` and `rebuild_2026-10.log`. Environment variables
+select a later build (see [Selecting the build](#selecting-the-build)).
 
 There is one exception, in Supplementary Fig. S6d. It re-scores 150 sampled chains with the
 released `get_offset_corrected_shifts()` in a pyarrow-free subprocess. That happens only
@@ -54,10 +55,51 @@ three caches that the figures reuse: the raw scan, the PANAV loop map and the S6
   - `make_numbers.py`: pass `--root`.
 - **Previews.** Set `TRIZOD_FIG_PREVIEW_DIR` to also write PNG previews there.
 
+### Selecting the build
+
+Every variable is optional; unset, the frozen 2026-10 build is read. The generators
+(`style_paper.py`) and `make_numbers.py` read the same variables, so the artwork and the
+prose always describe one build.
+
+| Variable | What it points at | Default |
+|---|---|---|
+| `TRIZOD_DATA_ROOT` | checkout holding `data/raw`, `data/external` and `data/interim/chezod_verification` (`make_numbers.py`: `--root`) | first parent with `data/interim/build` |
+| `TRIZOD_BUILD_DIR` | build directory: `final_dataset/`, `testset/`, `mmseqs/` | `<root>/data/interim/build` |
+| `TRIZOD_RELEASE_DIR` | `trizod_dataset.parquet`, `trizod_shifts.parquet` (and the post-build `disorder_trizod.fasta`, `sidechain-coverage.md`) | `$TRIZOD_BUILD_DIR/parquet-2026-10-simplify` |
+| `TRIZOD_BUNDLE` | release bundle: `MANIFEST.json`, `scores/`, `train/`, `test/` | `$TRIZOD_BUILD_DIR/release_bundle/trizod-dataset-2026-10` |
+| `TRIZOD_REBUILD_LOG` | build log with the four `print_filter_losses()` reports | `$TRIZOD_BUILD_DIR/rebuild_2026-10.log` |
+| `TRIZOD_PKL_DIR` | the build's BmrbEntry pickle cache (`make_numbers.py` only) | `<root>/tmp/bmrb_entries` |
+| `TRIZOD_SIDECHAIN_DOC` | side-chain coverage report (`make_numbers.py` only) | `$TRIZOD_RELEASE_DIR/sidechain-coverage.md` when the release directory is set and holds one, else `docs/dataset/sidechain-coverage.md` |
+| `TRIZOD_DRAW_DIR` | the 2026-08-11 test-set draw (`_tmp/`, `TriZOD_test_set_clu.tsv`; `make_numbers.py` only). A rebuild re-resolves the pinned set without redrawing it, so the draw stays in the build that drew it | `$TRIZOD_BUILD_DIR/testset` when it holds `_tmp/`, else `<root>/data/interim/build/testset` |
+| `TRIZOD_CACHE_DIR` | where the caches below go (and `make_numbers.py --work-dir`) | `tmp/` of the code checkout |
+
+Release, bundle and log default to the 2026-10 names *inside* `TRIZOD_BUILD_DIR`, so
+setting only that one fails loudly instead of mixing two builds. Give each build its own
+`TRIZOD_CACHE_DIR`: most caches are not keyed by build, and a cache from another build
+silently feeds stale searches into the numbers. Only the raw-file caches
+(`paper_figures/raw_scan.json`, `paper_figs/panav_loop_to_st_id.json`,
+`manuscript_numbers/raw_scan.json`) and the content-hashed `fig1c_mmseqs/` can be copied
+over. The release label and pipeline version come from the bundle's `MANIFEST.json`
+(`style_paper.RELEASE`, `style_paper.PIPELINE`); Fig. 3c and Suppl. Fig. S12 label the
+split as "pre-fix" only on the frozen 2026-10 build (`style_paper.IS_FROZEN`).
+
+Example, the 2026-11 rebuild:
+
+```bash
+RB=/path/to/trizod/data/interim/rebuild-2026-11
+export TRIZOD_BUILD_DIR=$RB/root/data/interim/build
+export TRIZOD_RELEASE_DIR=$RB/release
+export TRIZOD_BUNDLE=$TRIZOD_BUILD_DIR/release_bundle/trizod-dataset-2026-11
+export TRIZOD_REBUILD_LOG=$RB/rebuild_2026-11.log
+export TRIZOD_PKL_DIR=$RB/root/tmp/bmrb_entries
+export TRIZOD_CACHE_DIR=$PWD/tmp/paper-2026-11
+# then the loop above, unchanged
+```
+
 ### Caches and tools
 
 - **Caches.** Derived intermediates are cached in the git-ignored `tmp/` of the code
-  checkout:
+  checkout (or `$TRIZOD_CACHE_DIR`):
   - `tmp/manuscript_numbers/`
   - `tmp/paper_figures/raw_scan.json`
   - `tmp/paper_figs/` (PANAV loop map, S6d recovery, S8 case search)
@@ -77,7 +119,7 @@ the release `trizod_dataset.parquet`, and "tiers" means the bundle's per-tier
 
 | Script | Makes | Main inputs | Data written |
 |---|---|---|---|
-| `scripts/manuscript/make_numbers.py` | `numbers.tex`, `numbers_index.md` (in `--out-dir`) | the whole build, CheZOD, PANAV, raw BMRB, `tmp/bmrb_entries`, `docs/dataset/sidechain-coverage.md`, `docs/filtering.md` | registry dump in `--work-dir` |
+| `scripts/manuscript/make_numbers.py` | `numbers.tex`, `numbers_index.md` (in `--out-dir`) | the whole build, CheZOD, PANAV, raw BMRB, the build's `tmp/bmrb_entries`, `sidechain-coverage.md`, `docs/filtering.md` | registry dump in `--work-dir` |
 | `fig1a_ubiquitin.py` | Fig. 1a, ubiquitin Z/G profiles | Parquet, tiers, raw BMRB (ubiquitin entries) | `source_data/fig1a*.csv` |
 | `fig1c_scale.py` | Fig. 1c, TriZOD vs CheZOD1325 scale | Parquet, CheZOD1325 + CheZOD117 sequences, MMseqs2 | `source_data/fig1c.csv` |
 | `fig2a_kpaired.py` | Fig. 2a, within-residue k test (`--replot` redraws from the CSV) | Parquet | `source_data/fig2a.csv` |
@@ -88,7 +130,7 @@ the release `trizod_dataset.parquet`, and "tiers" means the bundle's per-tier
 | `fig3c_split.py` | Fig. 3c, split integrity and disorder strip | bundle test/train FASTAs, tiers, MMseqs2 | `fig3_data/fig3c*` |
 | `fig3d_placeholder.py` | Fig. 3d placeholder cell | none | none |
 | `supp_s2_gscore_theory.py` | Suppl. Fig. S2, G-score theory | Parquet, `trizod.scoring` functions | `suppfigs_b_data/S2_summary.json` |
-| `supp_s3_filter_losses.py` | Suppl. Fig. S3, filter losses per tier | `rebuild_2026-10.log` | `suppfigs_a_data/S3_filter_losses.csv` |
+| `supp_s3_filter_losses.py` | Suppl. Fig. S3, filter losses per tier | the build log (`rebuild_2026-10.log`) | `suppfigs_a_data/S3_filter_losses.csv` |
 | `supp_s4_conditions.py` | Suppl. Fig. S4, sample conditions | Parquet, tiers, raw scan | `suppfigs_a_data/S4_*` |
 | `supp_s5_composition.py` | Suppl. Fig. S5, composition | Parquet, tiers, raw scan | `suppfigs_a_data/S5_*` |
 | `supp_s6_rereferencing.py` | Suppl. Fig. S6, re-referencing (`--recompute`) | Parquet + shifts Parquet, PANAV, `external/bmrb_lacs/` | `suppfigs_c_data/S6*` |
