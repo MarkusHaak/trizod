@@ -21,7 +21,13 @@ Steps
        DNA/RNA hybrid polymer type).
    Metal, ligand and oligomer metadata ride along as labels; see
    ``trizod.dataset.composition``.
-2. For every row in the per-tier scores.json, attach the bound flag and
+2. Drop every row whose BMRB entry is on the committed withdrawn/unlisted
+   list (``trizod/dataset/data/withdrawn_entries.tsv``, see
+   :mod:`trizod.dataset.withdrawn`; audit I-06). This happens before
+   deduplication, so a withdrawn chain lands in no tier pool, no training set
+   and no test set, and a live entry with the identical sequence takes over
+   as representative. The build reads the file only; it never calls BMRB.
+3. For every row in the per-tier scores.json, attach the bound flag and
    compute a per-row quality score:
        quality = (bbshift_positions_post * bbshift_types_post)
                   − (max |POTENCI residual offset|, in sigma)
@@ -29,13 +35,15 @@ Steps
    The offsets come out of ``off_<atom>_sigma`` (sigma) and
    ``total_off_<atom>_ppm`` (ppm) via :mod:`trizod.offsets`; the two are in
    different units and are never mixed.
-3. Drop rows that are flagged "bound" and rows with no sequence /
-   sequence < 20 residues.
-4. Within each tier, group by exact ``seq`` and pick the highest-quality
+4. Drop rows with no sequence / sequence < 20 residues, rows that are
+   flagged "bound", and placeholder sequences whose literal-"X" fraction
+   exceeds ``MAX_UNKNOWN_FRACTION`` (audit I-08). The drop counts are
+   reported in that order and are mutually exclusive.
+5. Within each tier, group by exact ``seq`` and pick the highest-quality
    representative per sequence.  Carry the ranked list along so an
    external pipeline (mmseqs cluster representative override) can pick
    the best member of a similarity cluster too.
-5. Write to ``<work-dir>/final_dataset/<tier>/``:
+6. Write to ``<work-dir>/final_dataset/<tier>/``:
        <tier>.fasta            — deduplicated sequences, one per cluster
        <tier>_all_ranked.tsv   — every entry kept, with quality_score,
                                   cluster_repr flag, and metadata
@@ -49,6 +57,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pickle
 from pathlib import Path
@@ -57,6 +66,7 @@ import pandas as pd
 
 from trizod.dataset.composition import detect_bound
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.withdrawn import WITHDRAWN_TSV, load_withdrawn
 from trizod.offsets import max_abs_offset, off_sigma_col, total_off_ppm_col
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
@@ -72,6 +82,44 @@ POTENCI_SIGMA_COLS = [off_sigma_col(a) for a in ATOMS]
 TOTAL_PPM_COLS = [total_off_ppm_col(a) for a in ATOMS]
 
 MIN_SEQ_LEN = 20
+
+#: Placeholder gate (NMR-STAR audit I-08). Many 1990s depositions give the
+#: polymer sequence as the literal unknown residue "X" everywhere except the
+#: assigned residues (bmr1712: 250 X then SRDVHSKVISEE). ``MIN_SEQ_LEN`` counts
+#: those X's, and MMseqs2 cannot align them, so a mostly-X chain both passes the
+#: length screen and slips through leakage control (505_1_1_1, a Cu/Zn SOD that
+#: is 111 of 118 X, hides a homolog of the CheZOD117 chain 15711_1_1_1). A row
+#: whose X fraction EXCEEDS this value is dropped from every tier; exactly 0.2
+#: is kept. 0.2 is the tolerant tier's ``max-x-fraction`` (``filter_defaults``
+#: in ``trizod/trizod.py``), counted the same way (literal upper-case "X" over
+#: the full sequence length), so the gate only changes the unfiltered tier.
+#: Other non-amino-acid characters ("*", "Z", "'") are not counted and are
+#: passed through unchanged.
+MAX_UNKNOWN_FRACTION = 0.2
+UNKNOWN_RESIDUE = "X"
+
+
+def unknown_fraction(seq: str) -> float:
+    """Fraction of ``seq`` that is the literal unknown residue "X" (0 if empty)."""
+    return seq.count(UNKNOWN_RESIDUE) / len(seq) if seq else 0.0
+
+
+def is_placeholder(seq: str, max_fraction: float = MAX_UNKNOWN_FRACTION) -> bool:
+    """True when ``seq`` is a placeholder: X fraction strictly above the limit."""
+    return unknown_fraction(seq) > max_fraction
+
+
+def resolve_withdrawn_list(path) -> Path:
+    """The withdrawn/unlisted-entry list to apply (``None`` = the committed one)."""
+    return WITHDRAWN_TSV if path is None else Path(path)
+
+
+def drop_withdrawn(
+    df: pd.DataFrame, withdrawn_ids
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split ``df`` into (kept, dropped) on BMRB entry ID membership."""
+    hit = df["entryID"].astype(str).isin(set(withdrawn_ids))
+    return df.loc[~hit].copy(), df.loc[hit].copy()
 
 
 def build_composition_cache(pkl_dir: Path) -> dict:
@@ -197,6 +245,25 @@ def make_parser() -> argparse.ArgumentParser:
             "not filtered, and n_copies is a conservative lower bound."
         ),
     )
+    ap.add_argument(
+        "--withdrawn-list",
+        type=Path,
+        default=None,
+        help=(
+            "TSV of withdrawn/unlisted BMRB entries to drop before dedup "
+            f"(default: the committed {WITHDRAWN_TSV.name}; refresh it with "
+            "`python -m trizod.dataset.withdrawn`)"
+        ),
+    )
+    ap.add_argument(
+        "--max-unknown-fraction",
+        type=float,
+        default=MAX_UNKNOWN_FRACTION,
+        help=(
+            "drop placeholder chains whose literal-'X' fraction exceeds this "
+            f"(default: {MAX_UNKNOWN_FRACTION}; 1.0 disables the gate)"
+        ),
+    )
     return ap
 
 
@@ -236,6 +303,30 @@ def main(argv=None):
         raw_counts[tier] = len(df_t)
         all_rows.append(df_t)
     all_df = pd.concat(all_rows, ignore_index=True)
+
+    # Withdrawn / unlisted BMRB entries (audit I-06) go before anything else,
+    # in particular before dedup: a live entry with the identical sequence then
+    # becomes the representative instead of the sequence vanishing with it.
+    withdrawn_path = resolve_withdrawn_list(args.withdrawn_list)
+    withdrawn = load_withdrawn(withdrawn_path)
+    all_df, dropped_wd = drop_withdrawn(all_df, withdrawn)
+    n_dropped_withdrawn_global = len(dropped_wd)
+    withdrawn_dropped_ids = sorted(dropped_wd["ID"].unique())
+    n_withdrawn_by_tier = dropped_wd.groupby("tier").size().to_dict()
+    withdrawn_list_info = {
+        "file": withdrawn_path.name,
+        "sha256": hashlib.sha256(withdrawn_path.read_bytes()).hexdigest(),
+        "n_entries": len(withdrawn),
+        "date_checked": max((e.date_checked for e in withdrawn.values()), default=None),
+    }
+    print(
+        f"  withdrawn/unlisted BMRB entries: {len(withdrawn)} on "
+        f"{withdrawn_path.name} (checked {withdrawn_list_info['date_checked']}); "
+        f"dropped {n_dropped_withdrawn_global} rows "
+        f"({len(withdrawn_dropped_ids)} chains) before dedup"
+        + (f": {withdrawn_dropped_ids}" if withdrawn_dropped_ids else "")
+    )
+
     all_df = all_df.merge(comp_df, on="entryID", how="left", suffixes=("", "_comp"))
     # The left merge upcasts is_bound to object dtype whenever a scored entryID
     # has no composition match (NaN introduced). ``~`` on an object column does
@@ -244,10 +335,21 @@ def main(argv=None):
     all_df["is_bound"] = all_df["is_bound"].fillna(True).astype(bool)
     all_df = compute_quality(all_df)
 
-    universal_keep = (all_df["len"] >= MIN_SEQ_LEN) & (~all_df["is_bound"])
-    n_dropped_short_global = int((all_df["len"] < MIN_SEQ_LEN).sum())
-    n_dropped_bound_global = int(
-        ((all_df["len"] >= MIN_SEQ_LEN) & all_df["is_bound"]).sum()
+    # Row screens, counted in order (short -> bound -> placeholder) so each
+    # count is what that screen adds on top of the ones before it.
+    is_short = all_df["len"] < MIN_SEQ_LEN
+    universal_keep = ~is_short & ~all_df["is_bound"]
+    n_dropped_short_global = int(is_short.sum())
+    n_dropped_bound_global = int((~is_short & all_df["is_bound"]).sum())
+    max_unknown = args.max_unknown_fraction
+    is_placeholder_row = all_df["seq"].map(unknown_fraction) > max_unknown
+    dropped_placeholder = universal_keep & is_placeholder_row
+    n_dropped_placeholder_global = int(dropped_placeholder.sum())
+    placeholder_dropped_ids = sorted(all_df.loc[dropped_placeholder, "ID"].unique())
+    universal_keep &= ~is_placeholder_row
+    print(
+        f"  placeholder sequences (X fraction > {max_unknown}): dropped "
+        f"{n_dropped_placeholder_global} rows ({len(placeholder_dropped_ids)} chains)"
     )
     n_dropped_oligomer_global = 0
     if args.exclude_homo_oligomers:
@@ -284,8 +386,14 @@ def main(argv=None):
     overall_summary = {
         "composition_cache_size": int(len(comp_df)),
         "composition_flagged_bound": int(n_bound_global),
+        "withdrawn_list": withdrawn_list_info,
+        "global_dropped_withdrawn": n_dropped_withdrawn_global,
+        "withdrawn_dropped_ids": withdrawn_dropped_ids,
         "global_dropped_short": n_dropped_short_global,
         "global_dropped_bound": n_dropped_bound_global,
+        "max_unknown_fraction": max_unknown,
+        "global_dropped_placeholder": n_dropped_placeholder_global,
+        "placeholder_dropped_ids": placeholder_dropped_ids,
         "global_dropped_homo_oligomer": n_dropped_oligomer_global,
         "global_unique_sequences": int(global_repr["seq"].nunique()),
         "tiers": {},
@@ -299,14 +407,11 @@ def main(argv=None):
         tier_threshold = TIER_RANK[tier]
         df_t = kept_all[kept_all["tier_rank"] >= tier_threshold].copy()
         n_initial = raw_counts[tier]
-        n_short = int((all_df.loc[all_df["tier"] == tier, "len"] < MIN_SEQ_LEN).sum())
-        n_bound = int(
-            (
-                (all_df["tier"] == tier)
-                & (all_df["len"] >= MIN_SEQ_LEN)
-                & all_df["is_bound"]
-            ).sum()
-        )
+        in_tier = all_df["tier"] == tier
+        n_withdrawn = int(n_withdrawn_by_tier.get(tier, 0))
+        n_short = int((in_tier & is_short).sum())
+        n_bound = int((in_tier & ~is_short & all_df["is_bound"]).sum())
+        n_placeholder = int((in_tier & dropped_placeholder).sum())
 
         df_t = df_t.sort_values(
             ["seq", "quality_score", "ID"], ascending=[True, False, True]
@@ -360,20 +465,25 @@ def main(argv=None):
         tier_summary = {
             "tier": tier,
             "initial_rows": int(n_initial),
+            "dropped_withdrawn": n_withdrawn,
             "dropped_short": n_short,
             "dropped_bound": n_bound,
+            "dropped_placeholder": n_placeholder,
             "kept_rows_after_filters": int(len(df_t)),
             "unique_sequences_kept": int(n_unique_seq),
             "fraction_dedup": (1 - n_unique_seq / len(df_t)) if len(df_t) else 0.0,
             "min_seq_len": MIN_SEQ_LEN,
+            "max_unknown_fraction": max_unknown,
         }
         with open(tier_dir / f"{tier}_summary.json", "w") as fh:
             json.dump(tier_summary, fh, indent=2)
         overall_summary["tiers"][tier] = tier_summary
         print(
             f"  initial rows               : {n_initial}\n"
+            f"  dropped (withdrawn entry)  : {n_withdrawn}\n"
             f"  dropped (seq < {MIN_SEQ_LEN} aa)      : {n_short}\n"
             f"  dropped (bound/multi-mol)  : {n_bound}\n"
+            f"  dropped (X frac > {max_unknown})  : {n_placeholder}\n"
             f"  kept rows                  : {len(df_t)}\n"
             f"  unique sequences (FASTA)   : {n_unique_seq} "
             f"({(n_unique_seq / len(df_t)) if len(df_t) else 0:.1%} of kept rows)\n"
