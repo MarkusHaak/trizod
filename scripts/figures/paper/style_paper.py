@@ -1,0 +1,624 @@
+"""Shared style and data paths for the TriZOD paper figures (main + Supplementary).
+
+Every generator in ``scripts/figures/paper/`` imports this module first, so all
+figures share one look and one set of inputs:
+
+* **Size.** Nature Computational Science artwork is at most 180 mm wide
+  (``W_DOUBLE``); a single column is 88 mm (``W_SINGLE``). Use :func:`figure`
+  with millimetres.
+* **Type.** Sans-serif (Arial, falling back to Helvetica / DejaVu Sans), 6 pt
+  body text, 5.5 pt ticks, 8 pt bold lower-case panel letters, and nothing
+  smaller than ``FS_SMALL`` = 5.3 pt. NCS sets no text below 5 pt at final size,
+  and the draft places the artwork at ``\\textwidth`` (177.7 mm, a scale of
+  0.987), so 5.3 pt prints at 5.2 pt. :func:`save` enforces the floor on every
+  text item, including generator-local sizes and sub/superscripts, and labels
+  log axes with plain numbers (1, 10, 100, 1,000) instead of 10^n, whose
+  exponent matplotlib sets at 70 % of the tick size. Lay text out at
+  ``FS_SMALL`` or larger (not a local 5.0 pt constant), so the floor never moves
+  it after layout. Fonts are embedded as TrueType (``pdf.fonttype = 42``) so the
+  PDFs stay editable.
+* **Colour.** Okabe--Ito for categories, matching the construction schematic
+  (``2026-06-22_TriZOD_redundancy_reduction.tex``): orange = CheZOD sets,
+  bluish green = training, blue = TriZOD test set, vermillion = removed /
+  held out. The four nested tiers use one sequential reddish-purple ramp,
+  light = permissive (unfiltered) to dark = strict, so "darker is stricter"
+  and the tier colours never collide with the category colours.
+* **Output.** Vector PDF into the directory given by the required ``--out-dir``
+  argument (the draft's ``Figures/paper``; :func:`set_out_dir`), data tables into
+  its sub-folders; an optional PNG preview goes to a scratch directory for visual
+  checks only.
+
+Data are read from the frozen 2026-10 build through :mod:`trizod.paths`. The data
+root is ``$TRIZOD_DATA_ROOT`` when set, else the first of the code checkout and its
+parents that holds ``data/interim/build`` (a git worktree shares the main
+checkout's ``data/``), else the :mod:`trizod.paths` default.
+
+Run generators from the code checkout with
+``uv run --extra figures --with pyarrow python scripts/figures/paper/<script>.py --out-dir <draft>/Figures/paper``
+(``README.md`` lists every generator). Never import pyarrow in a process that
+runs the scoring pipeline.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+from matplotlib import text as mtext  # noqa: E402
+from matplotlib import ticker as mticker  # noqa: E402
+
+from trizod import paths  # noqa: E402
+
+# ----------------------------------------------------------------------------------
+# paths
+# ----------------------------------------------------------------------------------
+REPO = paths.ROOT  # the code checkout: scripts/, docs/, trizod/
+TMP = paths.TMP  # git-ignored caches of the generators (raw scan, mmseqs, PANAV loops)
+
+
+def _find_root(start: Path) -> Path:
+    """The checkout that holds ``data/interim/build`` (worktrees share the main one)."""
+    for p in [start, *start.parents]:
+        if (p / "data" / "interim" / "build").is_dir():
+            return p
+    return start
+
+
+ROOT = Path(os.environ.get("TRIZOD_DATA_ROOT") or _find_root(REPO))
+_L = paths.layout(ROOT)
+DATA = _L.data
+BUILD = _L.interim_build
+# the frozen 2026-10 build that the draft describes
+PQ_DIR = BUILD / "parquet-2026-10-simplify"
+PQ_MAIN = PQ_DIR / "trizod_dataset.parquet"
+PQ_SHIFTS = PQ_DIR / "trizod_shifts.parquet"
+BUNDLE = BUILD / "release_bundle" / "trizod-dataset-2026-10"
+CHEZOD_VER = _L.interim_chezod_verification
+CHEZOD = _L.ext_chezod
+CHEZOD_1325 = _L.ext_chezod_1325
+PANAV = _L.ext_panav
+BMRB_LACS = _L.ext_bmrb_lacs
+RAW_BMRB = _L.raw_bmrb
+
+# Output directory (the draft's Figures/paper). Unset until a generator's main() parses
+# its required --out-dir (parse_args), so importing a generator as a library -- as
+# scripts/manuscript/make_numbers.py does -- never writes anywhere.
+FIG_DIR: Path | None = None
+# PNG previews only when TRIZOD_FIG_PREVIEW_DIR is set (Path("") is ".", which is truthy, so the
+# old `Path(...) or None` wrote previews into the current directory; fixed 2026-10-31)
+_preview = os.environ.get("TRIZOD_FIG_PREVIEW_DIR")
+PREVIEW_DIR = Path(_preview) if _preview else None
+
+
+def set_out_dir(path) -> Path:
+    """Direct every later :func:`save` / :func:`out_dir` to ``path``."""
+    global FIG_DIR
+    FIG_DIR = Path(path)
+    return FIG_DIR
+
+
+def out_dir(sub: str | None = None) -> Path:
+    """The output directory (``--out-dir``), or its sub-folder ``sub`` (not created)."""
+    if FIG_DIR is None:
+        raise RuntimeError(
+            "no output directory: pass --out-dir <draft>/Figures/paper "
+            "(or call style_paper.set_out_dir() first)"
+        )
+    return FIG_DIR if sub is None else FIG_DIR / sub
+
+
+def cli(doc: str | None) -> argparse.ArgumentParser:
+    """Argument parser of a generator, with the required ``--out-dir``."""
+    ap = argparse.ArgumentParser(description=(doc or "").split("\n")[0])
+    ap.add_argument(
+        "--out-dir",
+        type=Path,
+        required=True,
+        help="figure directory of the manuscript draft (<draft>/Figures/paper); "
+        "PDFs go here, data tables into its source_data/, fig3_data/ and "
+        "suppfigs_*_data/ sub-folders",
+    )
+    return ap
+
+
+def parse_args(ap: argparse.ArgumentParser, argv=None) -> argparse.Namespace:
+    """Parse ``argv`` with ``ap`` (from :func:`cli`) and set the output directory."""
+    args = ap.parse_args(argv)
+    set_out_dir(args.out_dir)
+    return args
+
+
+# ----------------------------------------------------------------------------------
+# constants shared by the analyses
+# ----------------------------------------------------------------------------------
+TIERS = ["unfiltered", "tolerant", "moderate", "strict"]  # permissive -> strict
+RANK = {t: i for i, t in enumerate(TIERS)}
+G_DIS = 0.65  # binary disorder cut used throughout the paper
+BACKBONE_ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
+
+# ----------------------------------------------------------------------------------
+# colours
+# ----------------------------------------------------------------------------------
+OKABE_ITO = {
+    "black": "#000000",
+    "orange": "#E69F00",
+    "skyblue": "#56B4E9",
+    "green": "#009E73",
+    "yellow": "#F0E442",
+    "blue": "#0072B2",
+    "vermillion": "#D55E00",
+    "purple": "#CC79A7",
+    "grey": "#8C8C8C",
+}
+CAT = {
+    "chezod": OKABE_ITO["orange"],
+    "train": OKABE_ITO["green"],
+    "test": OKABE_ITO["blue"],
+    "removed": OKABE_ITO["vermillion"],
+    "neutral": "#4D4D4D",
+    "light": "#BDBDBD",
+}
+TIER_COLORS = {
+    "unfiltered": "#D7A9CB",
+    "tolerant": "#B86AA6",
+    "moderate": "#86307A",
+    "strict": "#3E0A45",
+}
+TIER_MARKERS = {"unfiltered": "o", "tolerant": "s", "moderate": "D", "strict": "^"}
+
+# Per-residue shift count k (1-21) is drawn with viridis everywhere (the colour bar of
+# Supplementary Fig. S2). Figures that bin chains by their median k (Fig. 1a) sample
+# viridis at each class centre, so a class colour matches the colour bar at its k.
+K_CMAP = "viridis"
+K_RANGE = (1, 21)
+K_CLASSES = {"≤6": (0, 6), "7–15": (7, 15), "16–21": (16, 21)}  # (lo, hi], inclusive hi
+
+
+def k_color(k: float) -> str:
+    """Hex colour of shift count ``k`` on the shared viridis scale."""
+    import matplotlib as mpl
+
+    lo, hi = K_RANGE
+    return mpl.colors.to_hex(mpl.colormaps[K_CMAP]((k - lo) / (hi - lo)))
+
+
+K_CLASS_COLORS = {
+    name: k_color((max(lo, K_RANGE[0]) + hi) / 2)
+    for name, (lo, hi) in K_CLASSES.items()
+}
+
+# ----------------------------------------------------------------------------------
+# sizes and rcParams
+# ----------------------------------------------------------------------------------
+MM = 1 / 25.4
+W_SINGLE = 88.0
+W_DOUBLE = 180.0
+
+# Minimum text size. NCS sets no figure text below 5 pt at final size. The draft
+# places 180 mm artwork at \textwidth (505.69 pt = 177.7 mm in the zHenriquesLab
+# layout; Article.log) and 88 mm cells at 0.4889 \textwidth, so every panel prints at
+# ~0.987 of its drawn size and 5.0 pt in the artwork becomes 4.9 pt on the page.
+TEXTWIDTH_MM = 177.7
+PLACE_SCALE = TEXTWIDTH_MM / W_DOUBLE  # ~0.987
+MIN_PT_PLACED = 5.0  # NCS minimum at final size
+FS_SMALL = 5.3  # smallest size in the artwork (5.23 pt as placed); save() enforces it
+FS_TICK = 5.5  # prints at 5.43 pt; 5.8 pt drops log-axis labels (S4f) for no gain
+FS_BODY = 6.0
+SCRIPT_SHRINK = 0.7  # mathtext sub/superscript size relative to its base (fixed in mpl)
+COMPACT_FROM = 1e5  # log axes reaching this value label 1,000 as 1k, 10^6 as 1M
+assert FS_SMALL * PLACE_SCALE >= MIN_PT_PLACED
+
+RC = {
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+    "font.size": FS_BODY,
+    "axes.titlesize": 6.5,
+    "axes.labelsize": FS_BODY,
+    "xtick.labelsize": FS_TICK,
+    "ytick.labelsize": FS_TICK,
+    "legend.fontsize": 5.5,
+    "legend.title_fontsize": 5.5,
+    "legend.frameon": False,
+    "axes.linewidth": 0.5,
+    "xtick.major.width": 0.5,
+    "ytick.major.width": 0.5,
+    "xtick.minor.width": 0.4,
+    "ytick.minor.width": 0.4,
+    "xtick.major.size": 2.0,
+    "ytick.major.size": 2.0,
+    "xtick.minor.size": 1.2,
+    "ytick.minor.size": 1.2,
+    "xtick.major.pad": 1.5,
+    "ytick.major.pad": 1.5,
+    "axes.labelpad": 2.0,
+    "axes.titlepad": 3.0,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "lines.linewidth": 0.8,
+    "lines.markersize": 2.5,
+    "patch.linewidth": 0.5,
+    "hatch.linewidth": 0.5,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "svg.fonttype": "none",
+    "savefig.dpi": 600,
+    "figure.dpi": 150,
+    "mathtext.default": "regular",
+}
+
+
+def apply_style() -> None:
+    plt.rcParams.update(RC)
+
+
+apply_style()
+
+
+def figure(width_mm: float = W_DOUBLE, height_mm: float = 100.0, **kw):
+    """A figure of the given size in millimetres (constrained layout off by default)."""
+    return plt.figure(figsize=(width_mm * MM, height_mm * MM), **kw)
+
+
+def panel_label(ax, letter: str, x: float = -0.18, y: float = 1.06, **kw) -> None:
+    """Bold lower-case panel letter at the top-left of ``ax`` (axes fraction)."""
+    ax.text(
+        x,
+        y,
+        letter,
+        transform=ax.transAxes,
+        fontsize=8,
+        fontweight="bold",
+        va="bottom",
+        ha="left",
+        **kw,
+    )
+
+
+def fig_label(fig, letter: str, x_mm: float, y_mm_from_top: float) -> None:
+    """Panel letter placed in figure millimetres (for panels without a single axes)."""
+    w, h = fig.get_size_inches() / MM
+    fig.text(
+        x_mm / w,
+        1 - y_mm_from_top / h,
+        letter,
+        fontsize=8,
+        fontweight="bold",
+        va="top",
+        ha="left",
+    )
+
+
+# ----------------------------------------------------------------------------------
+# minimum text size: plain log labels and a floor enforced at save time
+# ----------------------------------------------------------------------------------
+def plain_number(x: float, compact: bool = False) -> str:
+    """``x`` without an exponent: 0.01, 1, 10, 1,000 (``compact``: 1k, 10k, 1M)."""
+    if x == 0:
+        return "0"
+    sign = "\N{MINUS SIGN}" if x < 0 else ""
+    a = abs(x)
+    if compact and a >= 1e3:
+        for div, suffix in ((1e9, "G"), (1e6, "M"), (1e3, "k")):
+            if a >= div:
+                return f"{sign}{a / div:g}{suffix}"
+    if a >= 1:
+        return sign + (f"{a:,.0f}" if float(a).is_integer() else f"{a:,g}")
+    return sign + np.format_float_positional(a, precision=12, trim="-")
+
+
+class PlainLogFormatter(mticker.LogFormatter):
+    """Log-axis tick labels as plain numbers (see :func:`plain_number`).
+
+    Matplotlib's default labels are 10^n, whose exponent is set at 70 % of the tick
+    size (3.8 pt for 5.5 pt ticks). Plain numbers keep every glyph at the tick size.
+    Axes that reach ``COMPACT_FROM`` switch to 1k / 10k / 1M to keep labels short.
+    Which ticks get a label is decided by :class:`matplotlib.ticker.LogFormatter`.
+    """
+
+    def __call__(self, x, pos=None):
+        s = super().__call__(abs(x), pos)  # the base class drops the sign (symlog)
+        return self.fix_minus("-" + s) if x < 0 and s else s
+
+    def _num_to_string(self, x, vmin, vmax):
+        return plain_number(x, compact=max(abs(vmin), abs(vmax)) >= COMPACT_FROM)
+
+
+_POW10 = re.compile(
+    r"^(?P<pre>[^$]*?)"
+    r"(?:10\$\^\{(?P<a>[-+\N{MINUS SIGN}]?\d+)\}\$"
+    r"|\$(?:\\mathdefault\{)?10\^\{(?P<b>[-+\N{MINUS SIGN}]?\d+)\}\}?\$)"
+    r"(?P<post>[^$]*)$"
+)
+
+
+def plain_power_of_ten(s: str) -> str:
+    """Rewrite a label such as ``10$^{-2}$`` or ``≤$10^{3}$`` as 0.01 / ≤1,000."""
+    m = _POW10.match(s)
+    if not m:
+        return s
+    e = int((m["a"] or m["b"]).replace("\N{MINUS SIGN}", "-"))
+    return m["pre"] + plain_number(10.0**e) + m["post"]
+
+
+def _script_depth(s: str) -> int:
+    """Deepest sub/superscript level in the mathtext parts of ``s`` (0 = none)."""
+    parts = re.split(r"(?<!\\)\$", s)
+    if len(parts) < 3 or len(parts) % 2 == 0:  # mathtext needs paired $
+        return 0
+    best = 0
+    for math_part in parts[1::2]:
+        depth, opened, pending = 0, [], False
+        for ch in math_part:
+            if ch in "^_":
+                pending = True
+            elif ch == "{":
+                opened.append(pending)
+                if pending:
+                    depth += 1
+                    best = max(best, depth)
+                pending = False
+            elif ch == "}":
+                if opened and opened.pop():
+                    depth -= 1
+            elif pending and not ch.isspace():
+                best = max(best, depth + 1)  # single-character script, e.g. x^2
+                pending = False
+    return best
+
+
+def min_glyph_pt(t) -> float:
+    """Size of the smallest glyph of text artist ``t`` (its scripts included)."""
+    return t.get_fontsize() * SCRIPT_SHRINK ** _script_depth(t.get_text())
+
+
+class NoExponentFormatter(mticker.Formatter):
+    """Wrap a tick formatter so power-of-ten labels come out as plain numbers.
+
+    Catches labels a generator sets explicitly, e.g. ``set_xticks(t, ["10$^{-2}$"])``,
+    which matplotlib turns into a formatter that would re-create them at every draw.
+    """
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def set_axis(self, axis):
+        super().set_axis(axis)
+        self.inner.set_axis(axis)
+
+    def set_locs(self, locs):
+        self.inner.set_locs(locs)
+
+    def __call__(self, x, pos=None):
+        return plain_power_of_ten(self.inner(x, pos))
+
+    def format_ticks(self, values):
+        return [plain_power_of_ten(s) for s in self.inner.format_ticks(values)]
+
+    def get_offset(self):
+        return self.inner.get_offset()
+
+    def format_data(self, value):
+        return self.inner.format_data(value)
+
+    def format_data_short(self, value):
+        return self.inner.format_data_short(value)
+
+
+def _all_axes(fig) -> list:
+    """Every axes of ``fig``, inset axes and colour bars of insets included."""
+    from matplotlib.axes import Axes
+
+    return fig.findobj(lambda a: isinstance(a, Axes))
+
+
+def _axes_ticks(fig):
+    """``(axis, which)`` for both axes of every axes of ``fig``."""
+    for ax in _all_axes(fig):
+        for axis in (ax.xaxis, ax.yaxis):
+            for which in ("major", "minor"):
+                yield axis, which
+
+
+def _plain_log_labels(fig) -> int:
+    """Replace default 10^n log/symlog formatters (colour bars included); count them."""
+    n = 0
+    for axis, which in _axes_ticks(fig):
+        if axis.get_scale() not in ("log", "symlog"):
+            continue
+        fmt = getattr(axis, f"get_{which}_formatter")()
+        if isinstance(fmt, mticker.LogFormatterMathtext):  # SciNotation too
+            getattr(axis, f"set_{which}_formatter")(
+                PlainLogFormatter(
+                    base=getattr(fmt, "_base", 10.0),
+                    labelOnlyBase=fmt.labelOnlyBase,
+                    minor_thresholds=fmt.minor_thresholds,
+                    linthresh=getattr(fmt, "_linthresh", None),
+                )
+            )
+            n += 1
+    return n
+
+
+def _floor_pass(fig, floor: float) -> int:
+    """Raise every drawn text item whose smallest glyph is below ``floor``; count them."""
+    n = 0
+    for axis, which in _axes_ticks(fig):
+        labs = [
+            t
+            for t in axis.get_ticklabels(which=which)
+            if t.get_visible() and t.get_text()
+        ]
+        # Explicit power-of-ten labels: fix them in the formatter, which re-creates
+        # the label text at every draw.
+        fmt = getattr(axis, f"get_{which}_formatter")()
+        if not isinstance(fmt, NoExponentFormatter) and any(
+            plain_power_of_ten(t.get_text()) != t.get_text() for t in labs
+        ):
+            getattr(axis, f"set_{which}_formatter")(NoExponentFormatter(fmt))
+            n += 1
+        # Tick labels are re-created when the layout changes the tick count, so raise
+        # the axis-level label size too; new ticks then start at the floor.
+        sizes = {round(t.get_fontsize(), 3) for t in labs}
+        if len(sizes) == 1 and min(sizes) < floor - 1e-6:  # uniform labels only
+            axis.set_tick_params(which=which, labelsize=floor)
+            n += 1
+    for t in fig.findobj(mtext.Text):
+        s = t.get_text()
+        if not t.get_visible() or not s or not s.strip():
+            continue
+        s_new = plain_power_of_ten(s)
+        if s_new != s:
+            t.set_text(s_new)
+            n += 1
+        need = floor / SCRIPT_SHRINK ** _script_depth(s_new)
+        if t.get_fontsize() < need - 1e-6:
+            t.set_fontsize(need)
+            n += 1
+    return n
+
+
+def enforce_min_text(fig, floor: float = FS_SMALL) -> int:
+    """Make every glyph of ``fig`` at least ``floor`` pt; return the number of edits.
+
+    Log axes get plain-number labels (:class:`PlainLogFormatter`), power-of-ten
+    labels are written out (``10$^{-2}$`` -> 0.01), and any text item smaller than
+    ``floor`` -- generator-local sizes, cell values, legend notes, colour-bar ticks --
+    is raised to it. A label with sub/superscripts is raised until its scripts reach
+    ``floor``. The figure is drawn between passes so tick labels and the layout engine
+    see the final sizes.
+    """
+    n = _plain_log_labels(fig)
+    for _ in range(4):
+        fig.canvas.draw()  # create tick labels, run the layout engine
+        k = _floor_pass(fig, floor)
+        n += k
+        if k == 0:
+            break
+    small = [
+        (round(min_glyph_pt(t), 2), t.get_text()[:30])
+        for t in fig.findobj(mtext.Text)
+        if t.get_visible() and t.get_text().strip() and min_glyph_pt(t) < floor - 1e-6
+    ]
+    if small:
+        print(f"style_paper: still below {floor} pt: {small[:5]}", file=sys.stderr)
+    return n
+
+
+def save(fig, name: str, preview: bool = True, min_text: bool = True) -> Path:
+    """Write ``<out-dir>/<name>.pdf`` (vector); PNG preview to PREVIEW_DIR if set.
+
+    With ``min_text`` (default) the figure first passes :func:`enforce_min_text`,
+    so no glyph is smaller than ``FS_SMALL`` and log axes carry plain numbers.
+    """
+    fig_dir = out_dir()  # fail before the (slow) text-floor pass
+    if min_text:
+        n = enforce_min_text(fig)
+        if n:
+            print(
+                f"style_paper: {name}: {n} text edit(s) to reach the {FS_SMALL} pt floor",
+                file=sys.stderr,
+            )
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    out = fig_dir / f"{name}.pdf"
+    fig.savefig(
+        out, metadata={"Creator": "scripts/figures/paper", "CreationDate": None}
+    )
+    if preview and PREVIEW_DIR is not None:
+        PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        fig.savefig(PREVIEW_DIR / f"{name}.png", dpi=200)
+    plt.close(fig)
+    return out
+
+
+# ----------------------------------------------------------------------------------
+# small data helpers
+# ----------------------------------------------------------------------------------
+def arr(v) -> np.ndarray:
+    """List with None -> float array with NaN."""
+    return np.array([np.nan if x is None else x for x in v], dtype=float)
+
+
+def load_main(columns=None):
+    """The one-row-per-chain release Parquet as pandas (object strings, not arrow)."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    df = pq.read_table(PQ_MAIN, columns=columns).to_pandas()
+    for col in df.columns:
+        if pd.api.types.is_string_dtype(df[col]) and df[col].dtype != object:
+            df[col] = df[col].astype(object)
+    return df
+
+
+def load_tier_scores(tier: str, fields=("gscores", "zscores", "k")) -> dict:
+    """Per-tier labels from the bundle: ``{ID: {field: array}}`` (JSONL)."""
+    out = {}
+    with open(BUNDLE / "scores" / tier / "scores.json") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            out[r["ID"]] = {
+                f: arr(r[f]) if isinstance(r[f], list) else r[f] for f in fields
+            }
+    return out
+
+
+def load_tier_ids() -> dict:
+    """``{tier: set(IDs scored at that tier)}`` from the bundle's per-tier scores.json."""
+    ids = {}
+    for t in TIERS:
+        s = set()
+        with open(BUNDLE / "scores" / t / "scores.json") as fh:
+            for line in fh:
+                if line.strip():
+                    s.add(json.loads(line)["ID"])
+        ids[t] = s
+    return ids
+
+
+def strictest_tier(tier_ids: dict) -> dict:
+    """``{ID: strictest tier at which it is scored}``."""
+    out = {}
+    for t in TIERS:
+        for i in tier_ids[t]:
+            out[i] = t
+    return out
+
+
+def read_fasta(path) -> dict:
+    out, key = {}, None
+    for line in open(path):
+        line = line.strip()
+        if line.startswith(">"):
+            key = line[1:].split()[0]
+            out[key] = ""
+        elif key is not None:
+            out[key] += line
+    return out
+
+
+def tier_legend_handles(tiers=TIERS, marker=True):
+    from matplotlib.lines import Line2D
+
+    return [
+        Line2D(
+            [],
+            [],
+            color=TIER_COLORS[t],
+            marker=TIER_MARKERS[t] if marker else None,
+            lw=0.8,
+            ms=3,
+            label=t,
+        )
+        for t in tiers
+    ]
