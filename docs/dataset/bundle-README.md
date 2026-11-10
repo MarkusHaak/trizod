@@ -59,7 +59,7 @@ when pruning matters. `trizod_shifts.parquet` is sorted by
 | `zscores` | per-residue CheZOD Z-score (same alignment) |
 | `k` | number of weighted secondary shifts behind each residue (`0` = no shift) |
 | `off_<atom>_sigma`, `lacs_off_<atom>_ppm`, `total_off_<atom>_ppm` | per-atom referencing offsets (C, CA, CB, H, HA, HB, N) in **three different units** — see §7. To reproduce the shift TriZOD scored, subtract `total_off_<atom>_ppm` from the deposited shift; never add the other two together |
-| `pH`, `temperature`, `ionic_strength`, `citation` | sample metadata |
+| `pH`, `temperature`, `ionic_strength`, `pressure_bar`, `citation` | sample metadata. `pressure_bar` is the sample pressure in bar from the scored shift table's condition list, converted from the deposited unit; null when not recorded. Annotation only — no tier filters on pressure |
 | `physical_state`, `cosolvent_evidence`, `sample_state_evidence`, `membrane_mimetic` | sample-state annotation (see below) |
 
 ### Sample-state and composition annotation
@@ -70,7 +70,7 @@ describe the deposition; only `physical_state` participates in any filter.
 | field | meaning |
 |---|---|
 | `physical_state` | `_Entity_assembly.Physical_state` for this row's entity assembly, verbatim and lower-cased (`native`, `intrinsically disordered`, `denatured`, `molten globule`, …), or null |
-| `cosolvent_evidence` | bool — does the entry independently name a perturbing cosolvent (guanidin*, gdm*, hexafluoroisopropanol*, hexafluoro-2-propanol*, urea, TFE, trifluoroethanol, HFIP, DMSO, SDS, Gdn-HCl, GdnCl) anywhere in its sample components or sample-descriptive text? Renamed from `denaturant_evidence` — only urea and the guanidinium salts denature, while TFE/HFIP/DMSO are helix inducers, so the family is named for what it shares (the sample is not aqueous buffer) rather than for half of it |
+| `cosolvent_evidence` | bool — does the entry independently name a perturbing cosolvent (guanidin*, gdm*, hexafluoroisopropanol*, hexafluoro-2-propanol*, urea, TFE, trifluoroethanol in any spelling, HFIP, DMSO, SDS, Gdn-HCl, GdnCl, methanol, ethanol, CD3OH, CD3OD, MeOH, EtOH) anywhere in its sample components, solvent system or sample-descriptive text? Renamed from `denaturant_evidence` — only urea and the guanidinium salts denature, while TFE/HFIP/DMSO are helix inducers, so the family is named for what it shares (the sample is not aqueous buffer) rather than for half of it |
 | `sample_state_evidence` | `solution` / `solid` / `unknown`, derived from `_Sample.Type`, `_Experiment.Sample_state` and the experiment names |
 | `membrane_mimetic` | matched membrane-mimetic token(s), `;`-joined, or null. **Annotation only — never filtered** |
 
@@ -241,7 +241,7 @@ deliberately kept comparable (see below).
   Boundaries" no longer fire. `-bound` compounds still match.
 - **Cosolvent list corrected** (the filter was renamed from
   `chemical-denaturants` to `perturbing-cosolvents`; see below): `TFE`,
-  `trifluoroethanol`, `trifluoro ethanol`, `HFIP`/`hexafluoroisopropanol`/
+  `trifluoroethanol` (spelling-tolerant), `HFIP`/`hexafluoroisopropanol`/
   `hexafluoro-2-propanol` and `DMSO`/`dimethyl sulfoxide`/`dimethylsulfoxide`
   added at tolerant and above; **`TFA`** (an HPLC counterion, median 0.1 % of
   the sample) and **`Potassium Pyrophosphate`** (a buffer) removed. The rename
@@ -251,6 +251,15 @@ deliberately kept comparable (see below).
   no longer aqueous buffer, which is where POTENCI and the LACS reference
   tables are parameterised. Stabilising osmolytes (TMAO, glycerol) are
   deliberately not excluded.
+- **Cosolvents are found where they are declared.** The filter used to read
+  only `_Sample_component.Mol_common_name`; it now also reads
+  `_Sample.Solvent_system` and `_Sample.Details` of the samples the scored shift
+  table references, and methanol/ethanol (`methanol`, `ethanol`, `CD3OH`,
+  `CD3OD`, `MeOH`, `EtOH`) joined the list. This removed TFE/DMSO chains that had
+  reached the strict tier and the pinned test set (34568, 36154, 50683). The
+  `unfold`/`denatur` keywords no longer fire on "intrinsically/natively
+  unfolded", "non-denaturing" or "no/without/absence of denaturant". Sample pressure ships as `pressure_bar`
+  (annotation only).
 - **Undeclared experimental method** (`--method-fallback`). About 24 % of BMRB
   entries never filled in `_Entry.Experimental_method_subtype`; they used to be
   dropped from the strict tier for that alone. They are now judged on

@@ -80,6 +80,7 @@ def _scored_frame():
         "ionic_strength": [0.15],
         "pH": [7.0],
         "temperature": [298.0],
+        "pressure_bar": [1.01325],
         "bbshift_positions_post": [n],
         "bbshift_types_post": [3],
         "total_bbshifts": [3 * n],

@@ -30,7 +30,7 @@ from trizod.cache import load_potenci_cache, save_potenci_cache
 from trizod.constants import BACKBONE_ATOMS, CANONICAL_AA_MASK
 from trizod.io.atomic import atomic_write
 from trizod.offsets import off_sigma_col
-from trizod.provenance import scoring_cache_version
+from trizod.provenance import bmrb_parser_version, scoring_cache_version
 
 
 class ZscoreComputationError(Exception):
@@ -69,6 +69,33 @@ def parse_bmrb_file(row, cache_dir=None):
     return entry
 
 
+def load_cached_entry(cache_fp):
+    """Unpickle a cached ``BmrbEntry``, or ``None`` if absent, corrupt or stale.
+
+    Stale means stamped by other parsing code (or by none: pickles written
+    before the stamp existed). Such an entry may lack a field the parser has
+    since learned -- ``_Sample.Solvent_system``, which the cosolvent filter
+    reads -- so it is a cache miss and gets re-parsed (and re-pickled).
+    """
+    cache_fp = Path(cache_fp)
+    if not cache_fp.exists():
+        return None
+    try:
+        with cache_fp.open("rb") as f:
+            entry = pickle.load(f)
+    except Exception:
+        logging.getLogger("trizod.bmrb").debug(
+            f"cache file {cache_fp} corrupt or formatted wrong"
+        )
+        return None
+    if getattr(entry, "parser_version", None) != bmrb_parser_version():
+        logging.getLogger("trizod.bmrb").debug(
+            f"cache file {cache_fp} written by other parsing code, re-parsing"
+        )
+        return None
+    return entry
+
+
 def load_bmrb_entries(bmrb_files, cache_dir=None):
     entries, failed = {}, []
     columns = ["entry", "dir"]
@@ -78,16 +105,7 @@ def load_bmrb_entries(bmrb_files, cache_dir=None):
         cache_base = Path(cache_dir) / "bmrb_entries"
         for id_, fp in bmrb_files.items():
             cache_fp = cache_base / f"{id_}.pkl"
-            entry = None
-            if cache_fp.exists():
-                try:
-                    with cache_fp.open("rb") as f:
-                        entry = pickle.load(f)
-                except Exception:
-                    logging.getLogger("trizod.bmrb").debug(
-                        f"cache file {cache_fp} corrupt or formatted wrong"
-                    )
-            entries[id_] = (entry, fp.parent, cache_fp)
+            entries[id_] = (load_cached_entry(cache_fp), fp.parent, cache_fp)
     else:
         for id_, fp in bmrb_files.items():
             entries[id_] = (None, fp.parent)

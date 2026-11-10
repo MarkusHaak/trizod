@@ -22,10 +22,10 @@ respective CLI arguments.
 | min-backbone-shift-fraction  | Minimum fraction of positions with at least one backbone shift.                                                                                                                             |
 | max-noncanonical-fraction    | Maximum fraction of non-canonical amino acids (X count as arbitrary canonical) in the amino acid sequence.                                                                                  |
 | max-x-fraction               | Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence.                                                                                                  |
-| keywords-blacklist           | Exclude entries with any of these keywords as a substring of one of the searched free-text fields, case ignored. See "Keyword search scope" below — the search is field-scoped, not a scan of the whole BMRB file. |
+| keywords-blacklist           | Exclude entries with any of these keywords as a substring of one of the searched free-text fields, case ignored. See "Keyword search scope" below — the search is field-scoped, not a scan of the whole BMRB file. `unfold`/`denatur` skip the phrases "intrinsically/natively unfolded", "non-denaturing" and "no/without/absence of denaturant" (see "Negated and IDP phrases"). |
 | keyword-search-scope         | Which free-text fields `keywords-blacklist` searches: `sample` (default) or `all`. See "Keyword search scope".                                                                              |
 | physical-state-blacklist     | Exclude entries whose `_Entity_assembly.Physical_state` **exactly equals** one of these values (case ignored, whitespace stripped), resolved to the entity assembly of the row being filtered. Four ambiguous values are denied only where the entry independently names a perturbing cosolvent. See "Physical state". |
-| perturbing-cosolvents        | Exclude entries with any of these chemicals as substrings of `_Sample_component.Mol_common_name`, case ignored, for components that are not the studied polymer itself (no `Entity_ID`). Renamed from `chemical-denaturants` — see "Perturbing cosolvents". Distinct from `cosolvent_evidence`, which is broader and never filters. |
+| perturbing-cosolvents        | Exclude entries naming any of these chemicals, case ignored, in the samples the scored shift table references: `_Sample_component.Mol_common_name` of components that are not the studied polymer itself (no `Entity_ID`), `_Sample.Solvent_system` and `_Sample.Details`. Renamed from `chemical-denaturants` — see "Perturbing cosolvents" and "Where the filter looks". Distinct from `cosolvent_evidence`, which is broader and never filters. |
 | exp-method-whitelist         | Include only entries with any of these keywords as substring of the experiment subtype, case ignored. `""` is a sentinel meaning "accept a *missing* subtype", never a search term.          |
 | exp-method-blacklist         | Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.                                                                                            |
 | method-fallback              | What to do about entries with no `_Entry.Experimental_method_subtype` at all: `off`, `reject-solid` or `require-solution`. See "Undeclared experimental method".                            |
@@ -78,6 +78,36 @@ tier wants to keep. `-bound` compounds such as "membrane-bound" still match.
 `interacti` was **removed** from the strict tier and replaced by the phrases
 `in complex with` / `complexed with`, matched on sample-descriptive fields only.
 
+### Negated and IDP phrases
+
+`unfold` and `denatur` stay prefixes, but before they are matched two phrase
+families are removed from the text (`KEYWORD_NEGATIONS`, `trizod/trizod.py`),
+because in them the prefix says the opposite of what the keyword tests:
+
+| keyword   | phrases removed first (case ignored, space/hyphen variants)            | example |
+| :-------- | :---------------------------------------------------------------------- | :------ |
+| `unfold`  | `intrinsically unfold…`, `natively unfold…`                              | bmr6436 "natively unfolded Xc4149"; the synuclein depositions 15298, 16300, 16301 |
+| `denatur` | `non-denatur…`, `nondenatur…`, `non denatur…`; `no`/`without`/`absence of`/`abscence of` + `denaturant(s)` | bmr27021 medin "in non-denaturing conditions"; bmr5076 YB1 cold shock domain "unfolded states … No denaturants are added" |
+
+Only the phrase goes: a second, genuine mention in the same text ("… thermally
+unfolded at 60 °C") still matches, and "pressure unfolded", "cold-denatured",
+"partially unfolded" are untouched. The 2026-10 audit's exact what-if put the
+effect at +4 moderate chains (all > 50 % disordered, one of them a training
+representative, 6436) and +0 strict; because `denatur` is also on the tolerant
+list, 27021 changes tolerant membership as well. No pinned test chain is
+affected. The absent-denaturant phrases were added in review: they re-admit
+5076_1_1_1 and 5076_2_1_1 at tolerant (their only `denatur` hit; `unfold` still
+excludes them from moderate up), while bmr17513, which says "in the abscence of
+denaturant" *and* "ambient and denaturing conditions", still matches.
+
+The keywords are deliberately **not** gated on `cosolvent_evidence`, unlike the
+ambiguous physical states. The physical-state rule reads a controlled tag, where
+"unfolded" is often an IDP label; the keyword reads free text, where "unfolded"
+usually describes a genuinely non-native sample with no cosolvent at all —
+pressure-unfolded ubiquitin (52344), the drkN SH3 unfolded state (25500/25501),
+a cold-unfolding design (30970). Gating re-admitted 33 such moderate chains in
+the same what-if.
+
 ## Perturbing Cosolvents
 
 This filter was called `chemical-denaturants` until 2026-08, and the annotation
@@ -124,6 +154,54 @@ The token values themselves (`urea`, `guanidin`, `TFE`, `DMSO`, `HFIP`, …) and
 the per-chemical boolean columns in `scores.json`, which are named after the
 chemical, are unchanged.
 
+### Where the filter looks
+
+Until 2026-10 the filter read only `_Sample_component.Mol_common_name`.
+`_Sample.Solvent_system` was not parsed and `_Sample.Details` fed only the
+`cosolvent_evidence` annotation, so three pinned test chains and at least four
+strict training representatives passed in a cosolvent: `50683_1_1_1` (component
+misspelt `Triflouroethanol`, 17.5 % v/v), `34568_1_1_1` (Solvent_system
+`trifluoroethanol/water`, no component), `36154_1_1_1` (10 % v/v DMSO written only
+in Details), and 19859 / 30481 / 34011 / 34322 (TFE in Solvent_system/Details).
+The filter now searches, for every sample the row's shift table references:
+
+| field | how |
+| :---- | :-- |
+| `_Sample_component.Mol_common_name` | components that are not the studied polymer (no `Entity_ID`), as before |
+| `_Sample.Solvent_system` | free text; often an ADIT-NMR pick-list value (`trifluoroethanol/water`, 173 entries; `DMSO`; `methanol`) |
+| `_Sample.Details` | free text |
+
+The matching rules are the same for all three (substring, or whole word for
+`WORD_BOUNDARY_COSOLVENTS`, or a pattern for `COSOLVENT_PATTERN_RES`). Two guards
+apply to the free-text fields only, never to a component name:
+
+- **Refolding protocols.** A Details/Solvent_system text that mentions
+  `refold…` does not count for the denaturant tokens (`guanid…`, `GdmCl`,
+  `Gdn-Hcl`, `urea`). bmr19377 — a pinned test chain, IL-10 — narrates
+  dissolving inclusion bodies in 6 M GdmCl and refolding them before an NMR
+  sample in phosphate buffer; bmr50471 describes "a mild unfolding-refolding step
+  using guanidine hydrochloride" for H/D back-exchange. Helix inducers play no
+  part in refolding, so a TFE text that also mentions refolding still counts.
+- **Negated mentions.** The one word after `no` / `without` is dropped:
+  bmr15936's 0 % point of a TFE titration has Details "no TFE
+  (2,2,2-trifluoroehtanol)" and Solvent_system `water`.
+
+**Multi-sample entries.** The samples searched are the ones the row's shift
+table references — `_Chem_shift_experiment.Sample_ID`, else the `Sample_ID` of the
+experiments it lists (`BmrbEntry.get_peptide_shifts`) — so each shift table of a
+titration is judged on its own sample (15936: the 0 % table passes, the 30 % table
+does not). A row is flagged if **any** referenced sample names a cosolvent. Only
+when a shift table references no sample at all does the filter fall back to every
+sample of the entry, i.e. to entry-level behaviour; nothing in the deposition
+says which sample was used then.
+
+**Known limits.** Matching is ungated by concentration, so dilute mentions count
+(0.5 % methanol from an oleate stock in 19921; 1.7 % DMSO-d6 from a ligand stock).
+Solvent_system pick-list values can be wrong: 19202 selects
+`trifluoroethanol/water` while its Details and components describe 90 % H2O/10 %
+D2O. Organic solvents outside the token list — acetonitrile (`CD3CN`, `ACN`),
+chloroform (`CDCl3`), dioxane — are still not filtered.
+
 ## Physical State
 
 `_Entity_assembly.Physical_state` is the depositor's own label for the conformational
@@ -169,9 +247,9 @@ but a statement about what was in the tube:
 
 | | |
 | :-- | :-- |
-| tokens | `guanidin*`, `gdm*`, `hexafluoroisopropanol*`, `hexafluoro-2-propanol*` (prefixes, so `guanidine`/`guanidinium`/`GdmCl` and the `-d2` spellings all match) and the whole words `urea`, `TFE`, `trifluoroethanol`, `HFIP`, `DMSO`, `SDS`, `Gdn-HCl`, `GdnCl` |
+| tokens | `guanidin*`, `gdm*`, `hexafluoroisopropanol*`, `hexafluoro-2-propanol*` (prefixes, so `guanidine`/`guanidinium`/`GdmCl` and the `-d2` spellings all match), the whole words `urea`, `TFE`, `trifluoroethanol`, `HFIP`, `DMSO`, `SDS`, `Gdn-HCl`, `GdnCl`, `CD3OH`, `CD3OD`, `MeOH`, `EtOH`, and the patterns shared with the tier filter (`sample_state.COSOLVENT_PATTERNS`): spelling-tolerant trifluoroethanol and the substituent-guarded `methanol`/`ethanol` |
 | matching | word-boundary anchored and case-insensitive, so `urea` cannot fire on `urease` |
-| searched | entry title & details, assembly name & details, entity name & details, and for every referenced sample its name, details and **all** `_Sample_component.Mol_common_name` values — including components that carry an `Entity_ID`, unlike the `perturbing-cosolvents` filter |
+| searched | entry title & details, assembly name & details, entity name & details, and for every referenced sample its name, details, `_Sample.Solvent_system` and **all** `_Sample_component.Mol_common_name` values — including components that carry an `Entity_ID`, unlike the `perturbing-cosolvents` filter |
 
 **What corroboration costs and buys.** Three candidate rules, measured on the 17,843-row
 pre-filter frame as `filtered (unique)` — same definitions as in "Measured impact":
@@ -272,7 +350,7 @@ an absent tag before.
 | keyword-search-scope         | sample      | sample                                  | sample                                  | sample                                                                                         |
 | physical-state-blacklist     | []          | tolerant deny list (see "Physical state") | + unfolded / intermediate             | + bound / reconstituted                                                                        |
 | ↳ ambiguous values           | —           | corroborated only                       | corroborated only                       | corroborated only                                                                              |
-| perturbing-cosolvents        | []          | `COSOLVENT_TOKENS` (all 13, below)      | `COSOLVENT_TOKENS` (all 13, below)      | `COSOLVENT_TOKENS` (all 13, below)                                                             |
+| perturbing-cosolvents        | []          | `COSOLVENT_TOKENS` (all 17, below)      | `COSOLVENT_TOKENS` (all 17, below)      | `COSOLVENT_TOKENS` (all 17, below)                                                             |
 | exp-method-whitelist         | ['', '.']   | ['','solution', 'structures']           | ['','solution', 'structures']           | ['solution', 'structures']                                                                     |
 | exp-method-blacklist         | []          | ['solid']                               | ['solid']                               | ['solid']                                                                                      |
 | method-fallback              | off         | reject-solid                            | reject-solid                            | require-solution                                                                               |
@@ -283,18 +361,27 @@ an absent tag before.
 ### The cosolvent token list
 
 `COSOLVENT_TOKENS` (`trizod/trizod.py`) is **identical at tolerant, moderate and
-strict**; `unfiltered` filters nothing. All 13 tokens, matched against
-`_Sample_component.Mol_common_name` case-insensitively:
+strict**; `unfiltered` filters nothing. All 18 tokens, matched case-insensitively
+against the fields listed under "Where the filter looks":
 
 | family | tokens | why several spellings |
 | :----- | :----- | :-------------------- |
 | guanidinium | `guanidin`, `GdmCl`, `Gdn-Hcl` | `guanidin` carries the filter (it reaches `guanidine` and `guanidinium`); the two acronyms remove **zero** rows that another filter does not already remove, at every tier, and are kept only as insurance against a deposition spelled without the word "guanidine" |
 | urea | `urea` | word-boundary matched, see below |
-| TFE | `TFE`, `trifluoroethanol`, `trifluoro ethanol` | `'trifluoroethanol'` does not contain `'tfe'`, and neither spelling contains `trifluoro ethanol`, which bmr15559/15579/15580 deposit at 50 % v/v |
+| TFE | `TFE`, `trifluoroethanol` | `'trifluoroethanol'` does not contain `'tfe'`. `trifluoroethanol` is a spelling-tolerant pattern, `trifl?(uo\|ou\|u\|o)r?[ -]*o?[ -]*ethanol` or the formula `cf3c[hd]2o[hd]`, reaching `Triflouroethanol` (bmr50683), `trifluorethanol`, `trifluroethanol`, `trifluethanol` (bmr5837, 30 %), `Trifluoro Ethanol D2OH` (bmr15559/15579/15580, 50 % v/v) and `CF3CD2OH` (bmr4723/4724, bmr15937, 50 %) — which replaced the former literal `trifluoro ethanol` token |
 | HFIP | `hexafluoroisopropanol`, `hexafluoro-2-propanol`, `HFIP` | three tokens rather than a bare `hexafluoro`, which also matches bmr7375's `tetrakis(acetonitrile)copper(I) hexafluorophosphate` (1.8 mM, a Cu(I) source) |
 | DMSO | `DMSO`, `dimethyl sulfoxide`, `dimethylsulfoxide` | never a bare `dimethyl`: it matches DSS, the shift reference standard |
+| alcohols | `methanol`, `ethanol`, `CD3OH`, `CD3OD`, `MeOH`, `EtOH` | added 2026-10: melittin in 100 % methanol (26334) and ubiquitin in 45 % methanol at 2,500 bar (18611) passed every check. The deuterated and abbreviated spellings contain no `methanol`/`ethanol` (15323 `CD3OH` 100 %, 25162 `CD3OD` 33 %, 5580 `MeOH` 37 %, 51165 `EtOH`); `EtOH` is a whole word, so it does not fire inside "acetohydroxamic acid" |
 
-Two tokens are matched as **whole words** rather than as substrings
+The alcohols are matched as **whole words** with a substituent guard
+(`sample_state.alcohol_pattern`): `ethanol` must not fire on 2-mercaptoethanol,
+ethanolamine or trifluoroethanol, nor on the spaced spellings the reducing agent
+is really deposited under — `2-mercapto ethanol` (30782), `B mercapto ethanol`
+(27165), `beta-mercapto-ethanol` (26700) — nor on a bracketed ligand name such as
+`(3-methylphenyl)methanol`. The same patterns serve `cosolvent_evidence`, so the
+annotation and the filter agree on what methanol is.
+
+Two further tokens are matched as **whole words** rather than as substrings
 (`WORD_BOUNDARY_COSOLVENTS`): `urea`, because as a substring it fires on
 "palmitate, la**urea**te, and stearate" (bmr50434) and on "bis-pyridyl**urea**
 inhibitor" (bmr26598) — word-boundary matching readmits exactly those two entries
@@ -399,9 +486,11 @@ A dash means the criterion is not configured at that tier. `filtered` is identic
 tiers for the keyword and cosolvent rows because the underlying boolean column is
 tier-independent — only `unique`, the marginal cost, is tier-specific.
 
-**These per-cosolvent rows predate the HFIP tokens and the move of DMSO to the
-tolerant tier**, so they show `DMSO` as moderate-and-above and carry no HFIP,
-`trifluoro ethanol` or spelled-out-DMSO rows at all. Treat them as a lower bound
+**These per-cosolvent rows predate the HFIP tokens, the move of DMSO to the
+tolerant tier, the 2026-10 alcohol tokens, the Solvent_system/Details search and
+the keyword negation**, so they show `DMSO` as moderate-and-above, count only
+`_Sample_component` hits, and carry no HFIP, alcohol or spelled-out-DMSO rows at
+all. Treat them as a lower bound
 on the family until the report is re-run; the per-token impact of the additions is
 quoted under "The cosolvent token list" above. Every other row is current.
 
@@ -428,7 +517,8 @@ never remove anything on their own.
 | column                  | meaning                                                                                                      |
 | :---------------------- | :------------------------------------------------------------------------------------------------------------ |
 | `physical_state`        | `_Entity_assembly.Physical_state` for this row's entity assembly, verbatim (lower-cased, stripped), or null   |
-| `cosolvent_evidence`    | bool — does the entry independently name a perturbing cosolvent? Gates the four ambiguous physical states; see "Physical state". Called `denaturant_evidence` before 2026-08 |
+| `cosolvent_evidence`    | bool — does the entry independently name a perturbing cosolvent (in its title/details, assembly/entity text, or the referenced samples' name, details, solvent system and components)? Gates the four ambiguous physical states; see "Physical state". Called `denaturant_evidence` before 2026-08; reads methanol/ethanol and `_Sample.Solvent_system` since 2026-10 |
+| `pressure_bar`          | float — sample pressure in bar from the scored shift table's own condition list (as `pH`/`temperature`), converted literally from the deposited unit (bar, atm, Pa, hPa, kPa, MPa, mbar, mmHg, Torr, psi; `ambient` = 1 atm). Null when not recorded or the unit is missing/unknown — never a default, never a repaired unit (the 89 condition lists depositing `1 Pa` read 1e-5 bar). **No tier filters on it**: a ceiling needs an NMR-backed threshold |
 | `sample_state_evidence` | `solution` / `solid` / `unknown` — see "Undeclared experimental method"                                       |
 | `membrane_mimetic`      | the matched membrane-mimetic token(s), `;`-joined, or null. A string, not a bool, so an SDS micelle stays distinguishable from DDM solubilisation |
 
