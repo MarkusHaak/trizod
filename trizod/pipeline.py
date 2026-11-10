@@ -37,11 +37,30 @@ class ZscoreComputationError(Exception):
     pass
 
 
-def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str"):
+def find_bmrb_files(input_dir, pattern=r"bmr(\d+)_3\.str", exclude_withdrawn=True):
     """
     If the given path contains at least one bmr<id>_3.str file, only files in this directory are returned.
     Else, all subdirectories are searched for bmr<id>_3.str files.
+
+    Entries BMRB no longer lists (``trizod/dataset/data/withdrawn_entries.tsv``)
+    are skipped unless ``exclude_withdrawn`` is False, so a withdrawn deposition
+    is never scored and reaches no artefact of the release.
     """
+    bmrb_files = _find_bmrb_files(input_dir, pattern)
+    if exclude_withdrawn:
+        from trizod.dataset.withdrawn import load_withdrawn
+
+        withdrawn = sorted(set(bmrb_files) & set(load_withdrawn()), key=int)
+        for entry_id in withdrawn:
+            del bmrb_files[entry_id]
+        if withdrawn:
+            logging.getLogger("trizod").info(
+                f"skipping {len(withdrawn)} withdrawn BMRB entries: {', '.join(withdrawn)}"
+            )
+    return bmrb_files
+
+
+def _find_bmrb_files(input_dir, pattern):
     bmrb_files = {}
     input_dir = Path(input_dir)
     for p in input_dir.iterdir():
