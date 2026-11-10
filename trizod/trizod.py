@@ -121,16 +121,44 @@ MEMBRANE_MIMETIC_TOKENS = (
 #: class where a substring match goes wrong. The alcohols must be whole words or
 #: ``ethanol`` fires on 2-mercaptoethanol, ethanolamine and trifluoroethanol and
 #: ``methanol`` on every ``...ylmethanol`` ligand (their extra substituent guard
-#: lives in ``COSOLVENT_PATTERN_RES``). The rest stay substring matches:
-#: ``guanidin`` must reach ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
+#: lives in ``COSOLVENT_PATTERN_RES``). So must every organic solvent added for
+#: NMR-STAR audit I-07: ``acn`` sits inside NaCN, ``pentane`` inside DSS
+#: (2,2-dimethyl-2-silapentane-5-sulfonate), ``isopropanol`` inside
+#: hexafluoroisopropanol. The rest stay substring matches: ``guanidin`` must
+#: reach ``guanidinium``, ``tfe`` must reach ``TFE-d2``.
 WORD_BOUNDARY_COSOLVENTS = frozenset(
-    {"urea", "hfip", "methanol", "ethanol", "cd3oh", "cd3od", "meoh", "etoh"}
+    {
+        "urea",
+        "hfip",
+        "methanol",
+        "ethanol",
+        "cd3oh",
+        "cd3od",
+        "meoh",
+        "etoh",
+        "acetonitrile",
+        "cd3cn",
+        "acn",
+        "chloroform",
+        "cdcl3",
+        "chcl3",
+        "isopropanol",
+        "2-propanol",
+        "isopropyl alcohol",
+        "n-propanol",
+        "1-propanol",
+        "hexane",
+        "pentane",
+        "dioxane",
+    }
 )
 
 #: Cosolvent tokens matched by a pattern, which takes precedence over the
 #: substring / word-boundary rule: the spelling-tolerant ``trifluoroethanol``
-#: and the substituent-guarded alcohols. One definition, shared with the
-#: ``cosolvent_evidence`` annotation (``sample_state.COSOLVENT_PATTERNS``).
+#: and ``acetonitrile``, the substituent-guarded alcohols and propanols, the
+#: DSS-guarded alkanes and the percentage-gated ``dioxane``. One definition,
+#: shared with the ``cosolvent_evidence`` annotation
+#: (``sample_state.COSOLVENT_PATTERNS``).
 COSOLVENT_PATTERN_RES = {
     token: re.compile(pattern) for token, pattern in COSOLVENT_PATTERNS.items()
 }
@@ -291,6 +319,32 @@ COSOLVENT_TOKENS = (
     "CD3OD",
     "MeOH",
     "EtOH",
+    # Organic solvents (NMR-STAR audit I-07). Still passing every tier after the
+    # alcohols went in: the pinned test chains 50871 and 50900 (Solvent_system
+    # '50% Acetonitrile/ 50% H2O') and 36521 ('30% deuterated ACN'), the CheZOD117
+    # chain 18578 (30 % acetonitrile), the strict representative 5633 (30 %
+    # CD3CN), bmr19216 in CDCl3/2-propanol and bmr25640 in a pentane reverse
+    # micelle. Neither POTENCI nor the LACS tables say anything about them.
+    # Every one is a whole word or a guarded pattern (COSOLVENT_PATTERN_RES):
+    # 'acn' must not fire on NaCN, 'pentane' not on DSS, 'isopropanol' not on
+    # hexafluoroisopropanol, 'acetonitrile' not on bmr7375's
+    # tetrakis(acetonitrile)copper(I). Dioxane is the one exception to "ungated
+    # by concentration": at 1-13 mM it is the 1H/13C shift reference (bmr4831,
+    # 15447, 15565, 15973), so it counts only written as >= 1 % of the solvent.
+    "acetonitrile",
+    "CD3CN",
+    "ACN",
+    "chloroform",
+    "CDCl3",
+    "CHCl3",
+    "isopropanol",
+    "2-propanol",
+    "isopropyl alcohol",
+    "n-propanol",
+    "1-propanol",
+    "hexane",
+    "pentane",
+    "dioxane",
 )
 
 
