@@ -40,7 +40,7 @@ All three must pass.
 - `--cache-dir` defaults to `./tmp`
 - `tmp/bmrb_entries/` — pickled BmrbEntry objects, stamped with `provenance.bmrb_parser_version()` (a hash of `trizod/bmrb/bmrb.py`); a pickle from other parsing code is re-parsed and overwritten on load
 - `tmp/potenci/` — POTENCI predictions as JSON (content-addressed by seq+T+pH+ion hash)
-- `tmp/wSCS/` — scored weighted chemical shifts as `.npz` (keyed by entry_id + shift table IDs)
+- `tmp/wSCS/` — scored weighted chemical shifts as `.npz` (keyed by entry_id + shift table IDs + rereference mode + `scoring_cache_version()` + `bmrb_parser_version()`, so a scoring or parser change misses the cache)
 - POTENCI cache is filter-independent (depends only on sequence + conditions), so re-runs with different filter settings are mostly cache hits
 
 ## Filtering

@@ -128,6 +128,26 @@ def load_cached_entry(cache_fp):
     return entry
 
 
+def wscs_cache_path(
+    cache_dir, entry_id, stID, entity_assemID, entityID, rereference_mode
+):
+    """``<cache_dir>/wSCS/<chain>_<mode>_v<scoring>_p<parser>.npz``.
+
+    Both code versions are part of the key, so stale entries are invalidated by
+    construction. The scoring version covers the LACS/scoring math (issue #20:
+    a key without it silently reused offsets computed by different code). The
+    parser version covers the inputs: the key names the chain by IDs, not by
+    the conditions and shifts the parser read from it, so a parser change (a
+    pH* read as pH, a unit written into a value) must miss the cache too.
+    """
+    return (
+        Path(cache_dir)
+        / "wSCS"
+        / f"{entry_id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}"
+        f"_v{scoring_cache_version()}_p{bmrb_parser_version()}.npz"
+    )
+
+
 def load_bmrb_entries(bmrb_files, cache_dir=None):
     entries, failed = {}, []
     columns = ["entry", "dir"]
@@ -540,15 +560,12 @@ def compute_scores(
     if score_types is None:
         score_types = ["zscores"]
     exe_times = [np.nan, np.nan, np.nan]
-    # The scoring-code version is part of the key so that a change to the
-    # LACS/scoring math invalidates stale cache entries by construction
-    # (issue #20): a key without it silently reused offsets computed by
-    # different code.
     shifts_cache_path = (
-        cache_dir
-        / "wSCS"
-        / f"{entry.id}_{stID}_{entity_assemID}_{entityID}_{rereference_mode}"
-        f"_v{scoring_cache_version()}.npz"
+        wscs_cache_path(
+            cache_dir, entry.id, stID, entity_assemID, entityID, rereference_mode
+        )
+        if cache_dir
+        else None
     )
     if cache_dir and shifts_cache_path.exists():
         try:

@@ -83,8 +83,10 @@ def bmrb_parser_version() -> str:
     re-filter on the warm cache would otherwise crash on it, or with a default,
     filter as if nobody had declared it. Same trade-off as
     ``scoring_cache_version``: a comment-only edit costs one re-parse, which is
-    cheap next to silently filtering on stale objects. Deliberately NOT part of
-    the scoring key -- parsing changes do not change the scoring math.
+    cheap next to silently filtering on stale objects. Also part of the
+    ``tmp/wSCS/`` key (``pipeline.wscs_cache_path``): the scoring math does not
+    depend on the parser, but its inputs do -- the conditions and shifts read
+    from the entry -- and that key names a chain by IDs only.
     """
     try:
         return hashlib.sha256(_PARSER_FILE.read_bytes()).hexdigest()[:12]

@@ -121,3 +121,17 @@ def test_version_tracks_the_parser_source_only():
 
     assert provenance._PARSER_FILE == provenance._PKG_ROOT / "bmrb" / "bmrb.py"
     assert bmrb_parser_version() != provenance.scoring_cache_version()
+
+
+def test_scored_shift_cache_is_keyed_by_the_parser_too(tmp_path, monkeypatch):
+    # The wSCS cache is keyed by IDs, not by the conditions the parser read, so
+    # a parser change (pH* read as pH, a new unit) must miss it: the scores
+    # depend on the parsed conditions and shifts, not only on the scoring code.
+    def key():
+        return pipeline.wscs_cache_path(tmp_path, "4205", "1", "1", "1", "both")
+
+    before = key()
+    monkeypatch.setattr(pipeline, "bmrb_parser_version", lambda: "otherparser")
+    assert key() != before
+    monkeypatch.setattr(pipeline, "scoring_cache_version", lambda: "otherscoring")
+    assert key().parent == tmp_path / "wSCS"
