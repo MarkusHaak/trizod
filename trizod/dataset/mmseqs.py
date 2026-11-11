@@ -17,6 +17,17 @@ Test-set leakage is defined separately, by :func:`leakage_search_cmd` and
   catches a test chain that contains a shorter training chain, which the
   ``"test"`` rule leaves in (and which the release's substring gate rejects).
 
+Under both rules the alignment must also be reported by mmseqs, i.e. reach
+E <= 1e-3: the ``easy-search`` default, which :func:`leakage_search_options`
+deliberately leaves in place. Identity and coverage alone would count chance
+alignments of short chains (a 20-30 aa pair at 30 % identity is expected by
+chance). E-values depend on the search -- which side is the database, its size,
+the options -- so a search set up differently can report a borderline pair this
+one does not: the paper's Fig. 3c search of test chains against the strict
+representatives finds 34481_1_1_1 ~ 15008_1_1_1 (31.8 % identity over 93 % of
+the test chain, E = 6e-4), which the stage-2 search does not report. The exact
+>= 20 aa substring check of the release gate needs no E-value.
+
 Coverage is the mmseqs definition, the aligned span ``(end - start + 1) /
 length``, gaps included. ``--cov-mode 0`` would demand 80 % of both chains, so
 neither kind of containment would be found. The leakage search runs query =
@@ -221,10 +232,11 @@ def parse_leakage_hits(tsv: Path) -> list[LeakageHit]:
 
 
 def is_leak(hit: LeakageHit, rule: str = DEFAULT_LEAKAGE_RULE) -> bool:
-    """The leakage criterion on one reported alignment. Identity >= 30 % is
-    enforced by mmseqs (``--min-seq-id``); coverage is checked here: of the
-    test chain (rule ``"test"``), or of the test or the training chain (rule
-    ``"either"``)."""
+    """The leakage criterion on one reported alignment. Identity >= 30 % and
+    E <= 1e-3 are enforced by mmseqs (``--min-seq-id`` and the default ``-e``:
+    an alignment above either limit is never reported); coverage is checked
+    here: of the test chain (rule ``"test"``), or of the test or the training
+    chain (rule ``"either"``)."""
     check_rule(rule)
     if hit.test_cov >= LEAKAGE_MIN_COV:
         return True

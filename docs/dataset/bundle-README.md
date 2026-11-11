@@ -203,7 +203,10 @@ divide `mad_z` by 1.4826 for σ units.
   `unfiltered` is largest. Tiers are nested.
 - **Cluster-aware CV**: group by `clusters_best.tsv`.
 - Train on any tier and evaluate on **CheZOD117** and/or the **TriZOD** test set
-  with no train/test leakage.
+  with no train/test leakage: no training chain aligns to a test chain at
+  ≥ 30 % identity over ≥ 80 % of either chain with E ≤ 10⁻³ (mmseqs2, test
+  chains as the database), and none shares an exact substring of ≥ 20 residues
+  with one. `MANIFEST.json` records the exact search under `leakage`.
 
 ## Changelog — release 2026-08
 

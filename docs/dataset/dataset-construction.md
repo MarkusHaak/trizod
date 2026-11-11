@@ -140,17 +140,29 @@ training-leakage target. Common mmseqs options throughout:
 
 **Leakage criterion.** A training chain leaks when an alignment to a test chain
 reaches **≥ 30 % identity over ≥ 80 %** of the chain(s) named by the
-**leakage rule** (`--leakage-rule`, decision D2):
+**leakage rule** (`--leakage-rule`, decision D2), **at E ≤ 10⁻³**:
 
 | rule | ≥ 80 % of | also catches |
 |---|---|---|
-| `test` (default) | the test chain | a longer construct that contains a test protein; a shorter chain whose gapped alignment spans the test chain (e.g. the test protein minus an internal loop) |
-| `either` | the test chain **or** the training chain (the shorter one) | everything `test` catches, plus a training chain contained in a longer test chain (e.g. test `51677_1_1_1`, 371 aa, which contains representatives `51674`–`51676`) |
+| `test` | the test chain | a longer construct that contains a test protein; a shorter chain whose gapped alignment spans the test chain (e.g. the test protein minus an internal loop) |
+| `either` (default since 2026-11) | the test chain **or** the training chain (the shorter one) | everything `test` catches, plus a training chain contained in a longer test chain (e.g. test `51677_1_1_1`, 371 aa, which contains representatives `51674`–`51676`) |
 
 Coverage is the mmseqs aligned span (gaps included). The search is the same
 under both rules; only the coverage test on its hits differs. The redundancy
 step records the rule in `mmseqs/leakage_rule.json`, and the package step checks
 the same rule.
+
+**The E-value condition.** An alignment counts only if mmseqs reports it, i.e.
+at E ≤ 10⁻³, the `easy-search` default, computed with the test chains as the
+target database. Without it, identity and coverage alone would count chance
+alignments of short chains (a 20–30 aa pair at 30 % identity is expected by
+chance). E-values depend on how a search is set up (which side is the database,
+its size, the options), so a different search can report a borderline pair that
+stage 2 does not. The paper's Fig. 3c search, test chains against the strict
+representatives, finds `34481_1_1_1` ~ `15008_1_1_1` (31.8 % identity over 93 %
+of the test chain, E = 6 × 10⁻⁴) and `15844_1_1_1` ~ `17736_1_1_1` (32.8 %, 86 %,
+E = 8 × 10⁻⁴); the stage-2 search reports neither, so by this definition neither
+is a leak. The release gate's exact-substring check (below) needs no E-value.
 
 - **Stage 1 — remove all cluster members** (A0): cluster the unfiltered
   superset with the test sequences at 30 % id / 80 % coverage of both
@@ -160,8 +172,11 @@ the same rule.
   multi-domain construct pull fragments of its other domains into one
   cluster, dropping chains unrelated to any test chain. The containment case
   is handled by stage 2.
-- **Stage 2 — search & remove** (A): `easy-search` each tier (query) against
-  the test sets (target) with `--min-seq-id 0.3 --cov-mode 1 -c 0` and drop
+- **Stage 2 — search & remove** (A): `easy-search` the training chains (query;
+  since 2026-11 one search of the unfiltered superset, whose hits each tier
+  restricts to its own IDs) against the test sets (target) with
+  `--min-seq-id 0.3 --cov-mode 1 -c 0 --prefilter-mode 2` (every pair aligned,
+  no k-mer prefilter; reported at the default E ≤ 10⁻³) and drop
   every training chain with an alignment that spans ≥ 80 % of the test chain,
   `(tend − tstart + 1) / tlen ≥ 0.8`, computed from the hit table (rule
   `either`: or ≥ 80 % of the training chain, `(qend − qstart + 1) / qlen`).
@@ -214,7 +229,8 @@ with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
   contains one, over ≥ 20 aa** (whatever the rule; no aligner involved); or
 - any staged training record meets the stage-2 criterion **under the rule the
   build recorded** (`mmseqs/leakage_rule.json`): ≥ 30 % identity over ≥ 80 % of
-  the test chain (`test`) or of the test or the training chain (`either`).
+  the test chain (`test`) or of the test or the training chain (`either`), at
+  E ≤ 10⁻³ against the test chains.
   `--leakage-rule` on the package step may only restate the recorded rule.
 
 The coverage check runs the stage-2 search (training as query, test as target,
@@ -244,8 +260,9 @@ Every `train_<tier>` set is redundancy-reduced in two stages against
 **CheZOD117 + the 460-sequence TriZOD test set**. The stage-2 mmseqs search
 finds no training chain that aligns to a test chain at ≥ 30 % identity over
 ≥ 80 % of the test chain (rule `test`) or of the test or the training chain
-(rule `either`), whatever the length ratio (within the sensitivity of its
-k-mer prefilter at `-s 7.5` and the default E ≤ 10⁻³), and the gate finds no
+(rule `either`), whatever the length ratio, at E ≤ 10⁻³ (the `easy-search`
+default; builds since 2026-11 align every pair, `--prefilter-mode 2`, so no
+k-mer prefilter can miss one; see "The E-value condition"), and the gate finds no
 exact-substring containment of ≥ 20 aa in either direction. The two test
 sets are themselves disjoint
 (the TriZOD set excludes CheZOD clusters). So a model can train on any

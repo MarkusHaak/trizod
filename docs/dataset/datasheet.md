@@ -129,7 +129,9 @@ corresponding score records by `ID`.
    --mask 0`): test-set leakage removal against CheZOD117 + TriZOD-460 in **two
    stages** — stage-1 cluster-membership removal (cluster the superset with the
    test sequences and drop any training sequence sharing a cluster with a test
-   sequence) then stage-2 `easy-search`, both at 30% id / 80% cov — followed by
+   sequence, 30% id / 80% cov of both) then stage-2 `easy-search`, which drops a
+   training chain at ≥ 30% identity over ≥ 80% of the test chain or of the
+   training chain (rule `either`), at E ≤ 10⁻³ against the test chains — followed by
    `cluster` strict @ 50/80 and iterative `clusterupdate`
    moderate→tolerant→unfiltered so shared sequences keep the strict-tier
    representative.
@@ -144,7 +146,8 @@ overwrites the pin). Reproduce the whole release with `scripts/build_dataset.sh`
 ## 4. Splits and the leakage guarantee
 
 Every `train_<tier>` set is **redundancy-reduced against CheZOD117 + the
-TriZOD-460 test set** at 30% identity / 80% coverage, in two stages
+TriZOD-460 test set** at 30% identity / 80% coverage (E ≤ 10⁻³; see
+`dataset-construction.md`, "The E-value condition"), in two stages
 (cluster-membership removal + `easy-search`); 1,381 / 1,341 / 1,183 / 714
 training sequences are dropped per tier (of which 159 / 152 / 129 / 54 are
 transitive leaks caught only by stage-1). The TriZOD test set is itself
