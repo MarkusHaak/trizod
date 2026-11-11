@@ -19,13 +19,14 @@ Panels
      ``denatured``; a tolerant training representative), molten-globule 4568
      (pH 4.1, 323 K) and five early depositions whose G is 0 throughout (panel a).
   d  Ubiquitin entry 18611 (45 % methanol, 2,500 bar; ``physical_state`` unfolded)
-     and entry 18610 (2,500 bar, 258 K) against the native ubiquitin reference
-     (median and interquartile band of non-bound, solution, ``native`` chains of the
-     same 76-residue sequence from other entries). Below: the tiers at which 18611 is
-     scored in the frozen build, and where the planned fixes (b) and (e) would leave it
-     (expected from the filter logic, not recomputed). On a later build
-     (``style_paper.IS_FROZEN`` false) the second row is that build's own scored tiers
-     and the "expected" rows are dropped.
+     and the two chains of entry 18610 (2,500 bar, 258 K; native and denatured), one per
+     row, each against the native ubiquitin reference (median and interquartile band of
+     non-bound, solution, ``native`` chains of the same 76-residue sequence from other
+     entries). The tiers at which each chain is scored are printed and written to
+     S12_summary.json (``ubiquitin_tiers``).
+
+Panel b labels each chain by its BMRB entry number; backbone atoms are written in Greek
+(C', Calpha, Cbeta, N). G-score axes use the ticks of Fig. 2a (0, 0.5, 1).
 
 Inputs (read-only): release Parquet + shifts Parquet, bundle per-tier scores.json IDs.
 
@@ -49,10 +50,17 @@ import style_paper as sp  # noqa: E402
 
 from trizod.offsets import lacs_off_ppm_col  # noqa: E402
 
+# italic k in the same sans-serif face as the text (as Fig. 2a; mathtext defaults to DejaVu)
+sp.plt.rcParams.update(
+    {
+        "mathtext.fontset": "custom",
+        "mathtext.it": "Arial:italic",
+        "mathtext.rm": "Arial",
+    }
+)
+
 DATA_SUBDIR = "suppfigs_b_data"  # under --out-dir
 NUCLEI = ["C", "CA", "CB", "N"]
-NUC_COLOR = {"C": sp.OKABE_ITO["orange"], "CA": sp.OKABE_ITO["blue"], "CB": sp.OKABE_ITO["skyblue"],
-             "N": sp.OKABE_ITO["green"]}  # fmt: skip
 EXTREME_PPM = 5.0
 REFERENCE_CHAIN = (
     "25442_1_2_2"  # largest offset in the archive (excluded, not a representative)
@@ -140,46 +148,47 @@ def profiles(df: pd.DataFrame):
     return myo, ubq, ref, q
 
 
-TIER_REACH = [
-    ("frozen 2026-10 build", ["unfiltered", "tolerant", "moderate"]),
-    ("fix (b) evidence tokens, or (e) pressure ceiling", ["unfiltered", "tolerant"]),
-    ("fix (b) cosolvent-filter tokens", ["unfiltered"]),
-]
-
-
 # ------------------------------------------------------------------------------ plot
+NUC_LABEL = {"C": "C′", "CA": "Cα", "CB": "Cβ", "N": "N"}  # backbone atoms, Greek
+G_TICKS = ([0, 0.5, 1.0], ["0", "0.5", "1"])  # as Fig. 2a
+
+
 def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
     from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
 
-    fig = sp.figure(sp.W_DOUBLE, 128)
+    W, H = sp.W_DOUBLE, 140.0
+    fig = sp.figure(W, H)
+
+    def ax_mm(left, top, w, h):
+        return fig.add_axes([left / W, 1 - (top + h) / H, w / W, h / H])
+
+    ink = "#333333"
 
     # a ---------------------------------------------------------------
-    axa = fig.add_axes([0.065, 0.62, 0.25, 0.33])
+    axa = ax_mm(13, 8, 44, 44)
     bins = np.arange(0.5, 22.5, 1)
-    axa.hist(k_all, bins=bins, density=True, histtype="step", color=sp.CAT["neutral"], lw=0.8,
-             label=f"all released residues (median k {np.median(k_all):.0f})")  # fmt: skip
-    axa.hist(k_az, bins=bins, density=True, color=sp.CAT["removed"], alpha=0.85, lw=0,
-             label=f"{info_a['n_chains']} all-zero-G chains (median k {np.median(k_az):.0f})")  # fmt: skip
-    axa.set_xlabel("Shifts in the residue's window, k")
-    axa.set_ylabel("Fraction of scored residues")
+    axa.hist(k_all, bins=bins, density=True, histtype="step", color="#8C8C8C", lw=0.9,
+             label="all released residues")  # fmt: skip
+    axa.hist(k_az, bins=bins, density=True, color=ink, lw=0,
+             label="chains with G = 0 throughout")  # fmt: skip
+    axa.set_xlabel(r"Shifts in the residue's window, $\mathit{k}$")
+    axa.set_ylabel("Share of scored residues")
     axa.set_xlim(0.5, 21.5)
     axa.set_xticks([1, 5, 10, 15, 21])
+    yt = [0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    axa.set_yticks(yt, [f"{v:g}" for v in yt])
     axa.legend(loc="upper right", handlelength=1.2, borderaxespad=0.1)
-    sp_ = info_a["split"]
-    axa.text(0.97, 0.72, f"split of the {info_a['n_chains']} chains\n"
-             f"excluded {sp_.get('excluded', 0)}\ntraining {sp_.get('train', 0)}\nredundant {sp_.get('redundant', 0)}",
-             transform=axa.transAxes, ha="right", va="top", fontsize=5.5, linespacing=1.3)  # fmt: skip
-    sp.panel_label(axa, "a", x=-0.25, y=1.05)
+    sp.fig_label(fig, "a", 0, 3)
 
     # b ---------------------------------------------------------------
-    axb = fig.add_axes([0.505, 0.56, 0.47, 0.38])
+    # one nucleus per row; the y labels name entry, tier and nucleus, so the marks need
+    # no colour: open = deposited, filled = re-referenced, arrow = the LACS correction
+    axb = ax_mm(88, 8, 70, 60)
     order = {"strict": 0, "moderate": 1, "tolerant": 2, "unfiltered": 3, "excluded": 4}
     E = E.copy()
     E["o"] = E.tier.map(order)
     E["absoff"] = E.groupby("id").lacs_ppm.transform(lambda v: v.abs().max())
-    E = E.sort_values(
-        ["o", "absoff", "id", "nucleus"], ascending=[True, False, True, True], key=None
-    )
     E["nuc_o"] = E.nucleus.map(NUCLEI.index)
     E = E.sort_values(
         ["o", "absoff", "id", "nuc_o"], ascending=[True, False, True, True]
@@ -187,153 +196,108 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
     y = np.arange(len(E))[::-1]
     labels, prev = [], None
     for yy, (_, r) in zip(y, E.iterrows()):
-        c = NUC_COLOR[r.nucleus]
         axb.annotate("", xy=(r.dev_rereferenced, yy), xytext=(r.dev_deposited, yy),
-                     arrowprops={"arrowstyle": "-|>", "color": c, "lw": 0.6, "mutation_scale": 5, "shrinkA": 1.5, "shrinkB": 1.5})  # fmt: skip
-        axb.plot(
-            [r.dev_deposited],
-            [yy],
-            marker="o",
-            ms=3,
-            mfc="white",
-            mec=c,
-            mew=0.7,
-            ls="none",
-        )
-        axb.plot([r.dev_rereferenced], [yy], marker="o", ms=3, color=c, ls="none")
-        lab = (
-            f"{r.id.rsplit('_', 3)[0] if r.id != REFERENCE_CHAIN else r.id} ({r.tier})"
-            if r.id != prev
-            else ""
-        )
-        labels.append(f"{lab}  {r.nucleus}" if lab else r.nucleus)
+                     arrowprops={"arrowstyle": "-|>", "color": ink, "lw": 0.6, "mutation_scale": 5, "shrinkA": 1.8, "shrinkB": 1.8})  # fmt: skip
+        axb.plot([r.dev_deposited], [yy], marker="o", ms=3.2, mfc="white", mec=ink,
+                 mew=0.7, ls="none")  # fmt: skip
+        axb.plot([r.dev_rereferenced], [yy], marker="o", ms=3.2, color=ink, ls="none")
+        # plain entry numbers (the excluded reference chain is entry 25442's second entity)
+        lab = f"{r.id.split('_')[0]} ({r.tier})" if r.id != prev else ""
+        nuc = NUC_LABEL[r.nucleus]
+        labels.append(f"{lab}  {nuc}" if lab else nuc)
         prev = r.id
     axb.set_yticks(y)
-    axb.set_yticklabels(labels, fontsize=5)
+    axb.set_yticklabels(labels, fontsize=sp.FS_SMALL)
+    axb.tick_params(axis="y", length=0)
     axb.set_xscale("symlog", linthresh=2)
     axb.axvspan(-2, 2, color="#EFEFEF", lw=0, zorder=0)
     axb.axvline(0, color="#9a9a9a", lw=0.4)
     axb.set_xlim(-250, 450)
     axb.set_xticks([-100, -10, -2, 0, 2, 10, 100])
     axb.set_xticklabels(["−100", "−10", "−2", "0", "2", "10", "100"])
-    axb.set_xlabel("Median deviation from the archive median of the residue type (ppm)")
+    axb.xaxis.set_minor_locator(sp.mticker.NullLocator())
+    axb.set_xlabel("Deviation from the archive median (ppm)")
     axb.set_ylim(-0.7, len(E) - 0.3)
-    hand = [Line2D([], [], marker="o", ms=3, mfc="white", mec="#555555", ls="none", label="deposited"),
-            Line2D([], [], marker="o", ms=3, color="#555555", ls="none", label="re-referenced")] + [
-            Line2D([], [], marker="s", ms=3, color=NUC_COLOR[a], ls="none", label=a) for a in NUCLEI]  # fmt: skip
-    axb.legend(
-        handles=hand,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 1.0),
-        ncol=6,
-        borderaxespad=0.2,
-        handletextpad=0.2,
-        columnspacing=1.0,
-    )
-    sp.panel_label(axb, "b", x=-0.36, y=1.04)
+    hand = [Line2D([], [], marker="o", ms=3.2, mfc="white", mec=ink, mew=0.7, ls="none", label="deposited"),
+            Line2D([], [], marker="o", ms=3.2, color=ink, ls="none", label="re-referenced")]  # fmt: skip
+    axb.legend(handles=hand, loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2,
+               borderaxespad=0.2, handletextpad=0.2, columnspacing=1.2)  # fmt: skip
+    sp.fig_label(fig, "b", 62, 3)
 
     # c ---------------------------------------------------------------
-    axc = fig.add_axes([0.065, 0.085, 0.37, 0.36])
+    # training chain in bluish green, excluded chain in vermillion (fixed meanings)
+    axc = ax_mm(13, 84, 66, 44)
     myo = myo.copy()
     myo["meanG"] = [np.nanmean(np.asarray(g, float)) for g in myo.gscores]
+    split_word = {"train": "training", "excluded": "excluded", "redundant": "redundant"}
     for _, r in myo.sort_values("meanG").iterrows():
         g = np.asarray(r.gscores, float)
         x = np.arange(1, len(g) + 1)
         if r.id == MYO_CHAIN:
-            axc.plot(x, g, color=sp.CAT["removed"], lw=0.8, zorder=3,
-                     label=f"{r.entry_id}: {r.physical_state}, pH {r.ph:.1f} ({r.split}, {r.train_tier})")  # fmt: skip
+            col = sp.CAT["train"] if r.split == "train" else sp.CAT["neutral"]
+            axc.plot(x, g, color=col, lw=0.9, zorder=3,
+                     label=f"{r.entry_id}: {r.physical_state}, pH {r.ph:.1f} ({split_word.get(r.split, r.split)})")  # fmt: skip
         elif r.physical_state == "molten globule":
-            axc.plot(x, g, color=sp.OKABE_ITO["orange"], lw=0.8, zorder=2,
-                     label=f"{r.entry_id}: molten globule, pH {r.ph:.1f}, {r.temperature:.0f} K ({r.split})")  # fmt: skip
+            col = sp.CAT["removed"] if r.split == "excluded" else sp.CAT["neutral"]
+            axc.plot(x, g, color=col, lw=0.9, zorder=2,
+                     label=f"{r.entry_id}: molten globule, pH {r.ph:.1f} ({split_word.get(r.split, r.split)})")  # fmt: skip
         else:
-            axc.plot(
-                x, g, color=sp.CAT["neutral"], lw=0, marker="|", ms=3, mew=0.6, zorder=1
-            )
+            axc.plot(x, g, color=ink, lw=0, marker="|", ms=3, mew=0.6, zorder=1)
     early = myo[(myo.id != MYO_CHAIN) & (myo.physical_state != "molten globule")]
-    axc.plot([], [], color=sp.CAT["neutral"], lw=0, marker="|", ms=3, mew=0.6,
-             label=f"{len(early)} early holo-myoglobin 1H entries, ≤ {early.n_scored.max()} scored residues "
-                   f"({int((early.meanG == 0).sum())} with G = 0 throughout)")  # fmt: skip
+    axc.plot([], [], color=ink, lw=0, marker="|", ms=3, mew=0.6,
+             label=f"{len(early)} early holo-myoglobin entries")  # fmt: skip
     axc.axhline(sp.G_DIS, color=sp.CAT["light"], lw=0.5, ls=":")
     axc.set_xlim(0, len(np.asarray(myo.gscores.iloc[0])) + 1)
-    axc.set_ylim(-0.03, 1.25)
-    axc.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
-    axc.set_xlabel("Residue (myoglobin, 153 aa)")
+    axc.set_ylim(-0.03, 1.36)
+    axc.set_yticks(*G_TICKS)
+    axc.set_xlabel("Residue (myoglobin)")
     axc.set_ylabel("G-score")
-    axc.legend(loc="upper left", borderaxespad=0.1, handlelength=1.4, fontsize=5)
-    sp.panel_label(axc, "c", x=-0.17, y=1.03)
+    axc.legend(loc="upper left", borderaxespad=0.1, handlelength=1.4, ncol=1)
+    sp.fig_label(fig, "c", 0, 79)
 
     # d ---------------------------------------------------------------
-    axd = fig.add_axes([0.55, 0.2, 0.43, 0.25])
-    x = np.arange(1, q.shape[1] + 1)
-    axd.fill_between(
-        x,
-        q[0],
-        q[2],
-        color="#D9D9D9",
-        lw=0,
-        label=f"native reference, IQR ({len(ref)} chains)",
-    )
-    axd.plot(x, q[1], color=sp.CAT["neutral"], lw=0.8, label="native reference, median")
+    # small multiples: one perturbed ubiquitin chain per row, each against the native
+    # reference (median and interquartile band of native solution chains)
     um = ubq.set_index("id")
-    for cid, col, ls in ((UBQ_HP[0], sp.OKABE_ITO["blue"], "-"), (UBQ_HP[1], sp.OKABE_ITO["skyblue"], "-"),
-                         (UBQ_CHAIN, sp.CAT["removed"], "-")):  # fmt: skip
+    rows = [(UBQ_HP[0], None), (UBQ_HP[1], None), (UBQ_CHAIN, "methanol")]
+    x = np.arange(1, q.shape[1] + 1)
+    dl, dw, dh, dgap, dtop = 95.0, 63.0, 12.0, 4.0, 84.0
+    for i, (cid, what) in enumerate(rows):
+        ax = ax_mm(dl, dtop + i * (dh + dgap), dw, dh)
+        ax.fill_between(x, q[0], q[2], color="#D9D9D9", lw=0)
+        ax.plot(x, q[1], color="#8C8C8C", lw=0.8)
         r = um.loc[cid]
         g = np.asarray(r.gscores, float)
-        lab = (f"18611: 45 % methanol, 2,500 bar ({r.physical_state})" if cid == UBQ_CHAIN
-               else f"{cid}: 2,500 bar, {r.temperature:.0f} K ({r.physical_state})")  # fmt: skip
-        axd.plot(
-            np.arange(1, len(g) + 1), g, color=col, lw=0.8, ls=ls, label=lab, zorder=3
-        )
-    axd.axhline(sp.G_DIS, color=sp.CAT["light"], lw=0.5, ls=":")
-    axd.set_xlim(0, 77)
-    axd.set_ylim(-0.03, 1.32)
-    axd.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
-    axd.set_xlabel("Residue (ubiquitin, 76 aa)")
-    axd.set_ylabel("G-score")
-    axd.legend(
-        loc="upper left",
-        ncol=2,
-        borderaxespad=0.1,
-        handlelength=1.4,
-        fontsize=5,
-        columnspacing=0.8,
-    )
-    sp.panel_label(axd, "d", x=-0.13, y=1.03)
-    # tier-reach strip
-    axs = fig.add_axes([0.55, 0.012, 0.43, 0.085])
-    scored_now = [t for t in sp.TIERS if UBQ_CHAIN in tier_ids[t]]
-    if sp.IS_FROZEN:
-        assert scored_now == TIER_REACH[0][1], scored_now
-        reach_rows, expected = TIER_REACH, True
-    else:
-        # a later build has the fixes applied: the frozen row (pinned) and the build's own
-        reach_rows, expected = (
-            [TIER_REACH[0], (f"{sp.RELEASE} build", scored_now)],
-            False,
-        )
-    for i, (name, reach) in enumerate(reach_rows):
-        yy = len(TIER_REACH) - 1 - i
-        for j, t in enumerate(sp.TIERS):
-            on = t in reach
-            axs.add_patch(__import__("matplotlib").patches.Rectangle(
-                (j * 0.9, yy + 0.1), 0.8, 0.8, facecolor=sp.TIER_COLORS[t] if on else "white",
-                edgecolor=sp.TIER_COLORS[t], lw=0.6))  # fmt: skip
-        axs.text(
-            3.75,
-            yy + 0.5,
-            name + (" (expected)" if i and expected else ""),
-            va="center",
-            ha="left",
-            fontsize=5,
-        )
-    for j, t in enumerate(sp.TIERS):
-        axs.text(j * 0.9 + 0.4, 3.15, {"unfiltered": "unf.", "tolerant": "tol.", "moderate": "mod.", "strict": "strict"}[t],
-                 ha="center", va="bottom", fontsize=4.6)  # fmt: skip
-    axs.set_xlim(-0.1, 14)
-    axs.set_ylim(0, 3.9)
-    axs.axis("off")
-    axs.text(-0.15, 1.5, "18611\nscored at", ha="right", va="center", fontsize=5)
+        ax.plot(np.arange(1, len(g) + 1), g, color="black", lw=0.9, zorder=3)
+        ax.axhline(sp.G_DIS, color=sp.CAT["light"], lw=0.5, ls=":")
+        ax.set_xlim(0, 77)
+        ax.set_ylim(-0.04, 1.04)
+        ax.set_yticks(*G_TICKS)
+        lab = (f"{r.entry_id}, in methanol" if what == "methanol"
+               else f"{r.entry_id}, {r.physical_state}")  # fmt: skip
+        ax.text(0.01, 1.0, lab, transform=ax.transAxes, ha="left", va="bottom",
+                fontsize=sp.FS_TICK)  # fmt: skip
+        if i < len(rows) - 1:
+            ax.tick_params(axis="x", labelbottom=False)
+        else:
+            ax.set_xlabel("Residue (ubiquitin)")
+        if i == 1:
+            ax.set_ylabel("G-score")
+    # key for the reference, above the first row on the right
+    fig.legend(handles=[(Patch(color="#D9D9D9", lw=0), Line2D([], [], color="#8C8C8C", lw=0.8)),
+                        Line2D([], [], color="black", lw=0.9)],
+               labels=["native reference", "chain"],
+               handler_map={tuple: _tuple_handler()}, loc="lower right",
+               bbox_to_anchor=((dl + dw) / W, 1 - (dtop - 0.3) / H), ncol=2, borderaxespad=0,
+               handlelength=1.6, columnspacing=1.2, fontsize=sp.FS_TICK)  # fmt: skip
+    sp.fig_label(fig, "d", 84, 79)
     return fig
+
+
+def _tuple_handler():
+    from matplotlib.legend_handler import HandlerTuple
+
+    return HandlerTuple(ndivide=1, pad=0)
 
 
 def main():
@@ -360,6 +324,7 @@ def main():
                              "n_scored": int(r.n_scored)} for _, r in myo.iterrows()],
         "ubiquitin_reference_chains": int(len(ref)),
         "ubiquitin_18611_scored_tiers": [t for t in sp.TIERS if UBQ_CHAIN in tier_ids[t]],
+        "ubiquitin_tiers": {c: [t for t in sp.TIERS if c in tier_ids[t]] for c in [*UBQ_HP, UBQ_CHAIN]},
         "ubiquitin_18611_meanG": round(float(np.nanmean(np.asarray(ubq.set_index("id").loc[UBQ_CHAIN, "gscores"], float))), 3),
         "ubiquitin_reference_median_meanG": round(float(np.nanmean(q[1])), 3),
     }  # fmt: skip

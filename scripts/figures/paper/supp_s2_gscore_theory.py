@@ -52,12 +52,13 @@ N_SIM = 20000  # simulated residues per (scenario, k)
 KS = np.arange(3, 22, 3)  # k = 3 x (backbone atom types measured on all three residues)
 KS_MAP = np.arange(1, 22)  # every k for the analytic G-Z curves
 N_ORD = [0, 1, 2, 3]  # ordered residues in the 3-residue window
-ORD_LABEL = {0: "0/3 ordered", 1: "1/3 ordered", 2: "2/3 ordered", 3: "3/3 ordered"}
+# Ordered share is ordinal, so it gets a grey ramp (light = disordered, black = fully
+# ordered); the Okabe-Ito hues keep their fixed meanings (CheZOD, training, test, removed).
 ORD_COLOR = {
-    0: sp.OKABE_ITO["skyblue"],
-    1: sp.OKABE_ITO["green"],
-    2: sp.OKABE_ITO["orange"],
-    3: sp.OKABE_ITO["vermillion"],
+    0: "#A8A8A8",
+    1: "#787878",
+    2: "#454545",
+    3: "#000000",
 }
 SUMMARY = {}
 
@@ -173,40 +174,38 @@ def main():
     # ---- figure
     fig = sp.figure(sp.W_DOUBLE, 56)
     gs = fig.add_gridspec(
-        1, 4, left=0.05, right=0.985, bottom=0.17, top=0.90, wspace=0.42
+        1, 4, left=0.068, right=0.985, bottom=0.17, top=0.90, wspace=0.45
     )
     axa, axb, axc, axd = (fig.add_subplot(gs[0, i]) for i in range(4))
 
+    # a and b: lines are labelled at their right end (ordered residues out of three),
+    # so no legend sits on the percentile bands; the dotted disorder cut-offs are
+    # explained in the caption.
+    x_lab = KS[-1] + 0.9
     for n_ord in N_ORD:
         a = sim[n_ord]
         c = ORD_COLOR[n_ord]
-        axa.fill_between(a[:, 0], a[:, 2], a[:, 3], color=c, alpha=0.18, lw=0)
-        axa.plot(
-            a[:, 0], a[:, 1], color=c, lw=0.9, marker="o", ms=2, label=ORD_LABEL[n_ord]
-        )
-        axb.fill_between(a[:, 0], a[:, 5], a[:, 6], color=c, alpha=0.18, lw=0)
+        axa.fill_between(a[:, 0], a[:, 2], a[:, 3], color=c, alpha=0.13, lw=0)
+        axa.plot(a[:, 0], a[:, 1], color=c, lw=0.9, marker="o", ms=2)
+        axb.fill_between(a[:, 0], a[:, 5], a[:, 6], color=c, alpha=0.13, lw=0)
         axb.plot(a[:, 0], a[:, 4], color=c, lw=0.9, marker="o", ms=2)
-    axa.set_xlabel("Shifts in the window, $k$")
+        for ax, y in ((axa, a[-1, 1]), (axb, a[-1, 4])):
+            ax.text(
+                x_lab, y, f"{n_ord}/3", ha="left", va="center", fontsize=sp.FS_SMALL
+            )
+    for ax in (axa, axb):
+        ax.set_xlabel("Shifts in the window, $k$")
+        ax.set_xlim(2, KS[-1] + 4.2)
+        ax.set_xticks(KS)
+        ax.spines["bottom"].set_bounds(KS[0], KS[-1])
     axa.set_ylabel("Z-score (synthetic)")
-    axa.set_xlim(2, 22)
-    axa.set_xticks(KS)
-    axa.axhline(8, color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
-    axa.legend(loc="upper left", handlelength=1.2, borderaxespad=0.2)
-    axb.set_xlabel("Shifts in the window, $k$")
+    axa.set_ylim(-3, 17)
+    axa.set_yticks([0, 5, 10, 15])
+    # disorder cut-offs (Z = 8, G = 0.65), drawn over the data range only
+    axa.hlines(8, 2, KS[-1], color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
     axb.set_ylabel("G-score (synthetic)")
-    axb.set_xlim(2, 22)
     axb.set_ylim(0, 1)
-    axb.set_xticks(KS)
-    axb.axhline(sp.G_DIS, color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
-    axb.text(
-        22,
-        sp.G_DIS + 0.015,
-        "G = 0.65",
-        ha="right",
-        va="bottom",
-        fontsize=5,
-        color="#7a7a7a",
-    )
+    axb.hlines(sp.G_DIS, 2, KS[-1], color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
 
     # c: analytic map
     import matplotlib as mpl
@@ -225,11 +224,17 @@ def main():
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     cax = axc.inset_axes([0.62, 0.62, 0.05, 0.33])
     cb = fig.colorbar(sm, cax=cax, ticks=[1, 11, 21])
-    cb.set_label("$k$", fontsize=5.5, labelpad=1)
-    cb.ax.tick_params(labelsize=5, length=1.5, pad=1)
+    cb.set_label("$k$", fontsize=sp.FS_TICK, labelpad=1)
+    cb.ax.tick_params(labelsize=sp.FS_SMALL, length=1.5, pad=1)
     cb.outline.set_linewidth(0.4)
 
-    # d: empirical hexbin
+    # d: empirical hexbin. The bins stop at mid-grey and the curves of c carry a white
+    # halo, so the curves stay visible where the residues are densest.
+    from matplotlib import patheffects
+
+    bin_cmap = mpl.colors.ListedColormap(
+        mpl.colormaps["Greys"](np.linspace(0.15, 0.62, 256))
+    )
     hb = axd.hexbin(
         Z,
         G,
@@ -237,35 +242,53 @@ def main():
         extent=(-5, 17, 0, 1),
         bins="log",
         mincnt=1,
-        cmap="Greys",
+        cmap=bin_cmap,
         linewidths=0.0,
         rasterized=False,
     )
+    halo = [patheffects.withStroke(linewidth=2.4, foreground="white")]
     for k, ls in ((3, ":"), (9, "--"), (15, "-."), (21, "-")):
         z, g = analytic_curve(k)
-        axd.plot(z, g, color=cmap(norm(k)), lw=0.7, ls=ls, label=f"$k$ = {k}")
+        axd.plot(
+            z,
+            g,
+            color=cmap(norm(k)),
+            lw=1.1,
+            ls=ls,
+            label=f"{k}",
+            path_effects=halo,
+        )
     axd.set_xlabel("Z-score")
     axd.set_ylabel("G-score")
     axd.set_xlim(-5, 17)
     axd.set_ylim(-0.02, 1.02)
-    axd.legend(loc="lower left", handlelength=1.6, borderaxespad=0.2)
+    # a compact key (title k, values only) fits the empty lower-left corner
+    leg = axd.legend(
+        loc="lower left",
+        title="$k$",
+        handlelength=1.7,
+        handletextpad=0.4,
+        labelspacing=0.3,
+        borderaxespad=0.2,
+    )
+    leg._legend_box.align = "left"
     axd.text(
         0.98,
         0.98,
-        f"Pearson r = {r_pool:.3f}\n{len(G):,} residues",
+        f"r = {r_pool:.2f}".replace("-", "\N{MINUS SIGN}"),
         transform=axd.transAxes,
         ha="right",
         va="top",
-        fontsize=5.5,
+        fontsize=sp.FS_TICK,
     )
     cax2 = axd.inset_axes([0.62, 0.45, 0.05, 0.28])
     cb2 = fig.colorbar(hb, cax=cax2)
-    cb2.set_label("residues", fontsize=5, labelpad=1)
-    cb2.ax.tick_params(labelsize=4.5, length=1.5, pad=1)
+    cb2.set_label("Residues", fontsize=sp.FS_SMALL, labelpad=1)
+    cb2.ax.tick_params(labelsize=sp.FS_SMALL, length=1.5, pad=1)
     cb2.outline.set_linewidth(0.4)
 
     for ax, l in zip((axa, axb, axc, axd), "abcd"):
-        sp.panel_label(ax, l, x=-0.27, y=1.03)
+        sp.panel_label(ax, l, x=-0.33, y=1.03)
     out = sp.save(fig, "S2")
     data_dir = sp.out_dir("suppfigs_b_data")
     data_dir.mkdir(exist_ok=True)

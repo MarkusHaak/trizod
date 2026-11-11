@@ -3,15 +3,15 @@
 
 Panels
   a  Per-entry Pearson r against mean absolute error (MAE) between TriZOD and the
-     published CheZOD1325 Z-scores, re-referencing disabled (``potenci-only``), with
+     published CheZOD1325 Z-scores without LACS (CheZOD method; ``potenci-only``), with
      the four outcome regions of ``trizod.figures.chezod.classify``:
        agree         r >= 0.9 and MAE <= 1.0
        offset_shift  r >= 0.9 and MAE  > 1.0
        low_variance  r <  0.9 and MAE <= 0.8
        genuine       otherwise
-  b  Outcome counts with re-referencing disabled vs in the released mode
-     (``both``: LACS + POTENCI/AIC).
-  c  The genuine discrepancies (re-referencing disabled): mean Z difference
+  b  Outcome counts without LACS (CheZOD method) vs with LACS (released labels;
+     ``both``: LACS + POTENCI/AIC).
+  c  The genuine discrepancies (without LACS): mean Z difference
      (TriZOD - CheZOD) against MAE; filled when TriZOD's residual POTENCI/AIC offset
      is >= 2 sigma. The three entries CheZOD's own code scores without carbonyl
      shifts (``skipCO``) are labelled.
@@ -20,8 +20,9 @@ Panels
      scores them. (All three skipCO entries are CheZOD117 test chains.)
 
 Inputs (read-only): CheZOD1325 published scores (``data/external/chezod/protein_nmr_1325``),
-``data/interim/chezod_verification/trizod_potenci_only.json`` (pre-2026-10 code), and the
-2026-10 release labels (bundle ``scores/unfiltered/scores.json``) for the released mode.
+``data/interim/chezod_verification/trizod_potenci_only.json`` (a June 2026 run, before the
+release code), and the release labels of the selected build (bundle
+``scores/unfiltered/scores.json``) for the released mode.
 The per-entry statistics use the same helpers as ``scripts/validation/reproduce_chezod.py``.
 
 Run: uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s17_chezod_reproduction.py \
@@ -60,12 +61,6 @@ CAT_LABEL = {
     "low_variance": "low variance",
     "offset_shift": "offset shift",
     "genuine": "genuine",
-}
-CAT_COLOR = {
-    "agree": sp.OKABE_ITO["skyblue"],
-    "low_variance": sp.OKABE_ITO["green"],
-    "offset_shift": sp.OKABE_ITO["purple"],
-    "genuine": sp.OKABE_ITO["vermillion"],
 }
 
 
@@ -165,61 +160,64 @@ def main():
     )
 
     # ---- figure
-    fig = sp.figure(sp.W_DOUBLE, 58)
-    gs = fig.add_gridspec(
-        1,
-        4,
-        left=0.055,
-        right=0.99,
-        bottom=0.17,
-        top=0.90,
-        wspace=0.45,
-        width_ratios=[1.15, 0.9, 1.0, 1.15],
-    )
-    axa, axb, axc, axd = (fig.add_subplot(gs[0, i]) for i in range(4))
+    # Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1). The
+    # outcome categories are regions of panel a and rows of panel b, so they are labelled
+    # in place and need no colour. One key at the top names the two modes, in the paper's
+    # wording and with Fig. 2c's encoding: orange = TriZOD without LACS (CheZOD method;
+    # a, b), black = with LACS (released labels; b). In c and d, ink = TriZOD and orange =
+    # the published CheZOD Z-scores.
+    fig_w, fig_h = sp.W_DOUBLE, 58.0
+    ax_top, ax_h = 10.0, 40.5
+    boxes = {  # left, width (mm)
+        "a": (11.0, 30.0),
+        "b": (58.0, 22.0),
+        "c": (93.5, 24.5),
+        "d": (128.0, sp.W_DOUBLE - 3.0 - 128.0),
+    }
+    fig = sp.figure(fig_w, fig_h)
 
-    # a: r vs MAE scatter, potenci-only
-    for c in CATS:
-        s = d_po[d_po.category == c]
-        axa.scatter(
-            s.mae,
-            s.pearson,
-            s=3,
-            lw=0,
-            color=CAT_COLOR[c],
-            alpha=0.85,
-            label=f"{CAT_LABEL[c]} ({len(s):,})",
-            zorder=3 if c == "genuine" else 2,
+    def _ax(key):
+        left, w = boxes[key]
+        return fig.add_axes(
+            [left / fig_w, 1 - (ax_top + ax_h) / fig_h, w / fig_w, ax_h / fig_h]
         )
+
+    axa, axb, axc, axd = (_ax(k) for k in "abcd")
+    ink, grey = "#333333", "#6E6E6E"
+    modes = {
+        # same encoding as Fig. 2c: orange = without LACS (CheZOD method), black = released
+        "potenci-only": ("Without LACS (CheZOD method)", sp.CAT["chezod"]),
+        "both": ("With LACS (released labels)", ink),
+    }
+
+    # a: r vs MAE scatter, without LACS
+    axa.scatter(
+        d_po.mae, d_po.pearson, s=3, lw=0, color=sp.CAT["chezod"], alpha=0.7, zorder=2
+    )
     axa.set_xscale("log")
     axa.set_xlim(0.008, 8)
-    axa.set_ylim(-0.6, 1.02)
+    axa.set_ylim(-0.6, 1.16)
     kw = {"color": "#7a7a7a", "lw": 0.5, "ls": "--", "zorder": 1}
     axa.plot([0.008, 8], [0.9, 0.9], **kw)
-    axa.plot([1.0, 1.0], [0.9, 1.02], **kw)
+    axa.plot([1.0, 1.0], [0.9, 1.16], **kw)
     axa.plot([0.8, 0.8], [-0.6, 0.9], **kw)
-    axa.set_xlabel("Per-entry mean absolute error (Z units)")
-    axa.set_ylabel("Per-entry Pearson r")
-    axa.set_title("Re-referencing disabled", fontsize=6)
-    axa.legend(loc="lower left", markerscale=2, handletextpad=0.2, borderaxespad=0.2)
+    lab = {"fontsize": sp.FS_SMALL, "color": grey}
+    axa.text(0.011, 1.09, CAT_LABEL["agree"], ha="left", va="center", **lab)
+    axa.text(7.5, 1.09, CAT_LABEL["offset_shift"], ha="right", va="center", **lab)
+    axa.text(0.011, -0.5, CAT_LABEL["low_variance"], ha="left", va="center", **lab)
+    axa.text(7.5, -0.5, CAT_LABEL["genuine"], ha="right", va="center", **lab)
+    axa.set_xticks([0.01, 0.1, 1])
+    axa.set_yticks([-0.5, 0, 0.5, 1.0], ["\N{MINUS SIGN}0.5", "0", "0.5", "1"])
+    axa.set_xlabel("Mean absolute error per entry")
+    axa.set_ylabel("Pearson $r$ per entry")
 
     # b: category counts, both modes
     y = np.arange(len(CATS))
     h = 0.38
-    for j, (d, lab, hatch) in enumerate(
-        ((d_po, "disabled", None), (d_bo, "released (LACS + POTENCI/AIC)", "/////"))
-    ):
+    for j, (d, mode) in enumerate(((d_po, "potenci-only"), (d_bo, "both"))):
+        lab_, col = modes[mode]
         cnt = [int((d.category == c).sum()) for c in CATS]
-        bars = axb.barh(
-            y + (j - 0.5) * h,
-            cnt,
-            height=h,
-            color=[CAT_COLOR[c] for c in CATS],
-            edgecolor="#4D4D4D",
-            lw=0.4,
-            hatch=hatch,
-            label=lab,
-        )
+        bars = axb.barh(y + (j - 0.5) * h, cnt, height=h, color=col, lw=0, label=lab_)
         for bb, n in zip(bars, cnt):
             axb.text(
                 bb.get_width() * 1.15,
@@ -227,58 +225,35 @@ def main():
                 f"{n:,}",
                 va="center",
                 ha="left",
-                fontsize=5,
+                fontsize=sp.FS_SMALL,
             )
     axb.set_xscale("log")
-    axb.set_xlim(5, 6000)
+    axb.set_xlim(5, 8000)
+    axb.set_xticks([10, 100, 1000])
     axb.set_yticks(y)
     axb.set_yticklabels([CAT_LABEL[c] for c in CATS])
+    axb.tick_params(axis="y", length=0)
     axb.invert_yaxis()
     axb.set_xlabel("CheZOD1325 entries")
-    from matplotlib.patches import Patch
-
-    axb.legend(
-        handles=[
-            Patch(
-                facecolor="white",
-                edgecolor="#4D4D4D",
-                lw=0.4,
-                label="re-referencing disabled",
-            ),
-            Patch(
-                facecolor="white",
-                edgecolor="#4D4D4D",
-                lw=0.4,
-                hatch="/////",
-                label="released mode",
-            ),
-        ],
-        loc="lower center",
-        bbox_to_anchor=(0.45, 1.0),
-        borderaxespad=0.1,
-        handlelength=1.4,
-        ncol=1,
+    # the key for both modes, above a and b
+    fig.legend(
+        *axb.get_legend_handles_labels(),
+        loc="center left",
+        bbox_to_anchor=(boxes["a"][0] / fig_w, 1 - 5.2 / fig_h),
+        ncol=2,
+        handlelength=1.2,
+        columnspacing=1.6,
+        borderaxespad=0,
+        borderpad=0,
+        fontsize=sp.FS_TICK,
     )
 
-    # c: genuine discrepancies
+    # c: genuine discrepancies (without LACS)
     drv = gen.max_potenci_off_sigma >= 2.0
-    axc.scatter(
-        gen.mae[~drv],
-        gen.mean_shift[~drv],
-        s=9,
-        facecolor="white",
-        edgecolor=CAT_COLOR["genuine"],
-        lw=0.6,
-        label="residual offset < 2σ",
-    )
-    axc.scatter(
-        gen.mae[drv],
-        gen.mean_shift[drv],
-        s=9,
-        color=CAT_COLOR["genuine"],
-        lw=0,
-        label="residual offset ≥ 2σ",
-    )
+    axc.scatter(gen.mae[~drv], gen.mean_shift[~drv], s=10, facecolor="white",
+                edgecolor=ink, lw=0.7, label="Offset < 2σ")  # fmt: skip
+    axc.scatter(gen.mae[drv], gen.mean_shift[drv], s=10, color=ink, lw=0,
+                label="Offset ≥ 2σ")  # fmt: skip
     axc.axhline(0, color="#7a7a7a", lw=0.5, ls=":")
     for eid in SKIP_CO:
         r = gen[gen.bmrb_id == eid]
@@ -286,47 +261,51 @@ def main():
             axc.annotate(
                 eid,
                 (r.mae.iloc[0], r.mean_shift.iloc[0]),
-                xytext=(-3, 3),
+                xytext=(-3.5, 0),
                 textcoords="offset points",
                 ha="right",
-                fontsize=5,
+                va="center",
+                fontsize=sp.FS_SMALL,
             )
-    axc.set_xlabel("Per-entry mean absolute error (Z units)")
-    axc.set_ylabel("Mean Z difference, TriZOD − CheZOD")
+    axc.set_xlim(0, float(gen.mae.max()) * 1.12)
+    axc.set_xticks([0, 2, 4])
+    axc.set_xlabel("Mean absolute error per entry")
+    axc.set_ylabel("Mean Z difference\n(TriZOD \N{MINUS SIGN} CheZOD)", linespacing=1.1)
     axc.legend(loc="lower right", borderaxespad=0.1, handletextpad=0.2)
-    axc.set_title(f"Genuine discrepancies ({len(gen)})", fontsize=6)
+    axc.set_title("Genuine discrepancies", fontsize=sp.FS_TICK, pad=2)
 
-    # d: 15506 profile
+    # d: 15506 profile (TriZOD without LACS)
     pos, zc, zt = profile(chezod, po, "15506")
-    axd.plot(
-        pos, zc, color=sp.OKABE_ITO["orange"], lw=0.8, label="CheZOD (carbonyl omitted)"
-    )
-    axd.plot(
-        pos,
-        zt,
-        color=sp.CAT["neutral"],
-        lw=0.8,
-        label="TriZOD, re-referencing disabled",
-    )
-    axd.axhline(8, color=sp.CAT["light"], lw=0.5, ls=":")
+    axd.plot(pos, zc, color=sp.CAT["chezod"], lw=0.9, label="CheZOD")
+    axd.plot(pos, zt, color=ink, lw=0.9, label="TriZOD")
     axd.set_xlabel("Residue (BMRB 15506)")
     axd.set_ylabel("Z-score")
-    axd.legend(loc="lower center", borderaxespad=0.1, ncol=1, handlelength=1.4)
+    axd.legend(
+        loc="lower left",
+        borderaxespad=0.1,
+        ncol=2,
+        handlelength=1.0,
+        handletextpad=0.4,
+        columnspacing=0.9,
+    )
     shift = float(np.mean(zt - zc))
     axd.text(
         0.98,
         0.98,
-        f"mean difference {shift:+.2f}",
+        f"Mean difference {shift:+.2f}".replace("-", "\N{MINUS SIGN}"),
         transform=axd.transAxes,
         ha="right",
         va="top",
-        fontsize=5.5,
+        fontsize=sp.FS_SMALL,
     )
     lo = min(np.nanmin(zc), np.nanmin(zt))
-    axd.set_ylim(lo - 4, max(np.nanmax(zc), np.nanmax(zt)) + 2)
+    axd.set_ylim(lo - 4, max(np.nanmax(zc), np.nanmax(zt)) + 2.5)
+    axd.yaxis.set_major_locator(sp.mticker.MultipleLocator(5))  # integer ticks
+    axd.set_title("Largest discrepancy", fontsize=sp.FS_TICK, pad=2)
 
-    for ax, l in zip((axa, axb, axc, axd), "abcd"):
-        sp.panel_label(ax, l, x=-0.24 if l != "b" else -0.42, y=1.03)
+    # panel letters, one baseline, left of each panel's y label
+    for key, dx in (("a", 11.0), ("b", 16.5), ("c", 13.5), ("d", 10.0)):
+        sp.fig_label(fig, key, boxes[key][0] - dx, 0.0)
     out = sp.save(fig, "S17")
 
     dd = sp.out_dir("suppfigs_b_data")

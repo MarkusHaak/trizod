@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Fig. 3a -- reliability against size across the cumulative tiers.
+"""Fig. 3a -- stricter tiers agree better with replicate measurements.
 
-The x axis of both plots is the number of training representatives a user gets at
-each tier (``train/<tier>/train_<tier>_best.fasta``; frozen 2026-10 split, so these
-counts move with rebuild fix (a)). Tiers are CUMULATIVE: a chain belongs to every tier
-at which it is scored. Only non-bound chains are used, and every chain carries its own
-tier's labels (``scores/<tier>/scores.json``). Definitions are in
+A dot plot with one row per CUMULATIVE tier (a chain belongs to every tier at which it
+is scored) and two measures side by side, both with 95 % intervals from 1,000
+bootstrap resamples of sequences. Only non-bound chains are used, and every chain
+carries its own tier's labels (``scores/<tier>/scores.json``). Definitions are in
 ``fig3_replicates.py``:
 
-(a1) Leave-one-entry-out replicate deviation. For each non-bound chain whose sequence
-     has non-bound chains in >= 3 BMRB entries: mean |G - consensus| over residues,
-     where the consensus is the per-residue median of the replicates from the OTHER
-     entries. Median over chains with a 95 % CI from resampling sequences; the same
-     median within strata of the chain's median shift count k (<= 12, 13-17, 18-21).
-     The table under the plots gives the share of chains deviating by > 0.1 and the
-     mean flip rate at G = 0.65.
-(a2) Residue-level Pearson r of G between two non-bound chains of identical sequence
-     from different entries, pooled over residues; <= 20 seeded pairs per sequence and
-     tier; 95 % CI from resampling sequences. Open markers: the same r after
-     re-weighting pairs so that the residue G distribution matches the unfiltered tier
-     (a check that a higher r is not a narrower G range).
+* left -- leave-one-entry-out deviation. For each non-bound chain whose sequence has
+  non-bound chains in >= 3 BMRB entries: mean |G - consensus| over residues, where the
+  consensus is the per-residue median of the replicates from the OTHER entries; the
+  median over chains is plotted.
+* right -- residue-level Pearson r of G between two non-bound chains of identical
+  sequence from different entries, pooled over residues; <= 20 seeded pairs per
+  sequence and tier.
+
+The x scales are shared with Fig. 3b (``fig3b_conditions.py``: ``XLIM_DEV``,
+``XLIM_R``), so the tier effect and the condition effect can be compared by eye. The
+statistics the panel no longer draws (the k strata, the share of chains deviating by
+> 0.1, the flip rate, r re-weighted to the unfiltered G distribution, the training
+set sizes) are still written to ``fig3_data`` and ``fig3a_numbers.json``; Supplementary
+Fig. S7 shows the k strata.
 
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig3a_reliability.py \
@@ -39,9 +40,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fig3_replicates as fr  # noqa: E402
 import style_paper as sp  # noqa: E402
 
-FS_SMALL = 5.0
-K_CENTRES = {"k ≤ 12": 6.5, "k 13–17": 15.0, "k 18–21": 19.5}
-K_DODGE = {"k ≤ 12": -0.07, "k 13–17": 0.0, "k 18–21": 0.07}  # thousands of reps
+# --- layout shared with fig3b_conditions.py (keep the two in step) -------------------
+# a and b are half-width cells (W_SINGLE) set side by side in Fig. 3 at 1:1.
+W, H = sp.W_SINGLE, 38.0  # mm
+AX_X = (15.0, 48.5)  # left edge of the two axes, mm
+AX_W = 26.0  # width of each axes, mm
+AX_Y0, AX_H = 11.0, 22.5  # bottom and height of the axes, mm
+XLIM_DEV, XT_DEV = (0.0, 0.09), [0, 0.03, 0.06, 0.09]
+XLIM_R, XT_R = (0.4, 1.0), [0.4, 0.6, 0.8, 1.0]
+# One x label per measure, identical in a and b (and in Supplementary Fig. S7a, e): in a
+# the difference is taken from the consensus of a chain's replicates, in b between the two
+# chains of a pair; the caption says which.
+XLABEL_DEV = "Difference from\nreplicates (|ΔG|)"
+XLABEL_R = "Replicate\ncorrelation ($\\mathit{r}$)"
+MS = 5.0  # marker size, pt
+EDGE = "#262626"  # dark marker edge keeps the pale unfiltered tier visible
+CI_COLOR = "#4D4D4D"
+GRID = "#E6E6E6"
 
 
 def n_reps() -> dict:
@@ -69,134 +84,56 @@ def compute():
     return D, L, S, P, R
 
 
-def draw(S: pd.DataFrame, R: pd.DataFrame, reps: dict):
-    from matplotlib.lines import Line2D
-
-    fig = sp.figure(sp.W_SINGLE, 72.0)
-    W, H = sp.W_SINGLE, 72.0
-
-    def ax_mm(x, y, w, h):
-        return fig.add_axes([x / W, y / H, w / W, h / H])
-
-    xk = {t: reps[t] / 1000 for t in sp.TIERS}
-    xlim = (1.3, 6.4)
-
-    # ------------------------------------------------------------------ a1
-    ax = ax_mm(11.5, 27.0, 36.0, 37.0)
-    for kb in fr.K_LABELS:
-        s = S[S.kbin == kb].set_index("tier").loc[sp.TIERS]
-        col = sp.k_color(K_CENTRES[kb])
-        xs = [xk[t] + K_DODGE[kb] for t in sp.TIERS]
-        ax.plot(xs, s.median_dev, color=col, lw=0.6, ls="--", zorder=2)
-        ax.scatter(xs, s.median_dev, s=6, color=col, zorder=3, lw=0)
-    s = S[S.kbin == "all"].set_index("tier").loc[sp.TIERS]
-    ax.plot(
-        [xk[t] for t in sp.TIERS],
-        s.median_dev,
-        color=sp.CAT["neutral"],
-        lw=0.9,
-        zorder=4,
-    )
-    for t in sp.TIERS:
-        r = s.loc[t]
-        ax.errorbar(
-            xk[t], r.median_dev,
-            yerr=[[r.median_dev - r.median_dev_lo], [r.median_dev_hi - r.median_dev]],
-            fmt=sp.TIER_MARKERS[t], ms=3.6, color=sp.TIER_COLORS[t], mec="white", mew=0.3,
-            elinewidth=0.6, capsize=0, zorder=5,
-        )  # fmt: skip
-    ax.set_xlim(*xlim)
-    ax.set_ylim(0.0, 0.075)
-    ax.set_yticks([0, 0.02, 0.04, 0.06])
-    ax.set_xlabel("Training representatives (×1,000)")
-    ax.set_ylabel("Median deviation from replicates (|ΔG|)")
-    h = [Line2D([], [], color=sp.CAT["neutral"], lw=0.9, label="all chains (95 % CI)")]
-    h += [
-        Line2D([], [], color=sp.k_color(K_CENTRES[kb]), lw=0.6, ls="--", marker="o", ms=2,
-               label=f"chains with median {kb}")
-        for kb in fr.K_LABELS
-    ]  # fmt: skip
-    ax.legend(handles=h, loc="lower right", handlelength=1.8, handletextpad=0.4,
-              labelspacing=0.25, borderaxespad=0.2, fontsize=FS_SMALL)  # fmt: skip
-    ax.text(
-        -0.30,
-        1.04,
-        "a1",
-        transform=ax.transAxes,
-        fontsize=6.5,
-        fontweight="bold",
-        va="bottom",
-    )
-    ax.set_title("Leave-one-entry-out deviation", fontsize=6, loc="left", pad=2)
-
-    # ------------------------------------------------------------------ a2
-    ax2 = ax_mm(59.5, 27.0, 26.0, 37.0)
-    R = R.set_index("tier").loc[sp.TIERS]
-    ax2.plot([xk[t] for t in sp.TIERS], R.r, color=sp.CAT["neutral"], lw=0.9, zorder=4)
-    for t in sp.TIERS:
-        r = R.loc[t]
-        ax2.errorbar(
-            xk[t], r.r, yerr=[[r.r - r.r_lo], [r.r_hi - r.r]], fmt=sp.TIER_MARKERS[t], ms=3.6,
-            color=sp.TIER_COLORS[t], mec="white", mew=0.3, elinewidth=0.6, capsize=0, zorder=5,
-        )  # fmt: skip
-        if t == "unfiltered":
-            continue  # the reference distribution itself
-        ax2.scatter(xk[t] + 0.22, r.r_gmatched, s=9, marker=sp.TIER_MARKERS[t], facecolor="none",
-                    edgecolor=sp.TIER_COLORS[t], lw=0.5, zorder=5)  # fmt: skip
-    ax2.set_xlim(*xlim)
-    ax2.set_ylim(0.6, 1.0)
-    ax2.set_xlabel("Training representatives (×1,000)")
-    ax2.set_ylabel("Replicate Pearson r (residues)")
-    h2 = [
-        Line2D([], [], color=sp.CAT["neutral"], lw=0.9, marker="o", ms=2.5, label="pooled r (95 % CI)"),
-        Line2D([], [], ls="", marker="o", ms=2.8, mfc="none", mec=sp.CAT["neutral"], mew=0.5,
-               label="G range matched\nto unfiltered"),
-    ]  # fmt: skip
-    ax2.legend(handles=h2, loc="lower left", handlelength=1.4, handletextpad=0.4,
-               labelspacing=0.3, borderaxespad=0.2, fontsize=FS_SMALL)  # fmt: skip
-    ax2.text(
-        -0.40,
-        1.04,
-        "a2",
-        transform=ax2.transAxes,
-        fontsize=6.5,
-        fontweight="bold",
-        va="bottom",
-    )
-    ax2.set_title("Replicate correlation", fontsize=6, loc="left", pad=2)
-
-    # ------------------------------------------------------------------ table
-    s_all = S[S.kbin == "all"].set_index("tier")
-    rows = [
-        ("Training representatives", [f"{reps[t]:,}" for t in sp.TIERS]),
-        ("Chains in a1", [f"{int(s_all.loc[t, 'n_chains']):,}" for t in sp.TIERS]),
-        ("Chains deviating > 0.1", [f"{100 * s_all.loc[t, 'share_dev_gt_0.1']:.1f} %" for t in sp.TIERS]),
-        ("Flip rate at G = 0.65", [f"{100 * s_all.loc[t, 'flip']:.1f} %" for t in sp.TIERS]),
-        ("Chain pairs in a2", [f"{int(R.loc[t, 'n_pairs']):,}" for t in sp.TIERS]),
-    ]  # fmt: skip
-    x0_lab, x_cols = 2.0, [43.0, 55.0, 67.0, 79.0]
-    y_top = 15.6
-    dy = 2.55
-    renderer = fig.canvas.get_renderer()
-    for t, xc in zip(sp.TIERS, x_cols):
-        txt = fig.text((xc + 1.0) / W, y_top / H, t, ha="center", va="center", fontsize=FS_SMALL + 0.3,
-                       color=sp.TIER_COLORS[t], fontweight="bold")  # fmt: skip
-        half_w = txt.get_window_extent(renderer).width / fig.dpi / sp.MM / 2
-        fig.add_artist(
-            Line2D([(xc + 1.0 - half_w - 1.6) / W], [y_top / H], marker=sp.TIER_MARKERS[t], ms=3.0,
-                   color=sp.TIER_COLORS[t], mec="white", mew=0.3, ls="")
-        )  # fmt: skip
-    fig.add_artist(
-        Line2D(
-            [x0_lab / W, 86.0 / W], [(y_top - 1.35) / H] * 2, color="#999999", lw=0.4
+def dot_axes(fig, n_rows: int, labels: list[str]):
+    """The two side-by-side dot-plot axes of Fig. 3a/3b: rows top to bottom, shared y."""
+    axes = []
+    for i, x0 in enumerate(AX_X):
+        ax = fig.add_axes(
+            [x0 / W, AX_Y0 / H, AX_W / W, AX_H / H], sharey=axes[0] if axes else None
         )
-    )
-    for i, (lab, vals) in enumerate(rows):
-        y = y_top - (i + 1) * dy - 0.3
-        fig.text(x0_lab / W, y / H, lab, ha="left", va="center", fontsize=FS_SMALL)
-        for v, xc in zip(vals, x_cols):
-            fig.text(xc / W, y / H, v, ha="center", va="center", fontsize=FS_SMALL)
+        ax.set_ylim(n_rows - 0.4, -0.6)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+        ax.set_yticks(range(n_rows))
+        if i == 0:
+            ax.set_yticklabels(labels, fontsize=sp.FS_BODY)
+        else:
+            ax.tick_params(axis="y", labelleft=False)
+        ax.grid(axis="x", color=GRID, lw=0.4, zorder=0)
+        ax.set_axisbelow(True)
+        axes.append(ax)
+    axes[0].set_xlim(*XLIM_DEV)
+    axes[0].set_xticks(XT_DEV)
+    axes[0].set_xticklabels(["0", "0.03", "0.06", "0.09"])
+    axes[1].set_xlim(*XLIM_R)
+    axes[1].set_xticks(XT_R)
+    return axes
 
+
+def dot(ax, x, lo, hi, y, color, marker="o"):
+    """One estimate with its 95 % interval."""
+    ax.plot([lo, hi], [y, y], color=CI_COLOR, lw=0.8, solid_capstyle="butt", zorder=2)
+    ax.plot(x, y, ls="", marker=marker, ms=MS, mfc=color, mec=EDGE, mew=0.5, zorder=3)
+
+
+def draw(S: pd.DataFrame, R: pd.DataFrame):
+    fig = sp.figure(W, H)
+    ax_d, ax_r = dot_axes(fig, len(sp.TIERS), sp.TIERS)
+    s = S[S.kbin == "all"].set_index("tier").loc[sp.TIERS]
+    R = R.set_index("tier").loc[sp.TIERS]
+    for y, t in enumerate(sp.TIERS):
+        c = sp.TIER_COLORS[t]
+        dot(
+            ax_d,
+            s.loc[t, "median_dev"],
+            s.loc[t, "median_dev_lo"],
+            s.loc[t, "median_dev_hi"],
+            y,
+            c,
+        )
+        dot(ax_r, R.loc[t, "r"], R.loc[t, "r_lo"], R.loc[t, "r_hi"], y, c)  # fmt: skip
+    ax_d.set_xlabel(XLABEL_DEV)
+    ax_r.set_xlabel(XLABEL_R)
     sp.fig_label(fig, "a", 0.0, 0.0)
     return fig
 
@@ -211,7 +148,7 @@ def main(argv=None) -> None:
     S.to_csv(out / "fig3a1_loo_summary.csv", index=False)
     P.drop(columns=["hist"]).to_csv(out / "fig3a2_pairs.csv", index=False)
     R.to_csv(out / "fig3a2_r_summary.csv", index=False)
-    fig = draw(S, R.copy(), reps)
+    fig = draw(S, R.copy())
     pdf = sp.save(fig, "fig3a")
 
     s_all = S[S.kbin == "all"].set_index("tier")
@@ -227,6 +164,8 @@ def main(argv=None) -> None:
             "entries, both scored at the tier (tier labels); <= 20 seeded pairs per sequence and tier; pairs need >= 10 "
             "co-scored residues; 95 % CI from 1,000 sequence bootstraps",
             "r_gmatched": "pooled r after re-weighting pairs so the residue pair-mean-G histogram (10 bins) matches the unfiltered tier",
+            "figure": "panel a draws the 'all' rows of a1 (left) and r of a2 (right); the k strata, the >0.1 share, "
+            "the flip rate, r_gmatched and training_reps are data only",
         },
         "training_reps": reps,
         "tolerant_label_chains_differing_from_unfiltered": fr.label_differences(D)[

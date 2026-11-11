@@ -33,7 +33,7 @@ sys.path.insert(0, str(HERE))
 import style_paper as sp  # noqa: E402
 
 CACHE = sp.TMP / "paper_figures" / "raw_scan.json"
-SCAN_VERSION = 2
+SCAN_VERSION = 3  # 3: pH*/pD rows count as a deposited pH
 
 _FRAME_SPLIT = re.compile(r"(?m)^[ \t]*save_\S*[ \t]*$")
 _SUB = re.compile(r"_Entry\.Submission_date\s+(\S+)")
@@ -125,8 +125,11 @@ def scan_file(path: str) -> tuple[str, dict]:
                 if t == "pressure":
                     c["pressure_raw"] = [val, unit]
                     c["pressure_bar"] = to_bar(val, unit)
-                elif t == "ph":
-                    c["ph"] = _num(val)
+                elif t in ("ph", "ph*", "pd", "pd*"):
+                    # pH* (meter reading in D2O) and pD count as a deposited pH, as in
+                    # the parser; a plain pH row wins when an entry has both
+                    if t == "ph" or c["ph"] is None:
+                        c["ph"] = _num(val)
                 elif "ionic strength" in t:
                     c["ionic"] = _num(val)
                 elif "temp" in t:

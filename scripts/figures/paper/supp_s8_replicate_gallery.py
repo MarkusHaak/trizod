@@ -9,18 +9,22 @@ a-c  The case-study clusters of ubiquitin (seed chain 50330_1_1_1), the prion pr
      script reruns the same search with alignment strings and maps every member residue
      onto the seed's residue numbering; residues in insertions relative to the seed are
      not drawn. Per-residue Z-scores (top) and G-scores (bottom) are drawn as in
-     Fig. 1a: non-bound chains coloured by their median shift count k (classes <= 6,
-     7-15, 16-21), chains with cosolvent evidence or a non-native deposited physical
-     state dashed. Bound chains, which Fig. 1a leaves out, are drawn thin and grey.
+     Fig. 2a: bound chains are left out; chains measured as native proteins in aqueous
+     solution are coloured by their median shift count k (classes <= 6, 7-15, 16-21);
+     chains measured in another sample type are light grey (``perturbed``: cosolvent
+     evidence, a membrane mimetic, a solid-state sample, a non-native deposited physical
+     state, or a pressure of at least 400 bar).
 d    A gallery of ``N_GALLERY`` replicate groups drawn with ``GALLERY_SEED`` from all
      sequences whose non-bound chains come from at least ``MIN_ENTRIES`` entries
      (exact sequence identity; sequences sorted lexicographically before the draw), each
-     drawn as in Fig. 1a.
+     drawn as a-c. Titles name the protein (``GALLERY_NAMES``, from the BMRB entry titles,
+     where the deposited entity name is a lab code or generic).
 
 Labels are the release Parquet's (``gscores``, ``zscores``, ``k``, ``mask``). Unlike
-Fig. 1a, the dashed style reads the Parquet's ``cosolvent_evidence`` and
-``physical_state`` and not the raw files, so samples perturbed only by pressure are
-not dashed.
+Fig. 2a, the grey class reads the Parquet's sample annotations (``cosolvent_evidence``,
+``membrane_mimetic``, ``sample_state_evidence``, ``physical_state``, ``pressure_bar``)
+and not the raw files. A few alpha-synuclein fibril and micelle samples (31068, 18243,
+16302) escape these annotations and stay coloured.
 
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s8_replicate_gallery.py \
@@ -32,6 +36,7 @@ search is cached in ``tmp/paper_figs/s8_cases`` (``--refresh`` reruns it).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -43,13 +48,22 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import style_paper as sp  # noqa: E402
 
+# italic k in the same sans-serif face as the text (as Fig. 2a; mathtext defaults to DejaVu)
+sp.plt.rcParams.update(
+    {
+        "mathtext.fontset": "custom",
+        "mathtext.it": "Arial:italic",
+        "mathtext.rm": "Arial",
+    }
+)
+
 CASES = {  # panel -> (name, seed chain)
     "a": ("Ubiquitin", "50330_1_1_1"),
     "b": ("Prion protein", "16616_1_1_1"),
     "c": ("α-Synuclein", "6968_1_1_1"),
 }
-PLAN_COUNTS = {  # writing plan / numbers.tex (chains, entries) for the self-check
-    "50330_1_1_1": (119, 103),
+PLAN_COUNTS = {  # numbers.tex \nCase*Chains / \nCase*Entries, for the self-check
+    "50330_1_1_1": (118, 102),
     "16616_1_1_1": (36, 34),
     "6968_1_1_1": (108, 71),
 }
@@ -57,13 +71,40 @@ MIN_FIDENT, MIN_COV = 0.8, 0.9
 GALLERY_SEED = 2026
 N_GALLERY = 12
 MIN_ENTRIES = 3
-NON_NATIVE_STATES = {"denatured", "unfolded", "molten globule", "misfolded"}
+# A chain is drawn grey ("other sample") when its sample is not a native protein in aqueous
+# solution: a cosolvent (denaturant, alcohol, ...), a membrane mimetic, the solid state, a
+# non-native deposited physical state, or a pressure of at least HIGH_PRESSURE_BAR.
+NON_NATIVE_STATES = {"denatured", "unfolded", "molten globule", "misfolded", "fibril",
+                     "fibrils", "amyloid fibril"}  # fmt: skip
+HIGH_PRESSURE_BAR = 400.0  # as Fig. 2a
+OTHER_LABEL = "cosolvent, micelles, solid state, high pressure or non-native state"
 CACHE = sp.TMP / "paper_figs" / "s8_cases"
 DATA_SUBDIR = "suppfigs_c_data"  # under --out-dir
 Z_LIM = (-4.0, 18.0)
 G_LIM = (-0.03, 1.03)
-FS_SMALL = 5.3
-DASH = (0, (3.2, 1.6))
+FS_SMALL = sp.FS_SMALL
+# deposited entity names that say nothing about the protein; the gallery titles name the
+# BMRB entry instead (only for groups that GALLERY_NAMES does not name)
+GENERIC_NAME = re.compile(
+    r"(entity|entity[ _]?\d+|polymer|protein|peptide|chain[ _]?\w?|\w{0,2})", re.I
+)
+# Gallery titles: the protein, named from the BMRB entry title where the deposited entity
+# name is a lab code or generic (keyed by any entry of the group; checked 11 Nov 2026
+# against the entry titles of the 2026-11 draw).
+GALLERY_NAMES = {
+    "16727": "Culbertcidin",  # antimicrobial peptide
+    "1481": "Salmon calcitonin",  # entity "calcitonin C"
+    "19128": "Contryphan",  # entity "cIn936", a Conus venom contryphan
+    "1072": "Ribonuclease A",
+    "16275": "Apelin-17",
+    "16435": "Leech tryptase inhibitor",  # entity "LDTI"
+    "27317": "HBV core protein",  # entity "Cp149" (hepatitis B virus capsid)
+    "27808": "Ubiquitin K63C",  # entity "Ubiquitin_K63C-PA"
+    "31115": "Protein G B1 domain",  # entity "entity_1" (streptococcal protein GB1)
+    "4233": "ω-atracotoxin-Hv1a",  # entity "omega-atracotoxin-Hv1a"
+    "52965": "Trpzip2",  # entity "entity_1" (tryptophan zipper 2)
+    "50676": "Thrombin",  # entity "entity_1" (PPACK-thrombin)
+}
 
 
 # --------------------------------------------------------------------------------
@@ -83,13 +124,21 @@ def load() -> pd.DataFrame:
             "is_bound",
             "physical_state",
             "cosolvent_evidence",
+            "sample_state_evidence",
+            "membrane_mimetic",
+            "pressure_bar",
             "split",
         ]  # fmt: skip
     )
     df["entry_id"] = df.entry_id.astype(str)
     state = df.physical_state.fillna("").str.lower()
-    df["perturbed"] = df.cosolvent_evidence.fillna(False).astype(bool) | state.isin(
-        NON_NATIVE_STATES
+    # "perturbed" = another sample type than a native protein in aqueous solution
+    df["perturbed"] = (
+        df.cosolvent_evidence.fillna(False).astype(bool)
+        | state.isin(NON_NATIVE_STATES)
+        | (df.sample_state_evidence.fillna("") == "solid")
+        | df.membrane_mimetic.notna()
+        | (df.pressure_bar.fillna(0) >= HIGH_PRESSURE_BAR)
     )
     med_k = []
     for k, m in zip(df.k, df["mask"]):
@@ -189,40 +238,84 @@ def gallery(df: pd.DataFrame) -> tuple[list, int]:
 
 
 # --------------------------------------------------------------------------------
-# plot
+# plot (drawn as Fig. 2a: native solution chains coloured by median k, the rest grey)
 # --------------------------------------------------------------------------------
-FIG_W, FIG_H = sp.W_DOUBLE, 200.0
+FIG_W, FIG_H = sp.W_DOUBLE, 173.0
+LEFT = 14.0  # left edge of the first column of axes (room for the y labels)
+CASE_W, CASE_GAP, CASE_TOP, CASE_H = 45.0, 5.5, 12.5, 19.0
+GAL_COLS, GAL_GAP, GAL_TOP, GAL_H, GAL_ROW = 4, 5.0, 72.0, 11.5, 34.0
+GAL_W = (FIG_W - LEFT - 1.0 - (GAL_COLS - 1) * GAL_GAP) / GAL_COLS
+GREY = "#D2D2D2"  # chains measured in another sample type (as Fig. 2a)
 
 
 def _ax(fig, left, top, w, h):
     return fig.add_axes([left / FIG_W, 1 - (top + h) / FIG_H, w / FIG_W, h / FIG_H])
 
 
-def _draw(ax, x, y, row_bound, row_k, row_pert, lw=0.5):
-    if row_bound:
-        ax.plot(x, y, color="0.78", lw=0.35, zorder=1)
-    else:
-        ax.plot(x, y, color=sp.K_CLASS_COLORS.get(row_k, "0.5"),
-                lw=lw * (1.5 if row_pert else 1.0), ls=DASH if row_pert else "-",
-                alpha=1.0 if row_pert else 0.8, zorder=3 if row_pert else 2)  # fmt: skip
+def _draw_group(az, ag, x, rows, lw):
+    """Grey chains (other sample types) behind, coloured chains (median-k class) on top."""
+    for r in rows:
+        if r["other"]:
+            az.plot(x, r["z"], color=GREY, lw=lw * 0.85, zorder=1)
+            ag.plot(x, r["g"], color=GREY, lw=lw * 0.85, zorder=1)
+    for r in rows:
+        if not r["other"]:
+            c = sp.K_CLASS_COLORS.get(r["k_class"], "0.5")
+            az.plot(x, r["z"], color=c, lw=lw, alpha=0.9, zorder=2)
+            ag.plot(x, r["g"], color=c, lw=lw, alpha=0.9, zorder=2)
 
 
 def _style(az, ag, n, show_xlabel, ylab=True, small=False):
-    for a, lim, thr in ((az, Z_LIM, 8.0), (ag, G_LIM, sp.G_DIS)):
+    for a, lim in ((az, Z_LIM), (ag, G_LIM)):
         a.set_xlim(0.3, n + 0.7)
         a.set_ylim(*lim)
-        a.axhline(thr, color="0.55", lw=0.45, ls=":", zorder=0)
+        a.xaxis.set_major_locator(
+            sp.mticker.MaxNLocator(nbins=4, integer=True, min_n_ticks=2)
+        )
     az.tick_params(axis="x", labelbottom=False)
+    az.set_yticks([0, 10] if small else [0, 5, 10, 15])  # gallery axes are short
+    ag.set_yticks([0, 0.5, 1.0], ["0", "0.5", "1"])
     if ylab:
-        az.set_ylabel("Z", labelpad=1 if small else 2)
-        ag.set_ylabel("G", labelpad=1 if small else 2)
+        az.set_ylabel("Z-score")
+        ag.set_ylabel("G-score")
     else:
         az.tick_params(axis="y", labelleft=False)
         ag.tick_params(axis="y", labelleft=False)
-    az.set_yticks([0, 8, 16])
-    ag.set_yticks([0, 0.5, 1])
     if show_xlabel:
-        ag.set_xlabel("residue (seed numbering)" if not small else "residue")
+        ag.set_xlabel("Residue")
+
+
+def _case_rows(P: pd.DataFrame) -> list:
+    """Non-bound case members, as Fig. 2a (a partner changes the measured state)."""
+    P = P[~P.is_bound.astype(bool)]
+    return [{"z": r.z, "g": r.g, "k_class": r.k_class, "other": bool(r.perturbed)}
+            for r in P.itertuples()]  # fmt: skip
+
+
+def _gallery_rows(grp: pd.DataFrame) -> list:
+    rows = []
+    for r in grp.itertuples():
+        m = np.asarray(r.mask, bool)
+        rows.append({"z": np.where(m, np.asarray(r.zscores, float), np.nan),
+                     "g": np.where(m, np.asarray(r.gscores, float), np.nan),
+                     "k_class": r.k_class, "other": bool(r.perturbed)})  # fmt: skip
+    return rows
+
+
+def gallery_name(grp: pd.DataFrame) -> str:
+    """Protein name of a gallery group: curated (``GALLERY_NAMES``), else the entity name."""
+    for e in sorted(grp.entry_id.astype(str), key=int):
+        if e in GALLERY_NAMES:
+            return GALLERY_NAMES[e]
+    name = str(grp.entity_name.iloc[0]) if pd.notna(grp.entity_name.iloc[0]) else ""
+    name = name.replace("_", " ").strip()
+    if GENERIC_NAME.fullmatch(name):
+        return f"BMRB {min(grp.entry_id.astype(str), key=int)}"
+    name = re.sub(r"^omega-", "ω-", name, flags=re.I)
+    name = (
+        name[0].upper() + name[1:] if name[:1].islower() and name[:2] != "ω-" else name
+    )
+    return name if len(name) <= 26 else name[:25] + "…"
 
 
 def plot(
@@ -232,57 +325,43 @@ def plot(
 
     fig = sp.figure(FIG_W, FIG_H)
     # ---- a-c: case clusters ---------------------------------------------------
-    w, gap = 49.0, 10.5
     for j, (letter, (name, seed)) in enumerate(CASES.items()):
-        P = cases[seed]
         n = len(df_idx.loc[seed, "sequence"])
-        left = 12.0 + j * (w + gap)
-        az, ag = _ax(fig, left, 12.0, w, 22.0), _ax(fig, left, 37.0, w, 22.0)
-        x = np.arange(1, n + 1)
-        for bound_first in (True, False):
-            for r in P[P.is_bound == bound_first].sort_values("perturbed").itertuples():
-                _draw(az, x, r.z, r.is_bound, r.k_class, r.perturbed)
-                _draw(ag, x, r.g, r.is_bound, r.k_class, r.perturbed)
+        left = LEFT + j * (CASE_W + CASE_GAP)
+        az = _ax(fig, left, CASE_TOP, CASE_W, CASE_H)
+        ag = _ax(fig, left, CASE_TOP + CASE_H + 2.0, CASE_W, CASE_H)
+        _draw_group(az, ag, np.arange(1, n + 1), _case_rows(cases[seed]), lw=0.55)
         _style(az, ag, n, show_xlabel=True, ylab=(j == 0))
-        nb = int((~P.is_bound).sum())
-        az.set_title(f"{name} · {len(P)} chains, {P.entry_id.nunique()} entries "
-                     f"({nb} non-bound)", fontsize=5.5, pad=2, loc="left")  # fmt: skip
-        sp.fig_label(fig, letter, left - 11.0, 6.0)
-    handles = [Line2D([], [], color=sp.K_CLASS_COLORS[c], lw=1.0, label=f"median k {c}")
+        az.set_title(name, fontsize=sp.FS_BODY, pad=2, loc="left")
+        sp.fig_label(fig, letter, 0.0 if j == 0 else left - 4.5, 7.5)
+
+    # one-row key above everything, as Fig. 2a
+    handles = [Line2D([], [], color=sp.K_CLASS_COLORS[c], lw=1.4, label=c)
                for c in sp.K_CLASSES]  # fmt: skip
-    handles += [
-        Line2D(
-            [], [], color="0.3", lw=0.9, ls=DASH, label="cosolvent or non-native state"
-        ),
-        Line2D([], [], color="0.78", lw=0.6, label="bound chain"),
-    ]
-    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(12.0 / FIG_W, 1 - 1.0 / FIG_H),
-               ncol=5, fontsize=5.5, handlelength=2.0, columnspacing=1.2, borderaxespad=0)  # fmt: skip
+    handles.append(Line2D([], [], color=GREY, lw=1.4, label=OTHER_LABEL))
+    fig.text(LEFT / FIG_W, 1 - 2.2 / FIG_H, r"Median $\mathit{k}$ of chain:",
+             fontsize=sp.FS_TICK, va="center", ha="left")  # fmt: skip
+    fig.legend(handles=handles, loc="center left",
+               bbox_to_anchor=((LEFT + 23.0) / FIG_W, 1 - 2.2 / FIG_H), ncol=len(handles),
+               handlelength=1.6, handletextpad=0.5, columnspacing=1.4, borderaxespad=0,
+               borderpad=0, fontsize=sp.FS_TICK)  # fmt: skip
 
     # ---- d: seeded gallery ----------------------------------------------------
-    cols, gw, ggap, top0, gh, rgap = 4, 36.5, 7.0, 82.0, 13.5, 13.0
+    n_rows = int(np.ceil(len(gal) / GAL_COLS))
     for i, seq in enumerate(gal):
-        c, rr = i % cols, i // cols
-        left = 12.0 + c * (gw + ggap)
-        top = top0 + rr * (2 * gh + 1.5 + rgap)
-        az, ag = _ax(fig, left, top, gw, gh), _ax(fig, left, top + gh + 1.5, gw, gh)
+        c, rr = i % GAL_COLS, i // GAL_COLS
+        left = LEFT + c * (GAL_W + GAL_GAP)
+        top = GAL_TOP + rr * GAL_ROW
+        az = _ax(fig, left, top, GAL_W, GAL_H)
+        ag = _ax(fig, left, top + GAL_H + 1.5, GAL_W, GAL_H)
         grp = by_seq[seq]
-        x = np.arange(1, len(seq) + 1)
-        for r in grp.sort_values("perturbed").itertuples():
-            m = np.asarray(r.mask, bool)
-            z = np.where(m, np.asarray(r.zscores, float), np.nan)
-            g = np.where(m, np.asarray(r.gscores, float), np.nan)
-            _draw(az, x, z, False, r.k_class, r.perturbed, lw=0.45)
-            _draw(ag, x, g, False, r.k_class, r.perturbed, lw=0.45)
-        _style(az, ag, len(seq), show_xlabel=(rr == 2), ylab=(c == 0), small=True)
-        name = str(grp.entity_name.iloc[0]) if pd.notna(grp.entity_name.iloc[0]) else ""
-        name = name if len(name) <= 30 else name[:28] + "…"
-        az.set_title(f"{name}\n{len(seq)} aa · {len(grp)} chains, {grp.entry_id.nunique()} entries",
-                     fontsize=FS_SMALL, pad=1.5, loc="left", linespacing=1.1)  # fmt: skip
-    sp.fig_label(fig, "d", 2.0, 72.0)
-    fig.text(12.0 / FIG_W, 1 - 72.5 / FIG_H,
-             f"{N_GALLERY} of {n_eligible:,} sequences with non-bound chains in ≥ {MIN_ENTRIES} entries, "
-             f"drawn with seed {GALLERY_SEED}", fontsize=5.5, va="top")  # fmt: skip
+        _draw_group(az, ag, np.arange(1, len(seq) + 1), _gallery_rows(grp), lw=0.5)
+        _style(
+            az, ag, len(seq), show_xlabel=(rr == n_rows - 1), ylab=(c == 0), small=True
+        )
+        az.set_title(f"{gallery_name(grp)}\n{len(seq)} aa · {grp.entry_id.nunique()} entries",
+                     fontsize=FS_SMALL, pad=1.5, loc="left", linespacing=1.15)  # fmt: skip
+    sp.fig_label(fig, "d", 0.0, GAL_TOP - 9.5)
     sp.save(fig, "S8")
 
 

@@ -234,29 +234,33 @@ def test_ceilings(df: pd.DataFrame, cap: int = 20) -> pd.DataFrame:
 
 
 def plot(B: pd.DataFrame, C: pd.DataFrame, TC: pd.DataFrame):
-    fig = sp.figure(sp.W_DOUBLE, 92)
-    cols = [("rho_res", "Spearman ρ, per residue"), ("auc_res", "AUC (G > 0.65), per residue"),
-            ("rho_chain", "Spearman ρ, mean per chain"), ("auc_chain", "AUC (G > 0.65), mean per chain")]  # fmt: skip
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    W, H = sp.W_DOUBLE, 99.0
+    fig = sp.figure(W, H)
+
+    def ax_mm(left, top, w, h):
+        return fig.add_axes([left / W, 1 - (top + h) / H, w / W, h / H])
+
+    cols = [("rho_res", "Spearman ρ\nper residue"), ("auc_res", "AUC, G > 0.65\nper residue"),
+            ("rho_chain", "Spearman ρ\nmean per chain"), ("auc_chain", "AUC, G > 0.65\nmean per chain")]  # fmt: skip
     x = np.arange(len(sp.TIERS))
     mstyle = {"per-amino-acid mean": {"color": sp.CAT["light"], "marker": "s", "mec": "#7a7a7a"},
-              "one-hot ridge": {"color": sp.OKABE_ITO["blue"], "marker": "o", "mec": sp.OKABE_ITO["blue"]}}  # fmt: skip
-    axes = {}
+              "one-hot ridge": {"color": "black", "marker": "o", "mec": "black"}}  # fmt: skip
+    band, rep = "#E3E3E3", "#7a7a7a"
+    chance = "#9A9A9A"  # AUC 0.5: thin solid line, labelled in the panel
+    left0, gap, pw, ph = 16.0, 9.5, 28.6, 25.0
+    tops = (19.0, 61.0)
     for i, name in enumerate(TESTS.values()):
         for j, (col, lab) in enumerate(cols):
-            ax = fig.add_axes([0.075 + j * 0.238, 0.525 - i * 0.445, 0.18, 0.325])
-            axes[(i, j)] = ax
+            ax = ax_mm(left0 + j * (pw + gap), tops[i], pw, ph)
             cs = C.set_index("tier")
             lo, hi = cs.loc["unfiltered", col], cs.loc["strict", col]
-            ax.axhspan(min(lo, hi), max(lo, hi), color="#E3E3E3", lw=0, zorder=0)
-            ax.axhline(hi, color="#7a7a7a", lw=0.6, ls="--", zorder=1)
+            ax.axhspan(min(lo, hi), max(lo, hi), color=band, lw=0, zorder=0)
+            ax.axhline(hi, color=rep, lw=0.6, ls="--", zorder=1)
             if col == "rho_res":
-                ax.axhline(
-                    cs.loc["strict", "sqrt_rho_res"],
-                    color="#7a7a7a",
-                    lw=0.6,
-                    ls=":",
-                    zorder=1,
-                )
+                ax.axhline(cs.loc["strict", "sqrt_rho_res"], color=rep, lw=0.6, ls=":", zorder=1)  # fmt: skip
             for model, st in mstyle.items():
                 d = (
                     B[(B.test_set == name) & (B.model == model)]
@@ -265,47 +269,43 @@ def plot(B: pd.DataFrame, C: pd.DataFrame, TC: pd.DataFrame):
                 )
                 ax.plot(x, d[col], lw=0.8, ms=3, mew=0.5, **st, zorder=3)
             tc = TC.set_index("test_set").loc[name, col]
-            ax.plot(
-                [3.55],
-                [tc],
-                marker="D",
-                ms=3,
-                color="black",
-                mfc="white",
-                mew=0.6,
-                ls="none",
-                zorder=4,
-            )
+            ax.plot([3.6], [tc], marker="D", ms=3, color="black", mfc="white", mew=0.6,
+                    ls="none", zorder=4)  # fmt: skip
             ax.set_xticks(x)
-            ax.set_xticklabels(["unf.", "tol.", "mod.", "strict"])
-            ax.set_xlim(-0.35, 3.8)
+            ax.set_xticklabels(
+                sp.TIERS, rotation=35, ha="right", rotation_mode="anchor"
+            )
+            ax.set_xlim(-0.4, 3.9)
             if col.startswith("auc"):
-                ax.set_ylim(0.45, 1.0)
-                ax.axhline(0.5, color="#BDBDBD", lw=0.4, ls=":")
+                ax.set_ylim(0.4, 1.0)
+                yt = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+                ax.set_yticks(yt, [f"{v:g}" for v in yt])
+                ax.axhline(0.5, color=chance, lw=0.5, ls="-", zorder=1)
+                ax.text(-0.3, 0.492, "chance", color=chance, fontsize=sp.FS_SMALL,
+                        ha="left", va="top")  # fmt: skip
             else:
                 ax.set_ylim(0.0, 1.0)
+                ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "0.2", "0.4", "0.6", "0.8", "1"])  # fmt: skip
             if i == 0:
-                ax.set_title(lab, fontsize=6)
-            if j == 0:
-                ax.set_ylabel(f"{name}\n{'ρ' if 'rho' in col else 'AUC'}")
-            else:
-                ax.set_ylabel("ρ" if "rho" in col else "AUC")
+                ax.set_title(lab, fontsize=sp.FS_TICK, linespacing=1.15, pad=3)
+            ax.set_ylabel("ρ" if "rho" in col else "AUC", labelpad=1.5)
             if i == 1:
                 ax.set_xlabel("Training tier (cumulative)")
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
 
-    hand = [Line2D([], [], lw=0.8, ms=3, mew=0.5, label="one-hot ridge (15-residue window)", **mstyle["one-hot ridge"]),
-            Line2D([], [], lw=0.8, ms=3, mew=0.5, label="per-amino-acid mean (floor)", **mstyle["per-amino-acid mean"]),
-            Patch(facecolor="#E3E3E3", label="replicate agreement, unfiltered → strict"),
-            Line2D([], [], color="#7a7a7a", lw=0.6, ls="--", label="replicate agreement, strict"),
-            Line2D([], [], color="#7a7a7a", lw=0.6, ls=":", label="√ρ ceiling, strict"),
+    hand = [Line2D([], [], lw=0.8, ms=3, mew=0.5, label="one-hot ridge", **mstyle["one-hot ridge"]),
+            Line2D([], [], lw=0.8, ms=3, mew=0.5, label="per-amino-acid mean", **mstyle["per-amino-acid mean"]),
+            Patch(facecolor=band, label="replicates, unfiltered to strict"),
+            Line2D([], [], color=rep, lw=0.6, ls="--", label="replicates, strict"),
+            Line2D([], [], color=rep, lw=0.6, ls=":", label="√ρ ceiling, strict"),
             Line2D([], [], marker="D", ms=3, color="black", mfc="white", mew=0.6, ls="none",
-                   label="test chains vs their own replicates")]  # fmt: skip
-    fig.legend(handles=hand, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.0), borderaxespad=0.3,
-               handlelength=1.8, columnspacing=0.9)  # fmt: skip
-    sp.fig_label(fig, "a", 1.5, 14)
-    sp.fig_label(fig, "b", 1.5, 55)
+                   label="test chains vs own replicates")]  # fmt: skip
+    fig.legend(handles=hand, loc="upper left", ncol=3, bbox_to_anchor=(left0 / W, 1.0),
+               borderaxespad=0.2, handlelength=1.8, columnspacing=1.6)  # fmt: skip
+    # row headers at the far left, rotated: which test set the row evaluates
+    for letter, i, name in (("a", 0, "TriZOD test set"), ("b", 1, "CheZOD117")):
+        sp.fig_label(fig, letter, 0.0, tops[i] - (9.0 if i == 0 else 4.0))
+        fig.text(4.2 / W, 1 - (tops[i] + ph / 2) / H, name, fontsize=sp.FS_BODY,
+                 rotation=90, va="center", ha="center")  # fmt: skip
     return fig
 
 

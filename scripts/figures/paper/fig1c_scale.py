@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Fig. 1c -- what comparability buys: TriZOD against CheZOD1325 in chains, residues, clusters.
+"""Fig. 1b -- scale: TriZOD against CheZOD1325 in chains, residues and sequence clusters.
 
-Log-scale grouped bars for three like-for-like counts:
+The panel is a dumbbell plot on one log axis, one row per like-for-like count, with the
+fold change written above each row (the axis is logarithmic, so equal folds span equal
+distances):
 
 * **chains** -- scored chains in the release (one Parquet row each) against the
   1,325 CheZOD1325 proteins;
-* **scored residues** -- residues with a released G-score (``mask`` true) against
-  the residues with a published CheZOD1325 Z-score (value != 999);
+* **residues** -- residues with a released G-score (``mask`` true) against the
+  residues with a published CheZOD1325 Z-score (value != 999);
 * **sequence clusters** -- clusters at 50 % identity / 80 % coverage, computed for
   both sets with *identical* MMseqs2 flags: ``easy-cluster --min-seq-id 0.5 -c 0.8``
   plus the build's ``COMMON`` block (``trizod.dataset.mmseqs.COMMON``:
   ``--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0 --mask 0``),
-  single-threaded so the counts are reproducible. The TriZOD bar uses the
+  single-threaded so the counts are reproducible. The TriZOD point uses the
   like-for-like scope -- distinct non-bound sequences of at least 20 residues,
-  because CheZOD1325 excluded complexes -- and a marker shows the count over all
-  distinct scored sequences.
+  because CheZOD1325 excluded complexes.
 
-CheZOD117 is drawn as a reference tick in each group: its 117 published proteins,
-the residues of their published sequences (the per-residue CheZOD117 scores are
-not distributed with the local data, so the tick counts sequence residues), and
-their clusters under the same flags.
+The analysis (``compute()``) also counts the clusters over all distinct scored
+sequences and the CheZOD117 reference values; they stay in the printed check and are
+no longer drawn (Fig. 1 was simplified on 11 Nov 2026), so the Source Data holds only
+the six plotted values.
 
 Inputs (read-only): the release Parquet (``sequence``, ``is_bound``, ``length``,
 ``mask``); ``data/external/chezod/protein_nmr_1325/allseqs1325.txt`` (sequences;
@@ -32,9 +33,11 @@ hash of the input sequences and the command.
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig1c_scale.py \
         --out-dir <draft>/Figures/paper
-Outputs: ``<out-dir>/fig1c.pdf`` (vector, sized for the right-hand
-third of a 180-mm figure) and ``<out-dir>/source_data/fig1c.csv``; prints the plotted
-numbers and compares them with the writing plan's preview values (Appendix A13).
+Outputs: ``<out-dir>/fig1c.pdf`` (vector, ``W_DOUBLE`` - 105 - 3 = 52 mm wide and
+46.6 mm high, placed at 1:1 beside the 105-mm overview diagram ``fig1a_overview.tex``
+with a 3-mm gap, so the two fill the 160-mm text width; the file keeps its old name) and
+``<out-dir>/source_data/fig1c.csv``; prints the plotted numbers and compares them
+with the writing plan's preview values (Appendix A13).
 """
 
 from __future__ import annotations
@@ -208,122 +211,86 @@ def compute(work: Path) -> pd.DataFrame:
 # ----------------------------------------------------------------------------------
 # plot
 # ----------------------------------------------------------------------------------
-FIG_W, FIG_H = 60.0, 84.0  # height matches the Fig. 1b cartoon beside it
-AX_BOX = (11.0, 9.0, 47.0, 66.0)  # left, top, width, height (mm)
-YLIM = (2e1, 6e6)
-GROUPS = [
-    ("chains", "chains"),
-    ("residues", "scored\nresidues"),
-    ("clusters", "sequence\nclusters (50%)"),
+# Placed at 1:1 beside the overview diagram of Fig. 1a (105 x 46.6 mm, TikZ): the two
+# fill the full text width (W_DOUBLE = 160 mm) with a 3-mm gap, and the heights match.
+PANEL_A_W = 105.0  # width of fig1a_overview.tex (three 31-mm boxes, two 6-mm gaps)
+GAP_W = 3.0  # \hfill gap between the two panels in sections/fig1.tex
+FIG_W, FIG_H = sp.W_DOUBLE - PANEL_A_W - GAP_W, 46.6
+AX_BOX = (14.5, 9.6, 34.5, 28.0)  # left, top, width, height (mm)
+XLIM = (7e2, 3e6)
+ROWS = [  # (quantity, row label), top to bottom
+    ("chains", "Chains"),
+    ("residues", "Residues"),
+    ("clusters", "Sequence\nclusters"),
 ]
 C_TRIZOD = sp.CAT["neutral"]
 C_CHEZOD = sp.CAT["chezod"]
-C_TICK = "#9A6A00"  # darker orange for the CheZOD117 reference tick
-
-
-def _fmt(v: float) -> str:
-    return f"{v:,.0f}"
+C_LINK = "#B3B3B3"
+MS = 4.6  # marker diameter (pt)
 
 
 def plot(d: pd.DataFrame, out_name: str) -> None:
+    from matplotlib import ticker as mticker
     from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
 
     fig = sp.figure(FIG_W, FIG_H)
     left, top, w, h = AX_BOX
     ax = fig.add_axes([left / FIG_W, 1 - (top + h) / FIG_H, w / FIG_W, h / FIG_H])
-    ax.set_yscale("log")
-    ax.set_ylim(*YLIM)
+    ax.set_xscale("log")
+    ax.set_xlim(*XLIM)
+    n = len(ROWS)
+    ax.set_ylim(n - 0.45, -0.75)  # top row first; headroom for the fold labels
     v = d.set_index(["quantity", "set"]).value
-    bw = 0.34
-    for gi, (q, _) in enumerate(GROUPS):
-        x_tz, x_cz = gi - bw / 2 - 0.01, gi + bw / 2 + 0.01
+    for i, (q, _) in enumerate(ROWS):
         tz, cz = v[(q, "TriZOD")], v[(q, "CheZOD1325")]
-        ax.bar(
-            x_tz, tz - YLIM[0], bottom=YLIM[0], width=bw, color=C_TRIZOD, lw=0, zorder=2
-        )
-        ax.bar(
-            x_cz, cz - YLIM[0], bottom=YLIM[0], width=bw, color=C_CHEZOD, lw=0, zorder=2
-        )
-        # counts inside the bars (rotated), fold change above the TriZOD bar
-        for x, val, col in ((x_tz, tz, "white"), (x_cz, cz, "black")):
-            ax.text(
-                x,
-                YLIM[0] * 1.35,
-                _fmt(val),
-                rotation=90,
-                ha="center",
-                va="bottom",
-                fontsize=5.0,
-                color=col,
-                zorder=4,
+        ax.plot([cz, tz], [i, i], color=C_LINK, lw=1.2, solid_capstyle="butt", zorder=2)
+        for x, c in ((cz, C_CHEZOD), (tz, C_TRIZOD)):
+            ax.plot(
+                x, i, "o", ms=MS, color=c, mec="white", mew=0.6, zorder=3, clip_on=False
             )
-        top = max(
-            tz, v.get((q, "TriZOD (all sequences)"), tz)
-        )  # clear the dotted marker
         ax.text(
-            x_tz,
-            top * 1.25,
-            f"{tz / cz:.1f}×",
+            np.sqrt(tz * cz),  # midpoint on the log axis
+            i - 0.2,
+            f"{tz / cz:.1f}\u00d7",
             ha="center",
             va="bottom",
-            fontsize=6.0,
+            fontsize=sp.FS_BODY,
             fontweight="bold",
-            color=C_TRIZOD,
+            color="black",
         )
-        # CheZOD117 reference tick across the CheZOD1325 bar
-        t117 = v[(q, "CheZOD117")]
-        ax.plot(
-            [x_cz - bw * 0.62, x_cz + bw * 0.62],
-            [t117, t117],
-            color=C_TICK,
-            lw=1.1,
-            zorder=3,
-        )
-    # all-sequence clusters: open marker above the like-for-like TriZOD bar
-    gi = [q for q, _ in GROUPS].index("clusters")
-    x_tz = gi - bw / 2 - 0.01
-    all_c = v[("clusters", "TriZOD (all sequences)")]
-    ax.plot(
-        [x_tz - bw / 2, x_tz + bw / 2],
-        [all_c, all_c],
-        color=C_TRIZOD,
-        lw=0.6,
-        ls=(0, (1.5, 1.0)),
-        zorder=3,
-    )
-    ax.set_xticks(range(len(GROUPS)))
-    ax.set_xticklabels([lab for _, lab in GROUPS])
-    ax.tick_params(axis="x", length=0, pad=2.5)
-    ax.set_xlim(-0.55, len(GROUPS) - 0.45)
-    ax.set_ylabel("count")
-    ax.yaxis.grid(True, which="major", color="0.88", lw=0.4, zorder=0)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([lab for _, lab in ROWS], fontsize=sp.FS_BODY, linespacing=1.1)
+    ax.tick_params(axis="y", length=0, pad=3)
+    ax.spines["left"].set_visible(False)
+    ax.xaxis.set_minor_locator(mticker.NullLocator())  # decades only: fewer marks
+    ax.xaxis.grid(True, which="major", color="0.88", lw=0.4, zorder=0)
     ax.set_axisbelow(True)
+    ax.set_xlabel("Count (log scale)")
     handles = [
-        Patch(color=C_TRIZOD, label="TriZOD"),
-        Patch(color=C_CHEZOD, label="CheZOD1325"),
-        Line2D([], [], color=C_TICK, lw=1.1, label="CheZOD117"),
-        Line2D(
-            [],
-            [],
-            color=C_TRIZOD,
-            lw=0.6,
-            ls=(0, (1.5, 1.0)),
-            label="TriZOD, incl. bound and <20 aa",
-        ),
+        Line2D([], [], ls="", marker="o", ms=MS, color=C_TRIZOD, label="TriZOD"),
+        Line2D([], [], ls="", marker="o", ms=MS, color=C_CHEZOD, label="CheZOD1325"),
     ]
     fig.legend(
         handles=handles,
         loc="upper left",
-        bbox_to_anchor=(left / FIG_W, 1 - 0.6 / FIG_H),
+        bbox_to_anchor=(left / FIG_W, 1 - 4.6 / FIG_H),
         ncol=2,
-        fontsize=5.0,
-        handlelength=1.4,
-        handletextpad=0.4,
-        columnspacing=0.8,
-        labelspacing=0.25,
+        fontsize=sp.FS_TICK,
+        handlelength=0.8,
+        handletextpad=0.3,
+        columnspacing=1.2,
         borderaxespad=0,
         borderpad=0,
+    )
+    # panel letter on a baseline 2.5 mm below the top edge, as "a" in fig1a_overview.tex
+    fig.text(
+        0.0,
+        1 - 2.5 / FIG_H,
+        "b",
+        fontsize=sp.FS_PANEL,
+        fontweight="bold",
+        ha="left",
+        va="baseline",
     )
     sp.save(fig, out_name)
 
@@ -394,7 +361,8 @@ def main() -> None:
     )
 
     (args.out_dir / "source_data").mkdir(parents=True, exist_ok=True)
-    d.to_csv(args.out_dir / "source_data" / "fig1c.csv", index=False)
+    plotted = d[d.set.isin(["TriZOD", "CheZOD1325"])]
+    plotted.to_csv(args.out_dir / "source_data" / "fig1c.csv", index=False)
     plot(d, "fig1c")
     print(f"wrote {args.out_dir / 'fig1c.pdf'}")
 

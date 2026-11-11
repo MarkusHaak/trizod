@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Supplementary Fig. S5 -- composition of the tiers and the two test sets.
 
-Six chain sets: the four cumulative tiers (scored chains; unfiltered ⊇ tolerant ⊇
-moderate ⊇ strict, from the bundle's per-tier ``scores.json``), the TriZOD test set
+Six chain sets: the four cumulative tiers (scored chains; unfiltered ⊃ tolerant ⊃
+moderate ⊃ strict, from the bundle's per-tier ``scores.json``), the TriZOD test set
 (``split == test_trizod``) and CheZOD117 (``split == test_chezod117``).
 
 Panels
   a  Chain length (residues), empirical cumulative distribution on a log axis; the
-     legend gives each set's median.
+     dotted line marks the median (values in S5_summary.json).
   b  Deposition year of the chain's BMRB entry, from the raw ``_Entry.Submission_date``
      (``paper_raw_scan.py``), in the six bins the text uses. Early BMRB entries carry the
-     placeholder date 1995-07-31; they fall in the first bin. One chain whose entry has
-     no date ('.') is left out.
+     placeholder date 1995-07-31; they fall in the first bin. Chains whose entry has no
+     date ('.') are left out of the shares (one in this build; the caption says so);
+     the row labels give each set's full size.
   c  Source organism, a heuristic exact-string parse of the raw
      ``_Entity_natural_src.Organism_name_scientific`` of the chain's entity (approximate:
      strain names and synonyms are not merged). Share of each set's chains; the ten most
@@ -181,8 +182,10 @@ def main():
     def ax_mm(x, y_top, w, h):
         return fig.add_axes([x / W, 1 - (y_top + h) / H, w / W, h / H])
 
+    # 160 mm grid: a (ECDF) and b (year bars, legend above in two rows) on top, the
+    # organism heat map c below with room on the right for its rotated last labels
     # a length ECDF
-    ax = ax_mm(12, 6, 55, 36)
+    ax = ax_mm(11, 9, 50, 34)
     handles = []
     for k, v in sets.items():
         x = np.sort(v.length.to_numpy())
@@ -203,7 +206,7 @@ def main():
                 color=SET_COLORS[k],
                 lw=1.0,
                 ls=(0, (3, 1)) if k == "CheZOD117" else "-",
-                label=f"{k} (median {summ['length'][k]['median']:g})",
+                label=k,
             )
         )
     ax.set_xscale("log")
@@ -212,20 +215,22 @@ def main():
     ax.set_xticks([5, 10, 20, 50, 100, 200, 500, 1000])
     ax.set_xticklabels(["5", "10", "20", "50", "100", "200", "500", "1,000"])
     ax.minorticks_off()
+    # median guide, started right of the legend (the medians lie near 100 residues)
+    ax.hlines(0.5, 60, 1200, color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
     ax.set_xlabel("Chain length (residues)")
     ax.set_ylabel("Cumulative share of chains")
     ax.legend(
         handles=handles,
         loc="upper left",
-        fontsize=4.8,
+        fontsize=sp.FS_TICK,
         handlelength=1.4,
         borderaxespad=0.2,
         labelspacing=0.25,
     )
-    sp.fig_label(fig, "a", 1, 3)
+    sp.fig_label(fig, "a", 0.5, 3)
 
     # b year bins
-    ax = ax_mm(98, 6, 64, 36)
+    ax = ax_mm(97, 9, 59, 34)
     ys = np.arange(len(names))[::-1]
     for y, k in zip(ys, names):
         tot = sum(yb[k].values())
@@ -240,46 +245,26 @@ def main():
                     f"{100 * share:.0f}",
                     ha="center",
                     va="center",
-                    fontsize=4.6,
+                    fontsize=sp.FS_SMALL,
                     color="white" if c in YEAR_COLORS[3:] else "#222222",
                 )
             left += share
+        # full set size: the shares leave out chains without a submission date
         ax.text(
             -0.02,
             y,
-            f"{k} ({fmt(tot)})",
+            f"{k} ({fmt(len(sets[k]))})",
             transform=ax.get_yaxis_transform(),
             ha="right",
             va="center",
-            fontsize=5.3,
-            color=SET_COLORS[k],
+            fontsize=sp.FS_TICK,
         )
-        ax.text(
-            1.01,
-            y,
-            f"{summ['year_range'][k][1]}",
-            transform=ax.get_yaxis_transform(),
-            ha="left",
-            va="center",
-            fontsize=4.8,
-            color="#444444",
-        )
-    ax.text(
-        1.01,
-        len(names) - 0.45,
-        "latest",
-        transform=ax.get_yaxis_transform(),
-        ha="left",
-        va="bottom",
-        fontsize=4.6,
-        color="#666666",
-    )
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.5, len(names) - 0.5)
     ax.set_yticks([])
     ax.spines["left"].set_visible(False)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{100 * x:.0f}"))
-    ax.set_xlabel("Chains by deposition year of the BMRB entry (%)")
+    ax.set_xlabel("Chains by deposition year (%)")
     from matplotlib.patches import Patch
 
     ax.legend(
@@ -289,18 +274,19 @@ def main():
         ],
         loc="lower center",
         bbox_to_anchor=(0.5, 1.0),
-        ncol=6,
-        fontsize=4.8,
-        handlelength=1.0,
-        columnspacing=0.8,
+        ncol=3,
+        fontsize=sp.FS_TICK,
+        handlelength=0.9,
+        columnspacing=1.0,
         handletextpad=0.3,
+        labelspacing=0.2,
         borderaxespad=0.2,
     )
-    sp.fig_label(fig, "b", 70, 3)
+    sp.fig_label(fig, "b", 65, 3)
 
     # c organisms heatmap (rows = sets, columns = organism categories)
     top_c = 58
-    ax = ax_mm(32, top_c, 140, 22)
+    ax = ax_mm(22, top_c, 124, 22)
     share = org_tab.div(org_tab.sum(axis=0), axis=1).T.loc[names]  # sets x cols
     ax.imshow(share.to_numpy() * 100, aspect="auto", cmap="Greys", vmin=0, vmax=60)
     for i in range(share.shape[0]):
@@ -312,20 +298,21 @@ def main():
                 f"{v:.1f}" if v < 10 else f"{v:.0f}",
                 ha="center",
                 va="center",
-                fontsize=4.6,
+                fontsize=sp.FS_SMALL,
                 color="white" if v > 33 else "#222222",
             )
     ax.set_yticks(range(len(names)))
-    ax.set_yticklabels(names, fontsize=5.3)
-    for lab, k in zip(ax.get_yticklabels(), names):
-        lab.set_color(SET_COLORS[k])
+    ax.set_yticklabels(names, fontsize=sp.FS_TICK)
     plain = ("synthetic construct", "other named", "not recorded")
+    short = {
+        "synthetic construct": "synthetic",
+        "other named": "other",
+        "not recorded": "not recorded",
+    }
     xl = []
     for c in cols:
-        if c == "other named":
-            xl.append(f"other named\n({n_other_names:,} names)")
-        elif c in plain:
-            xl.append(c.replace(" ", "\n"))
+        if c in plain:
+            xl.append(short[c])
         else:  # abbreviated genus
             g, _, rest = c.partition(" ")
             xl.append(f"{g[0]}. {rest}" if rest else g)
@@ -333,8 +320,8 @@ def main():
     ax.set_xticks(range(len(cols)))
     ax.set_xticklabels(
         [x.replace("\n", " ") for x in xl],
-        fontsize=5.0,
-        rotation=25,
+        fontsize=sp.FS_TICK,
+        rotation=30,
         ha="left",
         rotation_mode="anchor",
     )
@@ -347,14 +334,13 @@ def main():
     ax.text(
         0.5,
         -0.06,
-        "Share of the set's chains by source organism (%, heuristic parse)",
+        "Chains by source organism (% of the set)",
         transform=ax.transAxes,
         ha="center",
         va="top",
-        fontsize=5.5,
-        color="#333333",
+        fontsize=sp.FS_BODY,
     )
-    sp.fig_label(fig, "c", 1, top_c - 9)
+    sp.fig_label(fig, "c", 0.5, top_c - 9)
 
     out = sp.save(fig, "S5")
     print("wrote", out)
