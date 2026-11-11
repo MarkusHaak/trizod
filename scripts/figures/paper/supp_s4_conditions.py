@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Supplementary Fig. S4 -- sample conditions and annotations per tier.
 
-Every count is a number of chains in the cumulative tier (unfiltered ⊇ tolerant ⊇
-moderate ⊇ strict); tier membership comes from the bundle's per-tier ``scores.json``.
+Every count is a number of chains in the cumulative tier (unfiltered ⊃ tolerant ⊃
+moderate ⊃ strict); tier membership comes from the bundle's per-tier ``scores.json``.
 
 Panels
   a-c  pH, temperature and ionic strength as DEPOSITED for the chain's own shift table.
@@ -10,15 +10,15 @@ Panels
        unfiltered run, which (like tolerant and moderate) substitutes pH 7.0, 298 K and
        0.1 M when the value is not deposited; the strict run does not, so a chain
        without a deposited value cannot reach strict. The histograms therefore show only
-       deposited values; the substituted ones are counted per tier in the panel. The
+       deposited values; the chains without a deposited value are drawn in panel e. The
        raw scan (``paper_raw_scan.py``) decides what was deposited, resolved through
        ``_Assigned_chem_shift_list.Sample_condition_list_ID`` exactly as the pipeline
        resolves pH and temperature. Bars above each histogram show the accepted range
        of each tier (``filter_defaults``).
-  d    Sample pressure (bar), which the pipeline parses but neither filters nor exports
-       (fix (e) of the writing plan). Read from the same raw sample-condition list,
-       units normalised to bar. Log-log histogram; chains at >= 400 bar are labelled.
-  e    Binary annotations (share of the tier's chains, counts printed).
+  d    Sample pressure (bar), which the release exports (``pressure_bar``) but no tier
+       filters on. Read from the same raw sample-condition list, units normalised to
+       bar. Log-log histogram; the region >= 400 bar is shaded.
+  e    Binary annotations and missing conditions (share of the tier's chains).
   f    Deposited ``_Entity_assembly.Physical_state`` (``physical_state``), counts on a
        log axis; values outside the seven common ones are pooled as "other".
 
@@ -39,7 +39,6 @@ import numpy as np  # noqa: E402
 import paper_raw_scan as rs  # noqa: E402
 import style_paper as sp  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
-from matplotlib.patches import Patch  # noqa: E402
 
 TIERS = sp.TIERS
 DATA_SUBDIR = "suppfigs_a_data"  # under --out-dir
@@ -67,15 +66,18 @@ PHYS_MAIN = [
     "molten globule",
 ]
 
+# (key, row label); the release columns behind the rows (is_bound, has_metal,
+# has_nucleic, membrane_mimetic, cosolvent_evidence, n_copies, sample_state_evidence)
+# are named in the caption, not in the artwork
 ANNOT = [
-    ("is_bound", "Bound partner in the assembly (is_bound)"),
-    ("has_metal", "Metal in the assembly (has_metal)"),
-    ("has_nucleic", "Nucleic acid in the assembly (has_nucleic)"),
-    ("membrane", "Membrane mimetic named (membrane_mimetic)"),
-    ("cosolvent_evidence", "Perturbing cosolvent named (cosolvent_evidence)"),
-    ("multi_copy", "More than one copy (n_copies > 1)"),
-    ("homo", "Homo-oligomer (n_copies > 1, not bound)"),
-    ("solid", "Solid-state evidence (sample_state_evidence)"),
+    ("is_bound", "Bound partner"),
+    ("has_metal", "Metal"),
+    ("has_nucleic", "Nucleic acid"),
+    ("membrane", "Membrane mimetic"),
+    ("cosolvent_evidence", "Perturbing cosolvent"),
+    ("multi_copy", "Several copies of the chain"),
+    ("homo", "Several copies, no partner"),
+    ("solid", "Solid-state evidence"),
 ]
 
 
@@ -161,6 +163,14 @@ def headroom(ax, f=1.75):
     ax.set_ylim(0, hi * f)
 
 
+def thousands(ax, step):
+    """Linear count axis with ticks every ``step`` and thousands separators."""
+    from matplotlib import ticker
+
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(step))
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{int(v):,}"))
+
+
 def main():
     sp.parse_args(sp.cli(__doc__))
     DATA_OUT = sp.out_dir(DATA_SUBDIR)
@@ -209,22 +219,24 @@ def main():
     )
 
     # ---------------- figure ----------------------------------------------------------
-    W, H = sp.W_DOUBLE, 112.0
+    # One message per panel and little text: the counts behind the old in-panel notes
+    # (values not deposited, edge bins, pressure rows) are in S4_summary.json, and the
+    # share of chains without a deposited pH, temperature or ionic strength is drawn in
+    # panel e with the other per-chain annotations.
+    W, H = sp.W_DOUBLE, 120.0
     fig = sp.figure(W, H)
 
     def ax_mm(x, y_top, w, h):
         return fig.add_axes([x / W, 1 - (y_top + h) / H, w / W, h / H])
 
-    top, hh, pw = 10.0, 31.0, 34.0
-    xs = [11, 56, 100, 141]
-    note = {"fontsize": 4.7, "color": "#444444", "linespacing": 1.15}
-
-    def nd_text(col, default, wrap=False):
-        nd = summ[f"{col}_not_deposited"]
-        counts = " / ".join(fmt(nd[t]) for t in TIERS)
-        if wrap:  # three lines: keeps a right-aligned note off the y axis (panel c)
-            return f"not deposited\n({default} used up to moderate):\n" + counts
-        return f"not deposited ({default} used\nup to moderate): " + counts
+    # 160 mm grid: four 28 mm histograms, each with room on its left for tick labels
+    # such as "10,000" (thousands separators); panel letters sit at the left edge of
+    # each panel's tick-label column
+    top, hh, pw = 9.0, 32.0, 28.0
+    xs = [12.5, 51.0, 89.5, 127.0]
+    lab_x = [0.5, 40.0, 79.0, 117.0]
+    lab_y = top - 3.5
+    grey_note = {"fontsize": sp.FS_SMALL, "color": "#555555"}
 
     # a pH
     ax = ax_mm(xs[0], top, pw, hh)
@@ -232,20 +244,12 @@ def main():
     nested_hist(ax, df, "ph", bins, mask_col="ph_deposited")
     headroom(ax)
     ax.set_xlim(0, 14)
-    ax.set_xlabel("pH (deposited)")
+    ax.set_xlabel("pH")
     ax.set_ylabel("Chains")
+    thousands(ax, 4000)
     range_bars(ax, "ph")
-    over = int((df.ph_deposited & (df.ph > 14)).sum())
-    ax.text(
-        0.98,
-        0.76,
-        nd_text("ph", "7.0") + f"\npH > 14 (last bin): {over}",
-        transform=ax.transAxes,
-        va="top",
-        ha="right",
-        **note,
-    )
-    sp.fig_label(fig, "a", 1, top - 3)
+    summ["ph_above_14"] = int((df.ph_deposited & (df.ph > 14)).sum())
+    sp.fig_label(fig, "a", lab_x[0], lab_y)
 
     # b temperature
     ax = ax_mm(xs[1], top, pw, hh)
@@ -253,115 +257,123 @@ def main():
     nested_hist(ax, df, "temperature", bins, mask_col="temperature_deposited")
     headroom(ax)
     ax.set_xlim(255, 345)
-    ax.set_xlabel("Temperature (K, deposited)")
+    ax.set_xlabel("Temperature (K)")
+    ax.set_xticks([275, 300, 325])
+    thousands(ax, 5000)
     range_bars(ax, "temperature")
-    out = int((df.temperature_deposited & ~df.temperature.between(255, 345)).sum())
-    summ["temperature_outside_255_345"] = out
-    ax.text(
-        0.02,
-        0.76,
-        nd_text("temperature", "298 K") + f"\noutside 255–345 K\n(edge bins): {out}",
-        transform=ax.transAxes,
-        va="top",
-        ha="left",
-        **note,
+    summ["temperature_outside_255_345"] = int(
+        (df.temperature_deposited & ~df.temperature.between(255, 345)).sum()
     )
-    sp.fig_label(fig, "b", 46, top - 3)
+    sp.fig_label(fig, "b", lab_x[1], lab_y)
 
-    # c ionic strength
+    # c ionic strength (the accepted ranges, 0-7 / 0-5 / 0-3 M, lie beyond the axis)
     ax = ax_mm(xs[2], top, pw, hh)
     bins = np.arange(-0.0125, 1.0126, 0.025)
     nested_hist(ax, df, "ionic_strength", bins, mask_col="ionic_strength_deposited")
-    headroom(ax, 1.3)
+    headroom(ax, 1.15)
     ax.set_xlim(-0.0125, 1.0125)
-    ax.set_xlabel("Ionic strength (M, deposited)")
-    over = int((df.ionic_strength_deposited & (df.ionic_strength > 1)).sum())
-    summ["ionic_above_1M"] = over
-    ax.text(
-        0.98,
-        0.97,
-        nd_text("ionic_strength", "0.1 M", wrap=True) + f"\n> 1 M (last bin): {over}"
-        "\naccepted ranges (0–7 / 0–5 / 0–3 M)\nlie beyond this axis",
-        transform=ax.transAxes,
-        va="top",
-        ha="right",
-        **note,
+    ax.set_xlabel("Ionic strength (M)")
+    ax.set_xticks([0, 0.5, 1.0])
+    thousands(ax, 1000)
+    summ["ionic_above_1M"] = int(
+        (df.ionic_strength_deposited & (df.ionic_strength > 1)).sum()
     )
-    sp.fig_label(fig, "c", 90, top - 3)
+    sp.fig_label(fig, "c", lab_x[2], lab_y)
 
     # d pressure
-    ax = ax_mm(xs[3], top, pw + 3, hh)
+    ax = ax_mm(xs[3], top, pw + 2, hh)
+    from matplotlib import ticker
+
     pbins = np.logspace(-2, np.log10(5000), 45)
     df["_p"] = df.pressure_bar.where(df.pressure_bar >= 0.01)
     nested_hist(ax, df, "_p", pbins, logy=True)
     ax.set_xscale("log")
     ax.set_xlim(1e-2, 5000)
     ax.set_ylim(0.6, 4e5)
+    ax.xaxis.set_major_locator(ticker.FixedLocator([0.01, 1, 100]))
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,g}"))
+    ax.xaxis.set_minor_locator(ticker.FixedLocator([0.1, 10, 1000]))
+    ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+    ax.yaxis.set_major_locator(ticker.FixedLocator([1, 100, 1e4]))
+    # written out with a thousands separator, like the linear count axes of a-c
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+    ax.yaxis.set_minor_locator(ticker.FixedLocator([10, 1000, 1e5]))
+    ax.yaxis.set_minor_formatter(ticker.NullFormatter())
     ax.axvspan(HIGH_P, 5000, color="#EDEDED", zorder=-5, lw=0)
-    ax.set_xlabel("Sample pressure (bar, deposited)")
+    ax.text(
+        (HIGH_P * 5000) ** 0.5,
+        1.5e5,
+        f"≥{HIGH_P:.0f}\nbar",
+        ha="center",
+        va="top",
+        linespacing=1.0,
+        **grey_note,
+    )
+    ax.set_xlabel("Pressure (bar)")
     ps_ = summ["pressure"]
-    low = int((df.pressure_bar < 0.01).sum())
-    ps_["chains_below_0.01_bar"] = low
-    hc = ps_["high_chains"]
-    strict_ids = [
+    ps_["chains_below_0.01_bar"] = int((df.pressure_bar < 0.01).sum())
+    summ["pressure_strict_entries"] = [
         r["id"].split("_")[0]
         for r in ps_["high_list"]
         if r["strictest_tier"] == "strict"
     ]
-    train_ids = [
+    summ["pressure_train_entries"] = [
         r["id"].split("_")[0] for r in ps_["high_list"] if r["split"] == "train"
     ]
-    ax.text(
-        0.02,
-        0.97,
-        f"no pressure row: {fmt(ps_['chains_no_pressure_row'])}\n"
-        f"unit unreadable: {fmt(ps_['chains_unreadable_unit'])}\n"
-        f"< 0.01 bar (unit slips): {low}",
-        transform=ax.transAxes,
-        va="top",
-        ha="left",
-        **note,
-    )
-    ax.text(
-        0.98,
-        0.70,
-        f"≥ {HIGH_P:.0f} bar:\n" + " / ".join(str(hc[t]) for t in TIERS),
-        transform=ax.transAxes,
-        va="top",
-        ha="right",
-        **note,
-    )
-    summ["pressure_strict_entries"] = strict_ids
-    summ["pressure_train_entries"] = train_ids
-    sp.fig_label(fig, "d", 132, top - 3)
+    sp.fig_label(fig, "d", lab_x[3], lab_y)
 
-    # shared tier legend
-    handles = [Patch(color=sp.TIER_COLORS[t], label=t) for t in TIERS]
+    # shared tier legend (colour for every panel, marker shape for f)
+    handles = [
+        Line2D(
+            [],
+            [],
+            ls="",
+            marker=sp.TIER_MARKERS[t],
+            color=sp.TIER_COLORS[t],
+            ms=4.5,
+            label=t,
+        )
+        for t in TIERS
+    ]
     fig.legend(
         handles=handles,
         loc="upper right",
         bbox_to_anchor=(0.995, 1.0),
         ncol=4,
-        fontsize=5.5,
-        handlelength=1.2,
+        fontsize=sp.FS_TICK,
+        handletextpad=0.2,
         columnspacing=1.4,
         frameon=False,
     )
 
-    # e binary annotations
-    top2 = top + hh + 16
+    # e per-chain annotations, as shares of the tier's chains
+    top2 = top + hh + 15
     h2 = H - top2 - 9
-    ax = ax_mm(57, top2, 38, h2)
+    ax = ax_mm(41, top2, 50, h2)
     n_t = {t: int(df[f"in_{t}"].sum()) for t in TIERS}
-    nrow = len(ANNOT)
+    nd_rows = [
+        (f"nd:{col}", lab)
+        for col, lab in (
+            ("ph", "No deposited pH"),
+            ("temperature", "No deposited temperature"),
+            ("ionic_strength", "No deposited ionic strength"),
+        )
+    ]
+    rows = ANNOT + nd_rows
+    share = {}
+    for key, _ in ANNOT:
+        share[key] = {t: summ["annotations"][key][t] for t in TIERS}
+    for key, _ in nd_rows:
+        share[key] = summ[f"{key[3:]}_not_deposited"]
+    nrow = len(rows)
     bh = 0.19
-    for i, (key, label) in enumerate(ANNOT):
+    for i, (key, label) in enumerate(rows):
         y0 = nrow - 1 - i
         for j, t in enumerate(TIERS):
-            n = summ["annotations"][key][t]
-            pct = 100 * n / n_t[t]
-            y = y0 + (1.5 - j) * bh
-            ax.barh(y, pct, height=bh * 0.92, color=sp.TIER_COLORS[t], lw=0)
+            pct = 100 * share[key][t] / n_t[t]
+            ax.barh(
+                y0 + (1.5 - j) * bh, pct, height=bh * 0.9, color=sp.TIER_COLORS[t], lw=0
+            )
         ax.text(
             -0.02,
             y0,
@@ -369,40 +381,19 @@ def main():
             transform=ax.get_yaxis_transform(),
             ha="right",
             va="center",
-            fontsize=5.3,
+            fontsize=sp.FS_TICK,
         )
-        ax.text(
-            1.02,
-            y0,
-            " / ".join(fmt(summ["annotations"][key][t]) for t in TIERS),
-            transform=ax.get_yaxis_transform(),
-            ha="left",
-            va="center",
-            fontsize=4.8,
-            color="#333333",
-        )
-    ax.text(
-        1.02,
-        nrow - 0.45,
-        "chains (unf. / tol. / mod. / strict)",
-        transform=ax.get_yaxis_transform(),
-        ha="left",
-        va="bottom",
-        fontsize=4.6,
-        color="#666666",
-    )
+    ax.axhline(len(nd_rows) - 0.5, color="#C8C8C8", lw=0.5, zorder=0)
     ax.set_yticks([])
     ax.spines["left"].set_visible(False)
     ax.set_ylim(-0.55, nrow - 0.45)
-    xmax = max(
-        100 * summ["annotations"][k][t] / n_t[t] for k, _ in ANNOT for t in TIERS
-    )
+    xmax = max(100 * share[k][t] / n_t[t] for k, _ in rows for t in TIERS)
     ax.set_xlim(0, xmax * 1.05)
     ax.set_xlabel("Chains in the tier (%)")
-    sp.fig_label(fig, "e", 1, top2 - 5)
+    sp.fig_label(fig, "e", 0.5, top2 - 5)
 
     # f physical state
-    ax = ax_mm(148, top2, 30, h2)
+    ax = ax_mm(128, top2, 29, h2)
     cats = PHYS_MAIN + ["(not recorded)", "other"]
     cats_lab = PHYS_MAIN + ["not recorded", "other values"]
     for j, t in enumerate(TIERS):
@@ -415,7 +406,7 @@ def main():
         ax.scatter(
             v[ok],
             ys[ok],
-            s=7,
+            s=9,
             marker=sp.TIER_MARKERS[t],
             color=sp.TIER_COLORS[t],
             lw=0,
@@ -425,37 +416,20 @@ def main():
     summ["physical_state_other_distinct"] = int(n_other)
     ax.set_xscale("log")
     ax.set_xlim(0.7, 3e4)
+    ax.xaxis.set_major_locator(ticker.FixedLocator([1, 100, 1e4]))
+    ax.xaxis.set_minor_locator(ticker.FixedLocator([10, 1000]))
+    ax.xaxis.set_minor_formatter(ticker.NullFormatter())
     ax.set_yticks(np.arange(len(cats))[::-1])
     ax.set_yticklabels(
         [c if c != "other values" else f"other ({n_other} values)" for c in cats_lab],
-        fontsize=5.3,
+        fontsize=sp.FS_TICK,
     )
     ax.tick_params(axis="y", length=0)
     for y in np.arange(len(cats)):
         ax.axhline(y, color="#EEEEEE", lw=0.4, zorder=0)
-    ax.set_xlabel("Chains (log scale)")
-    ax.legend(
-        handles=[
-            Line2D(
-                [],
-                [],
-                ls="",
-                marker=sp.TIER_MARKERS[t],
-                color=sp.TIER_COLORS[t],
-                ms=3,
-                label=t,
-            )
-            for t in TIERS
-        ],
-        loc="lower center",
-        bbox_to_anchor=(0.22, 1.0),
-        ncol=4,
-        fontsize=4.8,
-        handletextpad=0.1,
-        columnspacing=0.6,
-        borderaxespad=0.2,
-    )
-    sp.fig_label(fig, "f", 124, top2 - 5)
+    ax.set_xlabel("Chains")
+    ax.set_ylabel("Deposited physical state")
+    sp.fig_label(fig, "f", 94, top2 - 5)
 
     out = sp.save(fig, "S4")
     print("wrote", out)

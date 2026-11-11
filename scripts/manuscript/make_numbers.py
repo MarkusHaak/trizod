@@ -712,23 +712,24 @@ def sec_snapshot(C):
     m_w = re.search(r"skipping (\d+) withdrawn BMRB entries", C.log)
     n_withdrawn = int(m_w.group(1)) if m_w else 0
     assert n_dirs in (None, n_files + n_withdrawn), (n_dirs, n_files, n_withdrawn)
-    if m_w:
-        R.add(
-            "nBMRBWithdrawnSkipped",
-            I(n_withdrawn),
-            "withdrawn BMRB entries in the snapshot that the build skips before loading",
-            f"{src_log} 'skipping N withdrawn BMRB entries'",
-            STABLE,
-            "r1",
-        )
-        R.add(
-            "nBMRBDirs",
-            I(n_dirs) if n_dirs is not None else I(n_files + n_withdrawn),
-            "BMRB entry directories in the raw snapshot (= loaded files + skipped withdrawn entries)",
-            "count of data/raw/bmrb_entries",
-            STABLE,
-            "r1",
-        )
+    # a snapshot taken from BMRB's public list holds no withdrawn entry, so the log has no
+    # 'skipping' line: both macros are still defined (0 withdrawn)
+    R.add(
+        "nBMRBWithdrawnSkipped",
+        I(n_withdrawn),
+        "withdrawn BMRB entries in the snapshot that the build skips before loading",
+        f"{src_log} 'skipping N withdrawn BMRB entries' (0 when absent)",
+        STABLE,
+        "r1",
+    )
+    R.add(
+        "nBMRBDirs",
+        I(n_dirs) if n_dirs is not None else I(n_files + n_withdrawn),
+        "BMRB entry directories in the raw snapshot (= loaded files + skipped withdrawn entries)",
+        "count of data/raw/bmrb_entries",
+        STABLE,
+        "r1",
+    )
     R.add(
         "nBMRBFiles",
         I(n_files),
@@ -5425,100 +5426,85 @@ def sec_ubiquitin(C):
         "r2",
         "22",
     )
-    # teaser B (spearman over non-bound chains)
-    G = np.vstack([np.asarray(x, float) for x in nb.gscores])
-    Z = np.vstack([np.asarray(x, float) for x in nb.zscores])
-    K = np.vstack([np.asarray(x, float) for x in nb.k])
-    rows = []
-    for g, z, k in zip(G, Z, K):
-        m = np.isfinite(g)
-        o = m & (g < 0.2)
-        rows.append(
-            {
-                "medk": np.median(k[m]),
-                "medZ": np.median(z[o]) if o.any() else np.nan,
-                "medG": np.median(g[o]) if o.any() else np.nan,
-            }
-        )
-    r = pd.DataFrame(rows)
-    src = "Parquet; port of one_idea/teaser.py B and ubq_profiles.py"
+    # Fig. 2a chain set (11 Nov 2026): the native non-bound chains, selected by annotation in
+    # scripts/figures/paper/fig1a_ubiquitin.py (select_chains, NATIVE_RULE) and imported from
+    # there, so the macros and the figure's coloured chains and core strip are one chain set.
+    # (Until 11 Nov the macros used the writing plan's mean G < 0.5 selection, which kept the
+    # three 2,500 bar chains.)
+    f2a = paper("fig1a_ubiquitin")
+    ub = f2a.select_chains(df)
+    nat = ub[ub.native].reset_index(drop=True)
+    src = (
+        "Parquet + raw NMR-STAR sample components, pressure and physical state; "
+        "scripts/figures/paper/fig1a_ubiquitin.py select_chains (native: "
+        + f2a.NATIVE_RULE
+        + "), core_summary, spearman_core (Fig. 2a)"
+    )
+    rz, rg, _ = f2a.spearman_core(nat)
     R.add(
         "rhoUbqZK",
-        F(r[["medZ", "medk"]].corr(method="spearman").iloc[0, 1], 2),
-        "Spearman correlation of a chain's ordered-residue median Z with its median k (non-bound ubiquitin)",
+        F(rz, 2),
+        "Spearman correlation of a chain's median Z over its ordered residues (G < 0.2) with "
+        "its median k, over the native non-bound ubiquitin chains coloured in Fig. 2a",
         src,
-        PREVIEW,
+        STABLE,
         "r2",
-        "0.93",
     )
     R.add(
         "rhoUbqGK",
-        F(r[["medG", "medk"]].corr(method="spearman").iloc[0, 1], 2),
-        "same for G",
+        F(rg, 2),
+        "same for the median G over the ordered residues (native non-bound ubiquitin chains, Fig. 2a)",
         src,
-        PREVIEW,
+        STABLE,
         "r2",
-        "-0.03",
     )
-    # ubq_profiles: non-bound, meanG < 0.5, k classes
-    mg = np.nanmean(G, axis=1)
-    keep = mg < 0.5
-    medk = np.array(
-        [np.nanmedian(np.where(np.isfinite(g), k, np.nan)) for g, k in zip(G, K)]
-    )
-    cls = pd.cut(medk[keep], [0, 6, 15, 21], labels=["KLow", "KMid", "KHigh"])
     R.add(
         "nUbqTeaserChains",
-        I(keep.sum()),
-        "non-bound ubiquitin chains with mean G < 0.5 used for the k-class medians",
+        I(len(nat)),
+        "native non-bound ubiquitin chains (no denaturant or alcohol, below 400 bar, native "
+        "physical state): the chains coloured in Fig. 2a and summarised in its core strip",
         src,
-        PREVIEW,
+        STABLE,
         "r2",
-        "25",
     )
-    core = slice(1, 71)
-    pz = {"KLow": "6.97", "KMid": "10.05", "KHigh": "13.91"}
-    pg = {"KLow": "0.087", "KMid": "0.093", "KHigh": "0.070"}
-    pn = {"KLow": "11", "KMid": "8", "KHigh": "6"}
-    pt = {"KLow": "0.51", "KMid": "0.48", "KHigh": "0.52"}
-    for cl in ("KLow", "KMid", "KHigh"):
-        mm = np.asarray(cls == cl)
-        Zc, Gc = Z[keep][mm], G[keep][mm]
+    # core strip of Fig. 2a: per median-k class (<= 6 / 7-15 / 16-21), the median of all
+    # core residues (2-71) and tail residues (73-75) of the native chains in that class
+    cs = f2a.core_summary(ub, ub.native.to_numpy()).set_index("k_class")
+    for kc, cl in zip(f2a.sp.K_CLASSES, ("KLow", "KMid", "KHigh")):
+        rr_ = cs.loc[kc]  # (not S: S() is the string formatter)
         R.add(
             f"nUbqClass{cl}",
-            I(mm.sum()),
-            f"ubiquitin teaser chains in median-k class {cl} (<= 6 / 7-15 / 16-21)",
+            I(rr_.n_chains),
+            f"native non-bound ubiquitin chains (Fig. 2a) in median-k class {kc}",
             src,
-            PREVIEW,
+            STABLE,
             "r2",
-            pn[cl],
         )
         R.add(
             f"zUbqCore{cl}",
-            F(np.nanmedian(Zc[:, core]), 2),
-            f"median Z over core residues 2-71, k class {cl}",
+            F(rr_.core_z_median, 2),
+            f"median Z over core residues 2-71 of the native chains in median-k class {kc} "
+            "(Fig. 2a core strip, bar)",
             src,
-            PREVIEW,
+            STABLE,
             "r2",
-            pz[cl],
         )
         R.add(
             f"gUbqCore{cl}",
-            F(np.nanmedian(Gc[:, core]), 3),
-            f"median G over core residues 2-71, k class {cl}",
+            F(rr_.core_g_median, 3),
+            f"median G over core residues 2-71 of the native chains in median-k class {kc} "
+            "(Fig. 2a core strip, bar)",
             src,
-            PREVIEW,
+            STABLE,
             "r2",
-            pg[cl],
         )
         R.add(
             f"gUbqTail{cl}",
-            F(np.nanmedian(Gc[:, 72:75]), 2),
-            f"median G over tail residues 73-75, k class {cl}",
+            F(rr_.tail_g_median, 2),
+            f"median G over tail residues 73-75 of the native chains in median-k class {kc}",
             src,
-            PREVIEW,
+            STABLE,
             "r2",
-            pt[cl],
         )
     # named perturbed samples
     for eid, tag, pv in (
@@ -8233,6 +8219,17 @@ def sec_methods_b_revision(C):
     for name, src in (("dateNewestSubmission", "raw NMR-STAR scan"),
                       ("dateTestDraw", "testset/build_test_set.log mtime / facts sheet Q3")):  # fmt: skip
         R.add(f"{name}Long", S(_long(_val(name))), f"\\{name} written day-month-year (Nature style)", f"derived from \\{name} ({src})", STABLE, "par")  # fmt: skip
+    # retrieval date of the BMRB snapshot, from BMRB_SNAPSHOT.json in the snapshot directory
+    # (written when the snapshot is downloaded); a snapshot without it is an error, so the
+    # paper never states a date the build cannot prove
+    snap = PATHS.raw / "BMRB_SNAPSHOT.json"
+    sj = json.loads(snap.read_text())
+    iso = sj["retrieved"][:10]
+    d_ = _dt.date.fromisoformat(iso)
+    src_s = f"{snap} ('retrieved': {sj['retrieved']})"
+    R.add("dateSnapshot", S(iso), "retrieval date of the BMRB snapshot (ISO)", src_s, STABLE, "par")  # fmt: skip
+    R.add("dateSnapshotLong", S(_long(iso)), "retrieval date of the BMRB snapshot, day-month-year (Nature style)", src_s, STABLE, "par")  # fmt: skip
+    R.add("dateSnapshotShort", S(f"{d_.day} {d_.strftime('%b')} {d_.year}"), "retrieval date of the BMRB snapshot, abbreviated month (figure text)", src_s, STABLE, "par")  # fmt: skip
     fr = paper("fig3_replicates")
     f2a = paper("fig2a_kpaired")
     s7 = paper("supp_s7_replicates")

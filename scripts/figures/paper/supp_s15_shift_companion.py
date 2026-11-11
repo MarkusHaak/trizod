@@ -13,8 +13,8 @@ Panels
      sequence (the "all residues, full expected set" definition of
      ``scripts/sidechain_coverage.py``, whose atom lists this script imports). ALA and GLY
      have no side-chain atoms beyond the backbone set and are omitted.
-  c  Methyl (ILVMA 13C: ILE CD1, LEU CD1/CD2, VAL CG1/CG2, MET CE, ALA CB) and aromatic
-     ring 13C/15N coverage per tier.
+  c  Methyl (ILVMA 13C: ILE CD1, LEU CD1/CD2, VAL CG1/CG2, MET CE, ALA CB; labelled in
+     Greek, e.g. Ile Cdelta1) and aromatic ring 13C/15N coverage per tier.
   d  Side-chain shifts per chain, cumulative distribution per tier (chains with none sit
      at the left edge).
 
@@ -58,17 +58,33 @@ SRC_LABEL = {
     "lacs_only": "LACS only",
     "lacs+potenci": "LACS + POTENCI/AIC",
     "potenci_only": "POTENCI/AIC only",
-    "none": "zero offset (none)",
-    "not_transferable": "raw only (not_transferable)",
+    "none": "zero offset",
+    "not_transferable": "raw only",
 }
-SRC_COLOR = {
-    "lacs_only": sp.OKABE_ITO["skyblue"],
-    "lacs+potenci": sp.OKABE_ITO["blue"],
-    "potenci_only": sp.OKABE_ITO["green"],
-    "none": "#D9D9D9",
-    "not_transferable": "#8C8C8C",
+# Method colours as in Supplementary Fig. S6 (LACS sky blue, POTENCI/AIC dark grey); both
+# methods = sky blue hatched in dark grey, so no two corrected classes share a grey. No
+# correction: zero offset white (grey outline), raw only light grey. The Okabe-Ito blue,
+# orange, green and vermillion keep their fixed meanings (test set, CheZOD, training,
+# removed).
+SRC_STYLE = {  # facecolor, edgecolor (also the hatch colour), hatch
+    "lacs_only": (sp.OKABE_ITO["skyblue"], "white", None),
+    "lacs+potenci": (sp.OKABE_ITO["skyblue"], sp.CAT["neutral"], "//////"),
+    "potenci_only": (sp.CAT["neutral"], "white", None),
+    "none": ("white", "#8C8C8C", None),
+    "not_transferable": ("#C4C4C4", "white", None),
 }
-NUC_LABEL = {"H": "$^{1}$H", "C": "$^{13}$C", "N": "$^{15}$N"}
+# plain element symbols: mathtext mass numbers would be lifted to the 6 pt floor and
+# inflate the base glyph (the caption names 1H, 13C and 15N)
+NUC_LABEL = {"H": "H", "C": "C", "N": "N"}
+# side-chain probe atoms in Greek (BMRB names: ALA CB, ILE CD1, LEU CD1/CD2, MET CE,
+# VAL CG1/CG2)
+METHYL_LABEL = (
+    ("ALA", "Ala Cβ"),
+    ("ILE", "Ile Cδ1"),
+    ("LEU", "Leu Cδ1/2"),
+    ("MET", "Met Cε"),
+    ("VAL", "Val Cγ1/2"),
+)
 
 
 def fmt(n) -> str:
@@ -214,14 +230,14 @@ def main():
     )
 
     # ---------------- figure ----------------------------------------------------------
-    W, H = sp.W_DOUBLE, 104.0
+    W, H = sp.W_DOUBLE, 107.0
     fig = sp.figure(W, H)
 
     def ax_mm(x, y_top, w, h):
         return fig.add_axes([x / W, 1 - (y_top + h) / H, w / W, h / H])
 
     # a stacked bars
-    ax = ax_mm(24, 9, 66, 34)
+    ax = ax_mm(20, 17, 52, 31)
     rows = [
         ("backbone", "H"),
         ("backbone", "C"),
@@ -234,17 +250,19 @@ def main():
     for y, (cls, nuc) in zip(ys, rows):
         left = 0.0
         tot = int(ct.loc[(cls, nuc)].sum())
-        for s in SOURCES:
-            n = int(ct.loc[(cls, nuc), s])
-            ax.barh(y, n / 1e6, left=left, height=0.72, color=SRC_COLOR[s], lw=0)
+        for src in SOURCES:
+            n = int(ct.loc[(cls, nuc), src])
+            fc, ec, hatch = SRC_STYLE[src]
+            ax.barh(y, n / 1e6, left=left, height=0.72, color=fc, edgecolor=ec,
+                    hatch=hatch, lw=0.4)  # fmt: skip
             left += n / 1e6
         ax.text(
-            left + 0.04,
+            left + 0.05,
             y,
             fmt(tot),
             va="center",
             ha="left",
-            fontsize=4.8,
+            fontsize=sp.FS_SMALL,
             color="#333333",
         )
         ax.text(
@@ -254,36 +272,42 @@ def main():
             transform=ax.get_yaxis_transform(),
             ha="right",
             va="center",
-            fontsize=5.5,
+            fontsize=sp.FS_TICK,
         )
     for yc, lab in ((4.3, "backbone"), (1.0, "side chain")):
         ax.text(
-            -0.13,
+            -0.15,
             yc,
             lab,
             transform=ax.get_yaxis_transform(),
             ha="center",
             va="center",
             rotation=90,
-            fontsize=5.5,
+            fontsize=sp.FS_TICK,
         )
     ax.set_yticks([])
     ax.spines["left"].set_visible(False)
     ax.set_ylim(-0.6, 5.9)
-    ax.set_xlim(0, 4.5)
+    ax.set_xlim(0, 5.0)
+    ax.set_xticks([0, 1, 2, 3, 4, 5])
     ax.set_xlabel("Shifts (millions)")
     ax.legend(
-        handles=[Patch(color=SRC_COLOR[s], label=SRC_LABEL[s]) for s in SOURCES],
-        loc="lower right",
-        bbox_to_anchor=(1.0, 0.0),
-        fontsize=4.8,
-        handlelength=1.0,
-        borderaxespad=0.1,
-        labelspacing=0.3,
-        title="offset_source",
-        title_fontsize=4.8,
-    )
-    sp.fig_label(fig, "a", 1, 3)
+        handles=[
+            Patch(facecolor=SRC_STYLE[s_][0], edgecolor=SRC_STYLE[s_][1] if s_ in ("none", "lacs+potenci") else SRC_STYLE[s_][0],
+                  hatch=SRC_STYLE[s_][2], lw=0.4, label=SRC_LABEL[s_])
+            for s_ in SOURCES
+        ],
+        loc="lower left",
+        bbox_to_anchor=(-0.24, 1.03),
+        ncol=2,
+        handlelength=1.4,
+        handleheight=0.9,
+        handletextpad=0.4,
+        borderaxespad=0.0,
+        labelspacing=0.35,
+        columnspacing=1.0,
+    )  # fmt: skip
+    sp.fig_label(fig, "a", 0, 1)
 
     # b completeness heatmap (residue type x tier)
     aas = [aa for i, aa in enumerate(scc.AA3) if scc.EXPECTED_N[i] > 0]
@@ -292,7 +316,7 @@ def main():
     labels = [f"{aa.capitalize()} ({scc.EXPECTED_N[scc.AA_IDX[aa]]})" for aa in aas] + [
         "all"
     ]
-    ax = ax_mm(106, 9, 30, 88)
+    ax = ax_mm(93, 13, 28, 84)
     ax.imshow(mat, aspect="auto", cmap="Greys", vmin=0, vmax=0.8)
     for i in range(mat.shape[0]):
         for j in range(mat.shape[1]):
@@ -303,54 +327,44 @@ def main():
                 f"{v:.2f}",
                 ha="center",
                 va="center",
-                fontsize=4.7,
+                fontsize=sp.FS_SMALL,
                 color="white" if v > 0.45 else "#222222",
                 fontweight="bold" if i == mat.shape[0] - 1 else "normal",
             )
     ax.axhline(len(aas) - 0.5, color="white", lw=1.2)
     ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels, fontsize=5.2)
+    ax.set_yticklabels(labels, fontsize=sp.FS_TICK)
     ax.xaxis.tick_top()
     ax.set_xticks(range(len(TIERS)))
     ax.set_xticklabels(
-        TIERS, fontsize=5.0, rotation=35, ha="left", rotation_mode="anchor"
+        TIERS, fontsize=sp.FS_TICK, rotation=35, ha="left", rotation_mode="anchor"
     )
-    for lab, t in zip(ax.get_xticklabels(), TIERS):
-        lab.set_color(sp.TIER_COLORS[t])
     ax.tick_params(length=0, pad=1.5)
     for s_ in ax.spines.values():
         s_.set_visible(False)
     ax.text(
         0.5,
         -0.012,
-        "observed / expected side-chain atoms\n(expected atoms per residue in parentheses)",
+        "Observed / expected\nside-chain atoms",
         transform=ax.transAxes,
         ha="center",
         va="top",
-        fontsize=4.8,
-        color="#444444",
+        fontsize=sp.FS_BODY,
     )
-    sp.fig_label(fig, "b", 92, 3)
+    sp.fig_label(fig, "b", 78, 1)
 
     # c methyl + aromatic coverage
-    ax = ax_mm(153, 9, 25, 86)
-    items = [("ILVMA methyls", meth, "overall")] + [
-        (lab, meth, aa)
-        for aa, lab in (
-            ("ALA", "Ala CB"),
-            ("ILE", "Ile CD1"),
-            ("LEU", "Leu CD1/2"),
-            ("MET", "Met CE"),
-            ("VAL", "Val CG1/2"),
-        )
+    ax = ax_mm(137, 13, 19, 84)
+    items = [("Methyls", meth, "overall")] + [
+        (lab, meth, aa) for aa, lab in METHYL_LABEL
     ]
-    items += [("aromatic rings", aro, "overall")] + [
+    items += [("Aromatics", aro, "overall")] + [
         (aa.capitalize(), aro, aa) for aa in ("HIS", "PHE", "TRP", "TYR")
     ]
     ypos = []
     y = 0.0
     for it in items:
-        if it[0] == "aromatic rings":
+        if it[0] == "Aromatics":
             y += 0.6  # gap between the methyl and the aromatic block
         ypos.append(y)
         y += 1
@@ -360,7 +374,7 @@ def main():
         ax.scatter(
             xs,
             ypos + (1.5 - j) * 0.14,
-            s=6,
+            s=9,
             marker=sp.TIER_MARKERS[t],
             color=sp.TIER_COLORS[t],
             lw=0,
@@ -369,39 +383,19 @@ def main():
     for yy in ypos:
         ax.axhline(yy, color="#EEEEEE", lw=0.4, zorder=0)
     ax.set_yticks(ypos)
-    ax.set_yticklabels([it[0] for it in items], fontsize=5.0)
+    ax.set_yticklabels([it[0] for it in items], fontsize=sp.FS_TICK)
     for lab, it in zip(ax.get_yticklabels(), items):
-        if it[0] in ("ILVMA methyls", "aromatic rings"):
+        if it[0] in ("Methyls", "Aromatics"):
             lab.set_fontweight("bold")
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, 100)
+    ax.set_xticks([0, 50, 100])
     ax.set_xlabel("Coverage (%)")
-    ax.legend(
-        handles=[
-            Line2D(
-                [],
-                [],
-                ls="",
-                marker=sp.TIER_MARKERS[t],
-                color=sp.TIER_COLORS[t],
-                ms=2.6,
-                label=t,
-            )
-            for t in TIERS
-        ],
-        loc="lower center",
-        bbox_to_anchor=(0.5, 1.0),
-        ncol=2,
-        fontsize=4.6,
-        handletextpad=0.1,
-        borderaxespad=0.2,
-        labelspacing=0.2,
-        columnspacing=0.5,
-    )
-    sp.fig_label(fig, "c", 141, 3)
+    # tier colours and markers: the shared legend in panel d
+    sp.fig_label(fig, "c", 122, 1)
 
     # d side-chain shifts per chain ECDF
-    ax = ax_mm(24, 62, 62, 33)
+    ax = ax_mm(20, 64, 52, 33)
     for t in TIERS:
         ids = [i for i in main_df.id if i in tids[t]]
         v = np.sort(n_sc.loc[ids].to_numpy()) + 1
@@ -413,24 +407,30 @@ def main():
     ax.set_xticks([1, 2, 11, 101, 1001])
     ax.set_xticklabels(["0", "1", "10", "100", "1,000"])
     ax.minorticks_off()
-    ax.set_xlabel("Side-chain shifts per chain (log scale, offset by 1)")
+    yt = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    ax.set_yticks(yt, [f"{v:g}" for v in yt])
+    ax.set_xlabel("Side-chain shifts per chain")
     ax.set_ylabel("Cumulative share of chains")
-    txt = "\n".join(
-        f"{t}: {100 * sc_stats[t]['share_with_sidechain']:.1f} % with side chains, median {sc_stats[t]['median']:g}"
-        for t in TIERS
+    # one tier legend for c (markers) and d (lines); shares and medians per tier are in
+    # S15_summary.json
+    ax.legend(
+        handles=[
+            Line2D(
+                [],
+                [],
+                marker=sp.TIER_MARKERS[t],
+                color=sp.TIER_COLORS[t],
+                lw=0.9,
+                ms=3.5,
+                label=t,
+            )
+            for t in TIERS
+        ],
+        loc="upper left",
+        borderaxespad=0.1,
+        handlelength=1.8,
     )
-    ax.text(
-        0.02,
-        0.97,
-        txt,
-        transform=ax.transAxes,
-        va="top",
-        ha="left",
-        fontsize=4.7,
-        color="#333333",
-        linespacing=1.3,
-    )
-    sp.fig_label(fig, "d", 1, 57)
+    sp.fig_label(fig, "d", 0, 59)
 
     out = sp.save(fig, "S15")
     print("wrote", out)

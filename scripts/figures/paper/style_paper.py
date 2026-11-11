@@ -238,19 +238,23 @@ K_CLASS_COLORS = {
 # sizes and rcParams
 # ----------------------------------------------------------------------------------
 MM = 1 / 25.4
-W_SINGLE = 88.0
-W_DOUBLE = 180.0
+# The draft (rostlab layout, A4, 2.5 cm margins) has a 160 mm text width, so artwork is
+# drawn at that width and placed at 1:1 (half width: 78 mm, placed at 0.4875\textwidth).
+# Both fit Nature's 180 mm / 88 mm limits.
+W_SINGLE = 78.0
+W_DOUBLE = 160.0
 
 # Minimum text size. NCS sets no figure text below 5 pt at final size. The draft
 # places 180 mm artwork at \textwidth (505.69 pt = 177.7 mm in the zHenriquesLab
 # layout; Article.log) and 88 mm cells at 0.4889 \textwidth, so every panel prints at
 # ~0.987 of its drawn size and 5.0 pt in the artwork becomes 4.9 pt on the page.
-TEXTWIDTH_MM = 177.7
+TEXTWIDTH_MM = 160.0
 PLACE_SCALE = TEXTWIDTH_MM / W_DOUBLE  # ~0.987
 MIN_PT_PLACED = 5.0  # NCS minimum at final size
-FS_SMALL = 5.3  # smallest size in the artwork (5.23 pt as placed); save() enforces it
-FS_TICK = 5.5  # prints at 5.43 pt; 5.8 pt drops log-axis labels (S4f) for no gain
-FS_BODY = 6.0
+FS_SMALL = 6.0  # smallest size in the artwork (5.9 pt as placed); save() enforces it
+FS_TICK = 6.5  # tick labels
+FS_BODY = 7.0  # axis labels and body text: Nature's 7 pt ceiling, as large as allowed
+FS_PANEL = 8.0  # bold lower-case panel letters (Nature: 8 pt)
 SCRIPT_SHRINK = 0.7  # mathtext sub/superscript size relative to its base (fixed in mpl)
 COMPACT_FROM = 1e5  # log axes reaching this value label 1,000 as 1k, 10^6 as 1M
 assert FS_SMALL * PLACE_SCALE >= MIN_PT_PLACED
@@ -259,20 +263,20 @@ RC = {
     "font.family": "sans-serif",
     "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
     "font.size": FS_BODY,
-    "axes.titlesize": 6.5,
+    "axes.titlesize": 7.0,
     "axes.labelsize": FS_BODY,
     "xtick.labelsize": FS_TICK,
     "ytick.labelsize": FS_TICK,
-    "legend.fontsize": 5.5,
-    "legend.title_fontsize": 5.5,
+    "legend.fontsize": FS_TICK,
+    "legend.title_fontsize": FS_TICK,
     "legend.frameon": False,
-    "axes.linewidth": 0.5,
-    "xtick.major.width": 0.5,
-    "ytick.major.width": 0.5,
+    "axes.linewidth": 0.6,
+    "xtick.major.width": 0.6,
+    "ytick.major.width": 0.6,
     "xtick.minor.width": 0.4,
     "ytick.minor.width": 0.4,
-    "xtick.major.size": 2.0,
-    "ytick.major.size": 2.0,
+    "xtick.major.size": 2.5,
+    "ytick.major.size": 2.5,
     "xtick.minor.size": 1.2,
     "ytick.minor.size": 1.2,
     "xtick.major.pad": 1.5,
@@ -281,8 +285,8 @@ RC = {
     "axes.titlepad": 3.0,
     "axes.spines.top": False,
     "axes.spines.right": False,
-    "lines.linewidth": 0.8,
-    "lines.markersize": 2.5,
+    "lines.linewidth": 1.0,
+    "lines.markersize": 3.0,
     "patch.linewidth": 0.5,
     "hatch.linewidth": 0.5,
     "pdf.fonttype": 42,
@@ -313,7 +317,7 @@ def panel_label(ax, letter: str, x: float = -0.18, y: float = 1.06, **kw) -> Non
         y,
         letter,
         transform=ax.transAxes,
-        fontsize=8,
+        fontsize=FS_PANEL,
         fontweight="bold",
         va="bottom",
         ha="left",
@@ -328,7 +332,7 @@ def fig_label(fig, letter: str, x_mm: float, y_mm_from_top: float) -> None:
         x_mm / w,
         1 - y_mm_from_top / h,
         letter,
-        fontsize=8,
+        fontsize=FS_PANEL,
         fontweight="bold",
         va="top",
         ha="left",

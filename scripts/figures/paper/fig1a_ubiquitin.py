@@ -1,42 +1,43 @@
 #!/usr/bin/env python3
-"""Fig. 1a -- ubiquitin: one protein, many depositions, two scores.
+"""Fig. 2a (Fig. 1a until 11 Nov 2026) -- ubiquitin: the Z-score grows with k, the G-score does not.
 
 Every released chain whose sequence is exactly the 76-residue human ubiquitin
 sequence (``UBQ``) is selected from the release Parquet; bound chains
 (``is_bound``) are dropped, because a partner changes the measured state. For
 each remaining chain the per-residue Z-score (top) and G-score (bottom) are
-drawn over residues 1-76, coloured by the chain's median per-residue shift count
-k (classes <= 6, 7-15, 16-21; viridis, as everywhere in the paper). The
-C-terminal tail (residues 73-76), disordered in folded ubiquitin, is shaded.
+drawn over residues 1-76. The C-terminal tail (residues 73-76), disordered in
+folded ubiquitin, is shaded.
 
-Samples measured in a non-native or perturbed state are drawn dashed and
-labelled with their condition and the strictest tier that keeps them. A sample
-is "perturbed" when its own sample (the samples behind the chain's shift list)
-contains a denaturant or alcohol cosolvent, when the condition list of the
-chain's shift list records a pressure of at least 400 bar, or when the deposited
-physical state is non-native. Pressure is not yet a release column (rebuild fix
-(e)), so it is read from the raw NMR-STAR file of each entry, following the
-chain's own shift list (``st_id``) to its sample-condition list.
+Chain selection by annotation (``select_chains``, rule in ``NATIVE_RULE``): a
+chain is *native* unless its sample is perturbed, i.e. the samples behind its
+shift list contain a denaturant or alcohol cosolvent (``PERTURBANTS``), the
+condition list of its shift list records a pressure of at least 400 bar, or its
+deposited physical state is non-native. Native chains are coloured by their
+median per-residue shift count k (classes <= 6, 7-15, 16-21; viridis, as
+everywhere in the paper); perturbed chains are drawn thin and light grey
+behind, without labels. Pressure is not a release column, so it is read from the
+raw NMR-STAR file of each entry, following the chain's own shift list
+(``st_id``) to its sample-condition list.
 
-The right-hand strip summarises the folded core (residues 2-71): the median
-(and interquartile range) of all core residues of the chains in each k class,
-over the non-bound chains with mean G-score < 0.5. This is the writing plan's
-preview definition (``one_idea/ubq_profiles.py``) and the definition behind the
-``\\zUbqCore*`` / ``\\gUbqCore*`` macros in ``numbers.tex``; it keeps the three
-high-pressure chains, which are partially unfolded at most. The script also
-prints the same medians over the unperturbed chains only, as a sensitivity
-check.
+The right-hand strip summarises the folded core (residues 2-71) of the native
+chains: the median (bar) and interquartile range (box) of all core residues in
+each k class (``core_summary``). ``scripts/manuscript/make_numbers.py`` imports
+``select_chains``, ``core_summary`` and ``spearman_core`` from this module for
+the ``\\nUbqTeaserChains``, ``\\nUbqClass*``, ``\\zUbqCore*``, ``\\gUbqCore*``,
+``\\gUbqTail*`` and ``\\rhoUbq*K`` macros, so text and artwork use one chain set.
+The writing plan's earlier selection (mean G-score < 0.5, which keeps the three
+high-pressure chains) is printed as a sensitivity check only.
 
 Inputs (read-only): the release Parquet, the per-tier ``scores.json`` IDs of the
-release bundle (strictest tier), and ``data/raw/bmrb_entries/`` (pressure and
-sample components of the ubiquitin entries only).
+release bundle (strictest tier, Source Data only), and ``data/raw/bmrb_entries/``
+(pressure and sample components of the ubiquitin entries only).
 
 Run (code worktree root):
-    uv run --extra figures --with pyarrow python scripts/figures/paper/fig1a_ubiquitin.py \
+    uv run --extra figures --with pyarrow python scripts/figures/paper/fig1a_ubiquitin.py \\
         --out-dir <draft>/Figures/paper
-Outputs: ``<out-dir>/fig1a.pdf`` (180 mm wide, vector) and
-``<out-dir>/source_data/fig1a.csv`` (one row per chain and residue); prints the plotted
-numbers and compares them with the writing plan's preview values.
+Outputs: ``<out-dir>/fig2a_ubiquitin.pdf`` (W_DOUBLE = 160 mm wide, vector, placed at
+1:1), ``<out-dir>/source_data/fig2a_ubiquitin.csv`` (one row per chain and residue)
+and ``fig2a_ubiquitin_core_summary.csv``; prints the plotted numbers.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ import re
 import sys
 from pathlib import Path
 
+import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
@@ -64,8 +66,14 @@ sp.plt.rcParams.update(
 UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
 CORE = slice(1, 71)  # residues 2-71 (0-based slice), the folded core
 TAIL_FIRST, TAIL_LAST = 73, 76  # shaded C-terminal tail (1-based, inclusive)
-TEASER_MEAN_G_MAX = 0.5  # chains entering the k-class core medians (plan definition)
+TEASER_MEAN_G_MAX = 0.5  # writing plan's earlier selection (sensitivity check only)
 HIGH_PRESSURE_BAR = 400.0  # same threshold as the writing plan's pressure scan (A12)
+# The selection rule in one sentence (Results / caption wording; make_numbers source string).
+NATIVE_RULE = (
+    "non-bound chains with the exact ubiquitin sequence whose sample contains no denaturant "
+    "or alcohol (urea, guanidinium, methanol, ethanol, TFE, HFIP, DMSO), was measured below "
+    "400 bar and is deposited in a native physical state"
+)
 PERTURBANTS = {  # lower-case component-name token -> display name
     "urea": "urea",
     "guanidin": "guanidinium",
@@ -93,8 +101,6 @@ PLAN = {
     "class_n": {"≤6": 11, "7–15": 8, "16–21": 6},
     "core_z": {"≤6": 6.97, "7–15": 10.05, "16–21": 13.91},
     "core_g": {"≤6": 0.087, "7–15": 0.093, "16–21": 0.070},
-    "rho_z": 0.93,
-    "rho_g": -0.03,
     "mean_g": {
         "16626_1_1_1": 0.80,
         "15047_1_1_1": 0.79,
@@ -213,34 +219,34 @@ def tier_ids_fast() -> dict:
     return ids
 
 
-def load_ubiquitin() -> tuple[pd.DataFrame, dict]:
-    df = sp.load_main(
-        columns=[
-            "id",
-            "entry_id",
-            "st_id",
-            "sequence",
-            "gscores",
-            "zscores",
-            "k",
-            "mask",
-            "is_bound",
-            "physical_state",
-            "temperature",
-            "ph",
-        ]
-    )
-    u = df[df.sequence == UBQ].copy().reset_index(drop=True)
-    counts = {
-        "chains": len(u),
-        "entries": u.entry_id.nunique(),
-        "bound": int(u.is_bound.sum()),
-    }
-    strictest = sp.strictest_tier(tier_ids_fast())
-    u["tier"] = u.id.map(strictest)
-    u = u[~u.is_bound].reset_index(drop=True)
-    counts["nonbound_chains"] = len(u)
-    counts["nonbound_entries"] = u.entry_id.nunique()
+COLUMNS = [  # release columns select_chains() and the Source Data need
+    "id",
+    "entry_id",
+    "st_id",
+    "sequence",
+    "gscores",
+    "zscores",
+    "k",
+    "mask",
+    "is_bound",
+    "physical_state",
+    "temperature",
+    "ph",
+]
+
+
+def select_chains(df: pd.DataFrame) -> pd.DataFrame:
+    """The chains of Fig. 2a: every non-bound chain of ``df`` with the exact sequence ``UBQ``.
+
+    ``df`` is the release table (one row per chain, e.g. ``style_paper.load_main()`` or
+    make_numbers' ``C.df``) with at least the ``COLUMNS`` above. Returns those chains with
+    ``median_k`` (over scored residues), ``mean_g``, ``k_class`` (``style_paper.K_CLASSES``),
+    ``pressure_bar`` and ``perturbants`` (raw NMR-STAR), ``perturbed`` and ``native``
+    (= not perturbed; ``NATIVE_RULE``). ``native`` is the chain set the figure colours and
+    summarises, and the one make_numbers.py quotes; both import it from here.
+    """
+    u = df[(df.sequence == UBQ) & ~df.is_bound.astype(bool)].copy()
+    u = u.reset_index(drop=True)
     G = np.vstack([np.asarray(x, float) for x in u.gscores])
     M = np.vstack([np.asarray(x, bool) for x in u["mask"]])
     K = np.vstack([np.asarray(x, float) for x in u.k])
@@ -248,15 +254,31 @@ def load_ubiquitin() -> tuple[pd.DataFrame, dict]:
     u["mean_g"] = np.nanmean(G, axis=1)
     bins = [0] + [hi for _, hi in sp.K_CLASSES.values()]  # (0, 6], (6, 15], (15, 21]
     u["k_class"] = pd.cut(u.median_k, bins, labels=list(sp.K_CLASSES)).astype(str)
-    rec = [sample_record(e, s) for e, s in zip(u.entry_id, u.st_id)]
+    rec = [sample_record(str(e), str(s)) for e, s in zip(u.entry_id, u.st_id)]
     u["pressure_bar"] = [r["pressure_bar"] for r in rec]
     u["perturbants"] = [r["perturbants"] for r in rec]
-    state = u.physical_state.fillna("").str.lower()
+    state = u.physical_state.fillna("").astype(str).str.lower()
     u["perturbed"] = (
         u.perturbants.map(bool)
         | (u.pressure_bar.fillna(0) >= HIGH_PRESSURE_BAR)
         | state.isin(NON_NATIVE_STATES)
     )
+    u["native"] = ~u.perturbed
+    return u
+
+
+def load_ubiquitin() -> tuple[pd.DataFrame, dict]:
+    df = sp.load_main(columns=COLUMNS)
+    all_ubq = df[df.sequence == UBQ]
+    counts = {
+        "chains": len(all_ubq),
+        "entries": all_ubq.entry_id.nunique(),
+        "bound": int(all_ubq.is_bound.sum()),
+    }
+    u = select_chains(df)
+    u["tier"] = u.id.map(sp.strictest_tier(tier_ids_fast()))
+    counts["nonbound_chains"] = len(u)
+    counts["nonbound_entries"] = u.entry_id.nunique()
     u["label"] = [condition_label(r) if r.perturbed else "" for r in u.itertuples()]
     return u, counts
 
@@ -329,17 +351,30 @@ def spearman_core(u: pd.DataFrame) -> tuple[float, float, int]:
 # ----------------------------------------------------------------------------------
 # plot
 # ----------------------------------------------------------------------------------
-FIG_W, FIG_H = sp.W_DOUBLE, 64.0
+# Native chains are coloured by k class and enter the side summary; perturbed chains are
+# drawn thin and light grey behind (select_chains, NATIVE_RULE).
+OUT_NAME = "fig2a_ubiquitin"  # Fig. 2a (was Fig. 1a, fig1a.pdf, until 11 Nov 2026)
+
+# Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1).
+FIG_W, FIG_H = sp.W_DOUBLE, 59.0
+LEFT = 11.5  # profile axes start (room for the y label and ticks)
+RIGHT_MARGIN = 3.0
+STRIP_W = 27.0  # side summary width
+STRIP_GAP = 9.0  # between the profiles and the strip (room for the strip's y ticks)
+STRIP_LEFT = FIG_W - RIGHT_MARGIN - STRIP_W
+PROFILE_W = STRIP_LEFT - STRIP_GAP - LEFT
+TOP_Z, TOP_G, AX_H = 6.0, 30.0, 22.0
 # axes boxes in mm: (left, top, width, height)
-BOX_Z = (11.0, 3.0, 110.0, 24.0)
-BOX_G = (11.0, 31.0, 110.0, 24.0)
-LABEL_X = 125.5  # left edge of the label column (mm); labels end before the strip
-BOX_SZ = (160.5, 3.0, 18.0, 24.0)
-BOX_SG = (160.5, 31.0, 18.0, 24.0)
+BOX_Z = (LEFT, TOP_Z, PROFILE_W, AX_H)
+BOX_G = (LEFT, TOP_G, PROFILE_W, AX_H)
+BOX_SZ = (STRIP_LEFT, TOP_Z, STRIP_W, AX_H)
+BOX_SG = (STRIP_LEFT, TOP_G, STRIP_W, AX_H)
+KEY_Y = 1.7  # key row, mm from the top
 Z_LIM = (-4.0, 18.0)
-G_LIM = (-0.03, 1.03)
-FS_SMALL = 5.0
-DASH = (0, (3.2, 1.6))
+G_LIM = (-0.04, 1.04)
+GREY, GREY_LW = "#DCDCDC", 0.45  # perturbed samples: light and thin, behind
+NATIVE_LW = 0.7
+BOX_HALF = 0.32  # half width of the side-summary boxes (x units = k classes)
 
 
 def _axes(fig, box):
@@ -351,26 +386,26 @@ def _mm_to_fig(x_mm, y_mm_from_top):
     return x_mm / FIG_W, 1 - y_mm_from_top / FIG_H
 
 
-def _profiles(ax, u, field, lim):
+def _profiles(ax, u, field, lim, native):
     x = np.arange(1, len(UBQ) + 1)
-    ax.axvspan(TAIL_FIRST - 0.5, TAIL_LAST + 0.5, color="0.91", lw=0, zorder=0)
-    order = list(u.index[~u.perturbed]) + list(u.index[u.perturbed])
-    for i in order:
-        r = u.loc[i]
-        y = np.asarray(r[field], float)
-        ax.plot(
-            x,
-            y,
-            color=sp.K_CLASS_COLORS[r.k_class],
-            lw=0.85 if r.perturbed else 0.55,
-            ls=DASH if r.perturbed else "-",
-            alpha=1.0 if r.perturbed else 0.8,
-            zorder=3 if r.perturbed else 2,
-            solid_capstyle="round",
-        )
+    ax.axvspan(TAIL_FIRST - 0.5, TAIL_LAST + 0.5, color="0.93", lw=0, zorder=0)
+    for i in u.index[~native]:  # perturbed samples first, behind
+        ax.plot(x, np.asarray(u.at[i, field], float), color=GREY, lw=GREY_LW, zorder=1)
+    # classes from high to low k, so the low-k lines sit on top where they cross
+    for cl in list(sp.K_CLASSES)[::-1]:
+        for i in u.index[native & (u.k_class.values == cl)]:
+            ax.plot(
+                x,
+                np.asarray(u.at[i, field], float),
+                color=sp.K_CLASS_COLORS[cl],
+                lw=NATIVE_LW,
+                alpha=0.9,
+                zorder=2,
+                solid_capstyle="round",
+            )
     ax.set_xlim(0.3, len(UBQ) + 0.7)
     ax.set_ylim(*lim)
-    ax.set_xticks([1, 10, 20, 30, 40, 50, 60, 70, 76])
+    ax.set_xticks([1, 20, 40, 60, 76])
 
 
 def _summary(ax, S, field, lim, show_x):
@@ -380,145 +415,86 @@ def _summary(ax, S, field, lim, show_x):
         med = getattr(r, f"core_{field}_median")
         q1 = getattr(r, f"core_{field}_q1")
         q3 = getattr(r, f"core_{field}_q3")
-        ax.plot([xi, xi], [q1, q3], color=c, lw=1.0, solid_capstyle="butt")
-        ax.plot(xi, med, marker="o", ms=3.4, mfc=c, mec="black", mew=0.4, zorder=3)
+        # interquartile range as a light box, median as a bar across it
+        ax.add_patch(
+            mpatches.Rectangle(
+                (xi - BOX_HALF, q1), 2 * BOX_HALF, q3 - q1, fc=c, ec="none", alpha=0.35
+            )
+        )
+        ax.plot(
+            [xi - BOX_HALF, xi + BOX_HALF],
+            [med, med],
+            color=c,
+            lw=1.6,
+            zorder=3,
+            solid_capstyle="butt",
+        )
     ax.set_xlim(-0.6, len(S) - 0.4)
     ax.set_ylim(*lim)
     ax.set_xticks(xs)
     ax.set_xticklabels(list(S.k_class) if show_x else [])
-    # no y tick marks: the scale is shared with the profile panel, and a tick mark next to the
-    # right end of the perturbed-sample labels reads as part of the label (final pass, 31 Oct)
-    ax.tick_params(axis="y", labelleft=False, length=0)
     if show_x:
-        ax.set_xlabel(r"median $\mathit{k}$ of chain")
+        ax.set_xlabel(r"Median $\mathit{k}$ of chain")
 
 
-def plot(u: pd.DataFrame, S: pd.DataFrame, out_name: str) -> None:
+def plot(u: pd.DataFrame, S: pd.DataFrame, native: np.ndarray, out_name: str) -> None:
+    from matplotlib.lines import Line2D
+
     fig = sp.figure(FIG_W, FIG_H)
     az, ag = _axes(fig, BOX_Z), _axes(fig, BOX_G)
-    _profiles(az, u, "zscores", Z_LIM)
-    _profiles(ag, u, "gscores", G_LIM)
+    _profiles(az, u, "zscores", Z_LIM, native)
+    _profiles(ag, u, "gscores", G_LIM, native)
     az.tick_params(axis="x", labelbottom=False)
+    az.set_yticks([0, 5, 10, 15])
+    ag.set_yticks([0, 0.5, 1.0], ["0", "0.5", "1"])
     az.set_ylabel("Z-score")
     ag.set_ylabel("G-score")
+    for a in (az, ag):  # same label offset, so the two y labels line up
+        a.yaxis.set_label_coords(-7.0 / PROFILE_W, 0.5)
     ag.set_xlabel("Ubiquitin residue")
-    # conventional binary cut-offs (Z = 8, G = 0.65), for orientation; named in the legend
-    az.axhline(8, color="0.55", lw=0.45, ls=":", zorder=1)
-    ag.axhline(sp.G_DIS, color="0.55", lw=0.45, ls=":", zorder=1)
-    az.text(
-        (TAIL_FIRST + TAIL_LAST) / 2,
-        Z_LIM[1] * 0.985,
-        "tail",
-        ha="center",
-        va="top",
-        fontsize=FS_SMALL,
-        color="0.40",
-    )
 
-    # summary strip: core medians per k class
+    # side summary: folded-core median and IQR per k class (same y scale as the profiles)
     sz, sg = _axes(fig, BOX_SZ), _axes(fig, BOX_SG)
     _summary(sz, S, "z", Z_LIM, show_x=False)
     _summary(sg, S, "g", G_LIM, show_x=True)
-    sz.set_title("core, residues 2–71", fontsize=FS_SMALL, pad=2)
-    for a in (sz, sg):
-        a.axhline(8 if a is sz else sp.G_DIS, color="0.55", lw=0.45, ls=":", zorder=1)
+    sz.set_yticks([0, 5, 10, 15])
+    sg.set_yticks([0, 0.5, 1.0], ["0", "0.5", "1"])
+    sz.tick_params(axis="x", length=0)
 
-    # legend for the k classes (label column, beside the Z panel)
-    from matplotlib.lines import Line2D
-
-    n_cls = u.k_class.value_counts()
+    # one-row key above the profiles (k classes, then the grey samples)
     handles = [
-        Line2D(
-            [],
-            [],
-            color=sp.K_CLASS_COLORS[c],
-            lw=1.1,
-            label=f"{c} ({n_cls.get(c, 0)} chains)",
-        )
+        Line2D([], [], color=sp.K_CLASS_COLORS[c], lw=1.4, label=c)
         for c in sp.K_CLASSES
     ]
     handles.append(
-        Line2D([], [], color="0.25", lw=0.9, ls=DASH, label="perturbed sample")
+        Line2D([], [], color="#C4C4C4", lw=1.0, label="denaturant or high pressure")
     )
-    x0, y0 = _mm_to_fig(LABEL_X - 1.0, BOX_Z[1] + 0.5)
+    x0, y0 = _mm_to_fig(BOX_Z[0], KEY_Y)
+    fig.text(
+        x0,
+        y0,
+        r"Median $\mathit{k}$ of chain:",
+        fontsize=sp.FS_TICK,
+        va="center",
+        ha="left",
+    )
     fig.legend(
         handles=handles,
-        loc="upper left",
-        bbox_to_anchor=(x0, y0),
-        title=r"median $\mathit{k}$ of chain",
-        alignment="left",
-        handlelength=2.2,
+        loc="center left",
+        bbox_to_anchor=_mm_to_fig(BOX_Z[0] + 22.0, KEY_Y),
+        ncol=len(handles),
+        handlelength=1.6,
         handletextpad=0.5,
-        labelspacing=0.35,
+        columnspacing=1.3,
         borderaxespad=0,
         borderpad=0,
-        fontsize=5.5,
-        title_fontsize=5.5,
+        fontsize=sp.FS_TICK,
     )
-
-    # labels for the perturbed samples, at their core-median G (beside the G panel)
-    groups = []
-    for (label, tier), grp in u[u.perturbed].groupby(["label", "tier"], sort=False):
-        Gm = np.vstack([np.asarray(x, float) for x in grp.gscores])
-        y = float(np.nanmedian(Gm[:, CORE]))
-        ids = ", ".join(sorted(grp.entry_id.unique(), key=int))
-        groups.append({"label": label, "tier": tier, "ids": ids, "y": y, "n": len(grp)})
-    groups.sort(key=lambda d: -d["y"])
-    # de-overlap in G units (two-line label block ~ 5.2 mm high)
-    min_gap = 5.6 / BOX_G[3] * (G_LIM[1] - G_LIM[0])
-    ys = [min(g["y"], G_LIM[1] - 0.06) for g in groups]
-    for i in range(1, len(ys)):
-        ys[i] = min(ys[i], ys[i - 1] - min_gap)
-    shift = G_LIM[0] + 0.07 - ys[-1]
-    if shift > 0:
-        ys = [y + shift for y in ys]
-    for g, ylab in zip(groups, ys):
-        # leader from the panel edge (at the group's core-median G) to the label
-        xl_fig, _ = _mm_to_fig(LABEL_X, 0)
-        y_fig = ag.transData.transform((0, ylab))[1] / fig.bbox.height
-        y_edge = ag.transData.transform((0, g["y"]))[1] / fig.bbox.height
-        x_edge = ag.transAxes.transform((1, 0))[0] / fig.bbox.width
-        fig.add_artist(
-            Line2D(
-                [x_edge + 0.002, xl_fig - 0.004],
-                [y_edge, y_fig],
-                transform=fig.transFigure,
-                color="0.55",
-                lw=0.4,
-            )
-        )
-        cond = g["label"] + (f" ({g['n']} chains)" if g["n"] > 1 else "")
-        fig.text(
-            xl_fig,
-            y_fig + 0.6 / FIG_H,
-            cond,
-            fontsize=5.5,
-            va="bottom",
-            ha="left",
-        )
-        # tier swatch (tier colour) + strictest tier + BMRB IDs
-        fig.add_artist(
-            Line2D(
-                [xl_fig + 0.8 / FIG_W],
-                [y_fig - 1.35 / FIG_H],
-                transform=fig.transFigure,
-                marker="s",
-                ms=3.0,
-                mfc=sp.TIER_COLORS[g["tier"]],
-                mec="0.3",
-                mew=0.3,
-                ls="none",
-            )
-        )
-        fig.text(
-            xl_fig + 2.2 / FIG_W,
-            y_fig - 0.4 / FIG_H,
-            f"{g['tier']} · BMRB {g['ids']}",
-            fontsize=FS_SMALL,
-            color="0.30",
-            va="top",
-            ha="left",
-        )
+    xs, ys = _mm_to_fig(BOX_SZ[0] + BOX_SZ[2] / 2, KEY_Y)
+    fig.text(
+        xs, ys, "Core (residues 2–71)", fontsize=sp.FS_TICK, va="center", ha="center"
+    )
+    sp.fig_label(fig, "a", 0.0, 0.0)
     sp.save(fig, out_name)
 
 
@@ -533,28 +509,34 @@ def main() -> None:
     args = sp.parse_args(sp.cli(__doc__))
 
     u, counts = load_ubiquitin()
-    teaser = u.mean_g.values < TEASER_MEAN_G_MAX
-    S = core_summary(u, teaser)
-    S_native = core_summary(u, ~u.perturbed.values)
-    rz, rg, n_rho = spearman_core(u)
-    rz_nat, rg_nat, n_rho_nat = spearman_core(u[~u.perturbed])
+    native = u.native.values
+    S = core_summary(u, native)  # plotted; the macros' definition
+    rz, rg, n_rho = spearman_core(u[native])
+    teaser = u.mean_g.values < TEASER_MEAN_G_MAX  # writing plan's earlier selection
+    S_plan = core_summary(u, teaser)
+    rz_plan, rg_plan, n_rho_plan = spearman_core(u[teaser])
 
     print("ubiquitin (exact 76-aa sequence):", counts)
     print("non-bound chains per k class:", u.k_class.value_counts().to_dict())
-    print("perturbed samples:")
+    print("selection rule (native):", NATIVE_RULE)
+    print("perturbed samples (grey):")
     cols = ["id", "k_class", "median_k", "mean_g", "tier", "physical_state", "label"]
     print(u.loc[u.perturbed, cols].round(3).to_string(index=False))
-    print("core medians, plan definition (non-bound, mean G < 0.5):")
+    print(
+        f"native chains (coloured, side summary, macros): {int(native.sum())}; "
+        "per k class:",
+        u[native].k_class.value_counts().to_dict(),
+    )
     print(S.round(3).to_string(index=False))
-    print("core medians, sensitivity (unperturbed chains only):")
-    print(S_native.round(3).to_string(index=False))
-    print(f"Spearman (chains with ordered residues, n={n_rho}): Z {rz:.3f}  G {rg:.3f}")
-    print(f"  unperturbed only (n={n_rho_nat}): Z {rz_nat:.3f}  G {rg_nat:.3f}")
+    print(f"Spearman, native chains (n={n_rho}): Z {rz:.3f}  G {rg:.3f}")
+    print("sensitivity: writing plan's selection (non-bound, mean G < 0.5):")
+    print(S_plan.round(3).to_string(index=False))
+    print(f"  Spearman (n={n_rho_plan}): Z {rz_plan:.3f}  G {rg_plan:.3f}")
 
-    print("check against the writing plan:")
+    print("check against the writing plan (2026-10 build, mean G < 0.5 selection):")
     for k_ in ("chains", "entries", "bound", "nonbound_chains", "nonbound_entries"):
         _check(k_, counts[k_], PLAN[k_], 0)
-    for r in S.itertuples():
+    for r in S_plan.itertuples():
         _check(f"n {r.k_class}", r.n_chains, PLAN["class_n"][r.k_class], 0)
         _check(
             f"core Z {r.k_class}",
@@ -568,8 +550,6 @@ def main() -> None:
             PLAN["core_g"][r.k_class],
             0.0005,
         )
-    _check("rho Z", round(rz, 2), PLAN["rho_z"], 0.005)
-    _check("rho G", round(rg, 2), PLAN["rho_g"], 0.005)
     for cid, pv in PLAN["mean_g"].items():
         _check(
             f"mean G {cid}",
@@ -595,19 +575,18 @@ def main() -> None:
                     "chain_median_k": r.median_k,
                     "k_class": r.k_class,
                     "chain_mean_g": r.mean_g,
-                    "in_core_summary": bool(r.mean_g < TEASER_MEAN_G_MAX),
-                    "perturbed": bool(r.perturbed),
+                    "native": bool(r.native),
                     "condition": r.label,
                     "pressure_bar": r.pressure_bar,
                     "strictest_tier": r.tier,
                 }
             )
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    (args.out_dir / "source_data").mkdir(exist_ok=True)
-    pd.DataFrame(rows).to_csv(args.out_dir / "source_data" / "fig1a.csv", index=False)
-    S.to_csv(args.out_dir / "source_data" / "fig1a_core_summary.csv", index=False)
-    plot(u, S, "fig1a")
-    print(f"wrote {args.out_dir / 'fig1a.pdf'}")
+    sd = args.out_dir / "source_data"
+    sd.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(sd / f"{OUT_NAME}.csv", index=False)
+    S.to_csv(sd / f"{OUT_NAME}_core_summary.csv", index=False)
+    plot(u, S, native, OUT_NAME)
+    print(f"wrote {args.out_dir / (OUT_NAME + '.pdf')}")
 
 
 if __name__ == "__main__":

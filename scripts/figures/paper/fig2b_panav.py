@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Fig. 2b -- independent confirmation of the re-referencing offsets by PANAV.
+"""Supplementary Fig. S18 (main Fig. 2b until 11 Nov 2026) -- offsets vs PANAV.
 
 Scatter of the TriZOD total offset (LACS + residual POTENCI/AIC correction, ppm;
 ``total_off_<atom>_ppm``) against the negated PANAV correction for CA, CB, C and
-N, with the Pearson r per nucleus. The C and N panels are shown, not hidden.
-A side panel gives the share of all released chains whose LACS offset is at
-least 0.5 ppm, per nucleus (CA and CB share one 13C offset in LACS).
+N, with the Pearson r per nucleus, one scatter per nucleus in a row (panel a).
+The C and N panels are shown, not hidden. Panel b gives the share of all
+released chains whose LACS offset is at least 0.5 ppm, per nucleus (CA and CB
+share one 13C offset in LACS). Points are neutral ink: the comparison has no
+data category of the paper's colour code.
 
 Matching PANAV to TriZOD chains (the writing plan asks for ``st_id``, not
 entry-level matching):
@@ -30,9 +32,9 @@ For comparison the script also prints the plan's entry-level preview (entries
 with exactly one PANAV list, matched to their first scored chain), which the
 ``\\rPanav*`` macros in ``numbers.tex`` still carry.
 
-Two Pearson r values are drawn per nucleus: over all matched lists (the plan's
-statistic) and over the lists inside the plotted window (|offset| <= 4 ppm for
-13C, 6 ppm for 15N). The all-list r is dominated by a handful of gross
+Two Pearson r values are drawn per nucleus: over the lists inside the plotted
+window (|offset| <= 4 ppm for 13C, 6 ppm for 15N), and below it in parentheses
+over all matched lists (the plan's statistic). The all-list r is dominated by a handful of gross
 deposition errors -- e.g. carbonyl shifts deposited near 0-55 ppm or amide N
 near 200 ppm -- that PANAV absorbs into a correction of 70-176 ppm while TriZOD
 leaves the offset at zero (LACS finds no fit). They are counted and printed
@@ -42,7 +44,10 @@ edge as open markers.
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig2b_panav.py \
         --out-dir <draft>/Figures/paper
-Outputs: <out-dir>/fig2b.pdf and <out-dir>/source_data/fig2b*.csv.
+Outputs: <out-dir>/S18.pdf (W_DOUBLE = 160 x 40 mm, placed at 1:1) and
+<out-dir>/source_data/S18_*.csv.
+The module keeps its name: ``make_numbers.py`` and ``supp_s6_rereferencing.py``
+import ``loop_to_st_map``, ``match_st``, ``ATOMS`` and ``LIMS`` from it.
 """
 
 from __future__ import annotations
@@ -64,7 +69,6 @@ PANAV_KEY = {"CA": "CA", "CB": "CB", "C": "CO", "N": "N"}
 LIMS = {"CA": 4.0, "CB": 4.0, "C": 4.0, "N": 6.0}  # plotted window (ppm, +/-)
 LACS_HALF_PPM = 0.5
 CACHE = sp.TMP / "paper_figs" / "panav_loop_to_st_id.json"
-FS_SMALL = 5.0
 
 
 # --------------------------------------------------------------------------------
@@ -202,112 +206,112 @@ def pearson(x, y) -> float:
 NUC_LABEL = {"CA": "Cα", "CB": "Cβ", "C": "C′", "N": "N"}
 
 
-def plot(M, share: dict, n_chains: int) -> None:
-    import matplotlib.gridspec as gridspec
+OUT_NAME = "S18"  # Supplementary Fig. S18 (main Fig. 2b, fig2b.pdf, until 11 Nov 2026)
+# Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1).
+FIG_W, FIG_H = sp.W_DOUBLE, 40.0
+SC_LEFT, SC_TOP, SC_SIZE, SC_GAP = 12.0, 5.5, 24.0, 5.0  # scatter row (mm)
+BAR_W, BAR_RIGHT_MARGIN = 24.0, 3.0
+BAR_BOX = (FIG_W - BAR_RIGHT_MARGIN - BAR_W, SC_TOP + 2.0, BAR_W, 20.0)  # l, t, w, h
+XLABEL_Y_MM = 1.4  # panel a's shared x label, above the bottom edge
+INK, POINT = "#1A1A1A", "#4D4D4D"
 
-    fig = sp.figure(112.0, 74.0)
-    gs = gridspec.GridSpec(
-        2,
-        3,
-        figure=fig,
-        width_ratios=[1, 1, 0.78],
-        left=0.105,
-        right=0.985,
-        bottom=0.115,
-        top=0.93,
-        wspace=0.42,
-        hspace=0.42,
-    )
-    col = sp.OKABE_ITO["blue"]
+
+def _axes(fig, left, top, w, h):
+    return fig.add_axes([left / FIG_W, 1 - (top + h) / FIG_H, w / FIG_W, h / FIG_H])
+
+
+def plot(M, share: dict, n_chains: int) -> None:
+    fig = sp.figure(FIG_W, FIG_H)
     for j, a in enumerate(ATOMS):
-        ax = fig.add_subplot(gs[j // 2, j % 2])
+        ax = _axes(fig, SC_LEFT + j * (SC_SIZE + SC_GAP), SC_TOP, SC_SIZE, SC_SIZE)
         x = M[f"neg_panav_{a}"].to_numpy(float)
         y = M[f"trizod_total_{a}"].to_numpy(float)
         m = np.isfinite(x) & np.isfinite(y)
         x, y = x[m], y[m]
         L = LIMS[a]
         out = (np.abs(x) > L) | (np.abs(y) > L)
-        ax.plot([-L, L], [-L, L], color="0.6", lw=0.5, ls="--", zorder=0)
-        ax.axhline(0, color="0.85", lw=0.4, zorder=0)
-        ax.axvline(0, color="0.85", lw=0.4, zorder=0)
-        ax.scatter(
-            x[~out], y[~out], s=1.2, lw=0, color=col, alpha=0.35, rasterized=False
-        )
-        # points beyond the window, pinned to its edge as open markers
+        ax.axhline(0, color="0.88", lw=0.4, zorder=0)
+        ax.axvline(0, color="0.88", lw=0.4, zorder=0)
+        ax.plot([-L, L], [-L, L], color="0.6", lw=0.5, ls=(0, (3, 2)), zorder=1)
+        ax.scatter(x[~out], y[~out], s=1.0, lw=0, color=POINT, alpha=0.3, zorder=2)
+        # lists beyond the window, pinned to its edge as open markers
         ax.scatter(
             np.clip(x[out], -L, L),
             np.clip(y[out], -L, L),
-            s=4,
+            s=6,
             marker="o",
             facecolors="none",
-            edgecolors=sp.OKABE_ITO["vermillion"],
-            lw=0.4,
+            edgecolors=INK,
+            lw=0.5,
+            zorder=3,
+            clip_on=False,
         )
-        ax.set_xlim(-L * 1.04, L * 1.04)
-        ax.set_ylim(-L * 1.04, L * 1.04)
+        ax.set_xlim(-L * 1.05, L * 1.05)
+        ax.set_ylim(-L * 1.05, L * 1.05)
         ax.set_aspect("equal")
         t = 2 if L <= 4 else 3
-        ax.set_xticks(np.arange(-L, L + 0.1, t))
-        ax.set_yticks(np.arange(-L, L + 0.1, t))
-        r = pearson(x, y)
-        r_win = pearson(x[~out], y[~out])
-        ax.text(
-            0.04,
-            0.97,
-            NUC_LABEL[a],
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=FS_SMALL + 1,
-            fontweight="bold",
+        ax.set_xticks(
+            np.arange(-L, L + 0.1, 2 * t),
+            [f"{v:g}" for v in np.arange(-L, L + 0.1, 2 * t)],
+        )
+        ax.set_yticks(
+            np.arange(-L, L + 0.1, 2 * t),
+            [f"{v:g}" for v in np.arange(-L, L + 0.1, 2 * t)],
+        )
+        ax.set_title(
+            NUC_LABEL[a], loc="left", fontsize=sp.FS_BODY, fontweight="bold", pad=2
         )
         ax.text(
             0.04,
-            0.85,
-            f"r = {r:.2f} (all {len(x):,})\nr = {r_win:.2f} (in window)",
+            0.96,
+            f"r = {pearson(x[~out], y[~out]):.2f}\n({pearson(x, y):.2f})",
             transform=ax.transAxes,
             ha="left",
             va="top",
-            fontsize=FS_SMALL,
-            linespacing=1.15,
+            fontsize=sp.FS_TICK,
+            linespacing=1.1,
         )
         if out.any():
             ax.text(
                 0.97,
-                0.03,
+                0.04,
                 f"{out.sum()} outside",
                 transform=ax.transAxes,
                 ha="right",
                 va="bottom",
-                fontsize=FS_SMALL,
-                color=sp.OKABE_ITO["vermillion"],
+                fontsize=sp.FS_SMALL,
+                color="0.35",
             )
-        if j % 2 == 0:
+        if j == 0:
             ax.set_ylabel("TriZOD offset (ppm)")
-        if j // 2 == 1:
-            ax.set_xlabel("−PANAV correction (ppm)")
-    # share of chains with |LACS| >= 0.5 ppm per nucleus
-    axb = fig.add_subplot(gs[:, 2])
-    labs = ["Cα/Cβ", "C′", "N", "any"]
+    xc = (SC_LEFT + (4 * SC_SIZE + 3 * SC_GAP) / 2) / FIG_W
+    fig.text(
+        xc,
+        XLABEL_Y_MM / FIG_H,
+        "\u2212PANAV correction (ppm)",
+        ha="center",
+        va="bottom",
+        fontsize=sp.FS_BODY,
+    )
+    # b: share of all released chains with |LACS offset| >= 0.5 ppm, per nucleus
+    axb = _axes(fig, *BAR_BOX)
+    labs = ["Cα/Cβ", "C′", "N", "Any"]
     keys = ["CA", "C", "N", "any"]
     vals = [100 * share[k] for k in keys]
     yy = np.arange(len(labs))[::-1]
-    axb.barh(yy, vals, height=0.62, color=[sp.OKABE_ITO["blue"]] * 3 + ["0.45"])
+    axb.barh(yy, vals, height=0.64, color=["0.62"] * 3 + ["0.30"], lw=0)
     for yi, v in zip(yy, vals):
-        axb.text(v + 1.5, yi, f"{v:.1f}%", va="center", ha="left", fontsize=FS_SMALL)
+        axb.text(v + 1.5, yi, f"{v:.0f}%", va="center", ha="left", fontsize=sp.FS_TICK)
     axb.set_yticks(yy, labs)
+    axb.tick_params(axis="y", length=0)
     axb.set_xlim(0, 60)
-    axb.set_xticks([0, 20, 40, 60])
-    axb.set_xlabel("Chains with\n|LACS| ≥ 0.5 ppm (%)")
-    axb.set_title(f"All {n_chains:,} chains", loc="left", fontsize=FS_SMALL + 0.5)
+    axb.set_xticks([0, 30, 60])
     axb.set_ylim(-0.6, len(labs) - 0.4)
-    # vertically centre the bar panel against the scatter grid
-    pos = axb.get_position()
-    axb.set_position(
-        [pos.x0 + 0.03, pos.y0 + pos.height * 0.25, pos.width - 0.03, pos.height * 0.5]
-    )
-    sp.fig_label(fig, "b", 0.0, 0.0)
-    sp.save(fig, "fig2b")
+    # directly under its own tick labels (b's axes end above a's)
+    axb.set_xlabel("Chains with LACS\noffset \u2265 0.5 ppm (%)", linespacing=1.1)
+    sp.fig_label(fig, "a", 0.0, 0.0)
+    sp.fig_label(fig, "b", BAR_BOX[0] - 9.5, 0.0)
+    sp.save(fig, OUT_NAME)
 
 
 def main() -> None:
@@ -386,13 +390,13 @@ def main() -> None:
 
     sd = sp.out_dir("source_data")
     sd.mkdir(parents=True, exist_ok=True)
-    M.to_csv(sd / "fig2b_panav_matched.csv", index=False)
-    with open(sd / "fig2b_lacs_share.csv", "w") as fh:
+    M.to_csv(sd / f"{OUT_NAME}_panav_matched.csv", index=False)
+    with open(sd / f"{OUT_NAME}_lacs_share.csv", "w") as fh:
         fh.write("nucleus,share,n_chains_at_least_0p5ppm,n_chains_total\n")
         for k, v in share.items():
             fh.write(f"{k},{v:.6f},{round(v * n_chains)},{n_chains}\n")
     plot(M, share, n_chains)
-    print(f"wrote {sp.out_dir() / 'fig2b.pdf'}")
+    print(f"wrote {sp.out_dir() / (OUT_NAME + '.pdf')}")
 
 
 if __name__ == "__main__":

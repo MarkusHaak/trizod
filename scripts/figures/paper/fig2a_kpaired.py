@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fig. 2a -- same residue, different shift count (within-residue k test).
+"""Fig. 2b (Fig. 2a until 11 Nov 2026) -- same residue, different shift count.
 
 For every sequence carried by non-bound chains from at least two BMRB entries,
 draw up to 30 chain pairs (seeded), drop same-entry pairs, and compare each
@@ -17,13 +17,16 @@ recomputes with the same code): same pair sampling (``random.Random(0)`` over
 The two y axes are scaled to the same fraction of each score's own
 ordered-to-disordered difference (median score of ordered- vs disordered-
 consensus residues in the pairs), so a shift of equal visual height is an equal
-share of the label's dynamic range.
+share of the label's dynamic range. Ordered residues (the message) are drawn in
+ink, disordered residues (the control) in grey; the per-bin pair counts are in
+the Source Data, not in the artwork.
 
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig2a_kpaired.py \
         --out-dir <draft>/Figures/paper
-Outputs: <out-dir>/fig2a.pdf and <out-dir>/source_data/fig2a.csv; prints the
-plotted numbers.
+Outputs: <out-dir>/fig2b_kpaired.pdf (100 x 52 mm; with Fig. 2c, 58 mm, and a 2 mm gap
+it fills the 160 mm text width at 1:1) and <out-dir>/source_data/fig2b_kpaired.csv;
+prints the plotted numbers. ``fig2c_chezod.py`` imports the row layout from here.
 """
 
 from __future__ import annotations
@@ -39,8 +42,16 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import style_paper as sp  # noqa: E402
 
+# italic k in the same sans-serif face as the text (mathtext defaults to DejaVu)
+sp.plt.rcParams.update(
+    {
+        "mathtext.fontset": "custom",
+        "mathtext.it": "Arial:italic",
+        "mathtext.rm": "Arial",
+    }
+)
+
 PARQUET = sp.PQ_MAIN
-FS_SMALL = 5.0
 
 MAX_PAIRS_PER_SEQ = 30
 SEED = 0
@@ -48,6 +59,7 @@ ORDERED_MAX = 0.3  # replicate-consensus G below this: ordered
 DISORDERED_MIN = 0.7  # replicate-consensus G above this: disordered
 BIN_EDGES = [-0.5, 0.5, 3, 6, 9, 21]
 BIN_LABELS = ["0", "1–3", "4–6", "7–9", "≥10"]
+OUT_NAME = "fig2b_kpaired"  # Fig. 2b (was Fig. 2a, fig2a.pdf, until 11 Nov 2026)
 
 
 def residue_pairs(parquet: Path) -> pd.DataFrame:
@@ -127,20 +139,42 @@ def summarise(R: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# Fig. 2 bottom row: b (this file) and c (fig2c_chezod.py) side by side, together the
+# 160 mm text width (W_DOUBLE), placed at 1:1 (b at FIG_W / W_DOUBLE of \textwidth).
+C_W = 58.0  # width of Fig. 2c
+ROW_GAP = 2.0  # between b and c
+FIG_W, FIG_H = sp.W_DOUBLE - C_W - ROW_GAP, 52.0  # 100 x 52 mm
+AX_TOP, AX_H = 6.0, 36.5  # shared by b and c, so the axes of the row align
+AX_W, AX_GAP = 37.0, 11.0  # each score's axes; gap holds the G-score tick labels
+# axes boxes in mm: (left, top, width, height)
+BOX = {
+    "Z": (FIG_W - 1.0 - 2 * AX_W - AX_GAP, AX_TOP, AX_W, AX_H),
+    "G": (FIG_W - 1.0 - AX_W, AX_TOP, AX_W, AX_H),
+}
+STYLES = {
+    # ordered: the series that carries the message, in full ink; disordered: the control
+    "ordered": {"color": "#1A1A1A", "marker": "o", "mfc": "#1A1A1A", "dx": -0.11},
+    "disordered": {"color": "#8C8C8C", "marker": "s", "mfc": "white", "dx": 0.11},
+}
+# Both y axes span the same fraction of each score's gap. LO_FRAC leaves room for the
+# lowest whisker (disordered, dk >= 10, G side: Q1 = -0.165 = -0.215 of the G gap).
+LO_FRAC, HI_FRAC = -0.27, 0.82
+YTICKS = {"Z": [0, 4, 8], "G": [0, 0.3, 0.6]}
+XLABEL_Y_MM = 1.4  # x-label baseline above the bottom edge; same in fig2c_chezod.py
+
+
 def plot(S: pd.DataFrame, gaps: dict, out_pdf: Path) -> None:
-    fig = sp.figure(sp.W_DOUBLE, 46.0, layout="constrained")
-    fig.get_layout_engine().set(w_pad=0.04, wspace=0.08)
-    axes = fig.subplots(1, 2)
+    from matplotlib.lines import Line2D
+
+    fig = sp.figure(FIG_W, FIG_H)
     x = np.arange(len(BIN_LABELS))
-    styles = {
-        "ordered": {"color": sp.OKABE_ITO["blue"], "marker": "o", "dx": -0.08},
-        "disordered": {"color": sp.OKABE_ITO["vermillion"], "marker": "s", "dx": 0.08},
-    }
-    lo_frac, hi_frac = -0.22, 0.82  # same fraction of each score's gap
-    titles = {"Z": "CheZOD Z-score", "G": "TriZOD G-score"}
-    for ax, score, unit in ((axes[0], "dZ", "Z"), (axes[1], "dG", "G")):
-        gap = gaps[unit]
-        for state, st in styles.items():
+    titles = {"Z": "Z-score", "G": "G-score"}
+    for unit in ("Z", "G"):
+        left, top, w, h = BOX[unit]
+        ax = fig.add_axes([left / FIG_W, 1 - (top + h) / FIG_H, w / FIG_W, h / FIG_H])
+        score, gap = f"d{unit}", gaps[unit]
+        ax.axhline(0, color="0.75", lw=0.5, zorder=0)
+        for state, st in STYLES.items():
             s = S[S.state == state].set_index("dk_bin").loc[BIN_LABELS]
             ax.errorbar(
                 x + st["dx"],
@@ -151,44 +185,59 @@ def plot(S: pd.DataFrame, gaps: dict, out_pdf: Path) -> None:
                 ],
                 color=st["color"],
                 marker=st["marker"],
-                ms=3.0,
-                lw=0.9,
-                elinewidth=0.6,
-                capsize=1.4,
-                label=f"{state} consensus",
+                mfc=st["mfc"],
+                mec=st["color"],
+                mew=0.8,
+                ms=3.6,
+                lw=1.0,
+                elinewidth=0.7,
+                capsize=1.6,
+                capthick=0.7,
+                zorder=3 if state == "ordered" else 2,
             )
-            # pair counts per bin, in the series colour, along the top of G
-            if unit != "G":
-                continue
-            ytxt = hi_frac * gap * (0.97 if state == "ordered" else 0.88)
-            for i, n in enumerate(s.n_pairs):
-                ax.text(
-                    i,
-                    ytxt,
-                    f"{n / 1000:.1f}k",
-                    ha="center",
-                    va="top",
-                    fontsize=FS_SMALL,
-                    color=st["color"],
-                )
-        ax.set_ylim(lo_frac * gap, hi_frac * gap)
+        ax.set_ylim(LO_FRAC * gap, HI_FRAC * gap)
         ax.set_xlim(-0.5, len(BIN_LABELS) - 0.5)
-        ax.axhline(0, color="0.6", lw=0.5, zorder=0)
+        ax.set_yticks(YTICKS[unit], [f"{t:g}" for t in YTICKS[unit]])
         ax.set_xticks(x, BIN_LABELS)
-        ax.set_xlabel("Shift-count difference \u0394k at the residue")
-        ax.set_ylabel(f"\u0394{unit}, higher-k minus lower-k chain")
-        ax.set_title(titles[unit], loc="left")
-    axes[1].text(
-        -0.45,
-        hi_frac * gaps["G"] * 0.78,
-        "residue pairs per bin",
-        ha="left",
-        va="top",
-        fontsize=FS_SMALL,
-        color="0.35",
+        ax.set_title(titles[unit], loc="left", fontsize=sp.FS_BODY, pad=3)
+        if unit == "Z":
+            ax.set_ylabel(
+                "Score difference\n(more \u2212 fewer shifts)", linespacing=1.1
+            )
+            handles = [
+                Line2D(
+                    [],
+                    [],
+                    color=st["color"],
+                    marker=st["marker"],
+                    mfc=st["mfc"],
+                    mec=st["color"],
+                    mew=0.8,
+                    ms=3.6,
+                    lw=1.0,
+                    label=f"{state.capitalize()} residues",
+                )
+                for state, st in STYLES.items()
+            ]
+            ax.legend(
+                handles=handles,
+                loc="upper left",
+                frameon=False,
+                handlelength=1.8,
+                borderaxespad=0.2,
+                fontsize=sp.FS_TICK,
+            )
+    # one x label for both axes, centred under the pair
+    xc = (BOX["Z"][0] + BOX["G"][0] + BOX["G"][2]) / 2 / FIG_W
+    fig.text(
+        xc,
+        XLABEL_Y_MM / FIG_H,
+        r"Difference in shift count $\Delta\mathit{k}$",
+        ha="center",
+        va="bottom",
+        fontsize=sp.FS_BODY,
     )
-    axes[0].legend(loc="upper left", frameon=False, handlelength=1.8)
-    sp.fig_label(fig, "a", 0.0, 0.0)
+    sp.fig_label(fig, "b", 0.0, 0.0)
     sp.save(fig, out_pdf.stem)
 
 
@@ -198,15 +247,17 @@ def main() -> None:
     ap.add_argument(
         "--replot",
         action="store_true",
-        help="redraw from source_data/fig2a.csv without recomputing the pairs",
+        help="redraw from source_data/fig2b_kpaired.csv without recomputing the pairs",
     )
     args = sp.parse_args(ap)
     if args.replot:
         S = pd.read_csv(
-            args.out_dir / "source_data" / "fig2a.csv", dtype={"dk_bin": str}
+            args.out_dir / "source_data" / f"{OUT_NAME}.csv", dtype={"dk_bin": str}
         )
         plot(
-            S, {"Z": S.gap_Z.iloc[0], "G": S.gap_G.iloc[0]}, args.out_dir / "fig2a.pdf"
+            S,
+            {"Z": S.gap_Z.iloc[0], "G": S.gap_G.iloc[0]},
+            args.out_dir / f"{OUT_NAME}.pdf",
         )
         return
 
@@ -237,10 +288,10 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "source_data").mkdir(exist_ok=True)
     S.assign(gap_Z=gaps["Z"], gap_G=gaps["G"]).to_csv(
-        args.out_dir / "source_data" / "fig2a.csv", index=False
+        args.out_dir / "source_data" / f"{OUT_NAME}.csv", index=False
     )
-    plot(S, gaps, args.out_dir / "fig2a.pdf")
-    print(f"wrote {args.out_dir / 'fig2a.pdf'}")
+    plot(S, gaps, args.out_dir / f"{OUT_NAME}.pdf")
+    print(f"wrote {args.out_dir / (OUT_NAME + '.pdf')}")
 
 
 if __name__ == "__main__":

@@ -1,55 +1,57 @@
 #!/usr/bin/env python3
-"""Fig. 3c -- the held-out sets: split integrity (c1) and disorder content (c2).
+"""Fig. 3c and 3d -- the held-out sets against training: similarity (c) and disorder (d).
 
-(c1) Split integrity of the build's split. On the FROZEN 2026-10 split (the default build)
-this is the state BEFORE rebuild fix (a); on a later build (``style_paper.IS_FROZEN`` false)
-it is that build's released split, and the counts table is labelled with its release.
-For each held-out chain (TriZOD test + CheZOD117; 460 + 115 = 575 in 2026-10), a permissive
-``mmseqs easy-search`` against the training representatives of each tier
-(``train/<tier>/train_<tier>_best.fasta``) returns every alignment with identity >= 20 %
-and e < 1e-3, with no coverage filter. The search uses the build's own ``COMMON`` block
-(``trizod/dataset/mmseqs.py``: ``--alignment-mode 3 -s 7.5 --comp-bias-corr 0 --mask 0``),
-so identities and coverages are those the corrected stage-2 criterion will see.
+c. For each held-out chain (TriZOD test + CheZOD117), its closest training
+representative: identity against alignment coverage. The search is the build's own
+stage-2 leakage search (``trizod.dataset.mmseqs.leakage_search_options``: training
+chains as query, the held-out chains as target database, ``--alignment-mode 3
+--cov-mode 1 -c 0 -s 7.5 --comp-bias-corr 0 --mask 0 --prefilter-mode 2``, E <= 1e-3),
+with one change: ``--min-seq-id`` is lowered from 0.3 to 0.2, so near misses below the
+identity threshold are drawn too. Because the held-out chains are the target database,
+every E-value is the one the build saw, whatever training set is searched. The query is
+the unfiltered tier's representatives (``train/unfiltered/train_unfiltered_best.fasta``);
+the representatives of every stricter tier are a subset of them, so the closest
+unfiltered representative is the closest representative of any tier.
 
-The shaded region is what that corrected criterion excludes: identity >= 0.30 AND >= 80 %
-of the TEST chain covered (``qcov``). Each chain is drawn at one alignment, taken from the
-union of the four searches:
+Coverage is the build's (aligned span / chain length, gaps included). Under the
+build's leakage rule (``MANIFEST.json`` ``leakage.rule``; "either" since the 2026-11
+build) the x axis is the larger of the two coverages, i.e. the better-covered chain,
+and the shaded region is what the rule removes from training: identity >= 30 % over
+>= 80 % of the test OR the training chain. Under rule "test" the x axis is the
+test-chain coverage. Each held-out chain is drawn at one alignment: an in-region one if
+any exists (none should, for a build that passed its gate), otherwise the one with the
+largest identity x coverage. Chains without any reported alignment are not drawn; the
+key gives drawn and total chains per set. Counts by tier and rule are written to
+``fig3c_numbers.json``.
 
-* if any alignment lies in the region, the in-region one whose representative belongs to
-  the strictest tier (ties: highest identity);
-* otherwise the alignment with the largest identity x test-chain coverage.
+d. Share of chains by disorder class -- the share of a chain's scored residues with
+G > 0.65 is <= 10 %, 10-90 % or >= 90 % (the key gives the classes; "mostly disordered"
+is avoided because the text uses it for > 50 %) --
+for CheZOD117, the TriZOD test set and the training representatives of every tier, each
+with its own tier's labels (``scores/<tier>/scores.json``; the test sets use the
+unfiltered labels, as released).
 
-Points are coloured by the strictest tier at which the plotted representative is a
-training representative (tiers are nested). Counts inside the region are given per
-CUMULATIVE tier, from that tier's own search (e-values depend on the target-set size, so
-the per-tier searches find slightly more than the unfiltered search restricted to the
-tier). The pipeline's current (bidirectional) definition, a 50 %/50 % and a 90 %/50 %
-definition are counted alongside in ``fig3c_numbers.json``. Chains without any alignment
-are not drawn.
+Colours: blue = TriZOD test, orange = CheZOD117 (Okabe-Ito roles of ``style_paper``);
+the excluded region and the disorder classes are neutral greys.
 
-Colour roles in c1 (revised 31 Oct, format review): orange and blue mean only the two
-held-out sets (margin histograms, column heads, c2 row labels); the excluded region and
-its bounds are neutral grey (light grey fill + grey hatch, grey dashed lines), so the
-region no longer shares a hue with CheZOD117. Every point is filled with its tier colour
-and carries a ``EDGE_LW`` dark edge, so the pale unfiltered tier stays visible on white;
-the two sets differ by marker shape (circle = TriZOD test, triangle = CheZOD117). Tier
-names in the counts table are set in dark text (the tier legend carries the colours).
-
-(c2) One stacked strip of per-chain disorder class -- share of a chain's scored residues
-with G > 0.65 in <= 10 % / 10-90 % / >= 90 % -- for CheZOD117, the TriZOD test set and the
-training representatives of every tier, each with its own tier's labels
-(``scores/<tier>/scores.json``; the test sets use the unfiltered labels, as released).
+``MMSEQS_ARGS`` is the search of the earlier version of this panel (held-out chains as
+query against each tier's representatives); the panel no longer uses it, but
+``scripts/manuscript/make_numbers.py`` imports it for the ``\\nLeak*Common*`` and
+near-redundant-representative macros, so it stays unchanged.
 
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig3c_split.py \
         --out-dir <draft>/Figures/paper [--work-dir <scratch>/fig3]
-Outputs: <out-dir>/fig3c.pdf; <out-dir>/fig3_data/fig3c1_points.csv,
-fig3c2_strip.csv and fig3c_numbers.json. The mmseqs hits are cached in ``--work-dir``
-(default ``tmp/fig3c_split`` in the code checkout).
+Outputs: <out-dir>/fig3c.pdf and fig3d.pdf (each W_SINGLE wide, set side by side in
+Fig. 3); <out-dir>/fig3_data/fig3c_points.csv, fig3d_disorder_classes.csv and
+fig3c_numbers.json. The mmseqs hits are cached in ``--work-dir``
+(default ``fig3c_split`` in the cache directory), keyed by the inputs and options.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
 import shutil
 import subprocess
@@ -62,129 +64,135 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import style_paper as sp  # noqa: E402
 
-FS_SMALL = 5.0
-# c1 colour roles: the excluded region is neutral grey, never a category hue
-REGION_FILL = "#F2F2F2"  # light grey fill ("shaded" in the legend)
-REGION_HATCH = sp.CAT["light"]  # grey hatch over the fill
-REGION_LINE = "#7F7F7F"  # grey dashed bounds (scatter and margins)
-REGION_TEXT = sp.CAT["neutral"]
-EDGE_COLOR = "#262626"  # dark marker edge, keeps the pale unfiltered tier visible
-EDGE_LW = 0.3  # pt
-ID_MIN, COV_MIN = (
-    0.30,
-    0.80,
-)  # corrected stage-2 criterion: identity, TEST-chain coverage
+from trizod.dataset import mmseqs as mm  # noqa: E402
+
+# The earlier panel's search; kept verbatim for scripts/manuscript/make_numbers.py.
 MMSEQS_ARGS = [
     "--min-seq-id", "0.2", "-c", "0", "-e", "1e-3",
-    # the build's COMMON block (trizod/dataset/mmseqs.py), so identities are comparable
     "--alignment-mode", "3", "-s", "7.5", "--comp-bias-corr", "0", "--mask", "0",
     "--max-seqs", "5000",
 ]  # fmt: skip
-FMT = (
-    "query,target,fident,alnlen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,qcov,tcov"
-)
+PANEL_MIN_SEQ_ID = 0.2  # the panel's only change to the stage-2 options
+ID_MIN, COV_MIN = mm.LEAKAGE_MIN_SEQ_ID, mm.LEAKAGE_MIN_COV
 TEST_FASTAS = {
     "test_trizod": sp.BUNDLE / "test" / "TriZOD_test_set.fasta",
     "test_chezod117": sp.BUNDLE / "test" / "CheZOD117_test_set.fasta",
 }
-RULES = {
-    "test_coverage_30_80": lambda h: (h.fident >= ID_MIN) & (h.qcov >= COV_MIN),
-    "bidirectional_30_80": lambda h: (h.fident >= ID_MIN) & (h.qcov >= COV_MIN) & (h.tcov >= COV_MIN),
-    "id50_testcov50": lambda h: (h.fident >= 0.50) & (h.qcov >= 0.50),
-    "id90_testcov50": lambda h: (h.fident >= 0.90) & (h.qcov >= 0.50),
+SET_STYLE = {  # label, colour, marker, marker area (pt^2)
+    "test_trizod": ("TriZOD test", sp.CAT["test"], "o", 9.0),
+    "test_chezod117": ("CheZOD117", sp.CAT["chezod"], "^", 11.0),
+}
+REGION_FILL = "#EBEBEB"
+REGION_LINE = "#7F7F7F"
+CLASS_COLORS = ["#DADADA", "#969696", "#3B3B3B"]  # ordered -> disordered
+# share of a chain's scored residues with G > G_DIS
+CLASS_LABELS = ["≤10%", "10–90%", "≥90%"]
+RULES = {  # extra counts for the numbers JSON; x = the coverage the rule tests
+    "either_30_80": lambda h: (h.ident >= ID_MIN) & (np.maximum(h.test_cov, h.train_cov) >= COV_MIN),
+    "test_30_80": lambda h: (h.ident >= ID_MIN) & (h.test_cov >= COV_MIN),
+    "both_30_80": lambda h: (h.ident >= ID_MIN) & (np.minimum(h.test_cov, h.train_cov) >= COV_MIN),
+    "test_50_50": lambda h: (h.ident >= 0.50) & (h.test_cov >= 0.50),
+    "test_90_50": lambda h: (h.ident >= 0.90) & (h.test_cov >= 0.50),
 }  # fmt: skip
 
 
 def mmseqs_version() -> str:
+    return mm.mmseqs_version() or "missing"
+
+
+def leakage_rule() -> str:
+    """The rule the build applied (release MANIFEST), else the pipeline default."""
     try:
-        return subprocess.run(
-            ["mmseqs", "version"], capture_output=True, text=True
-        ).stdout.strip()
-    except FileNotFoundError:
-        return "missing"
+        man = json.loads((sp.BUNDLE / "MANIFEST.json").read_text())
+        return mm.check_rule(man["leakage"]["rule"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return mm.DEFAULT_LEAKAGE_RULE
+
+
+def panel_search_options() -> list[str]:
+    """The build's stage-2 options with ``--min-seq-id`` lowered to show near misses."""
+    opts = mm.leakage_search_options()
+    opts[opts.index("--min-seq-id") + 1] = str(PANEL_MIN_SEQ_ID)
+    return opts
+
+
+def _digest(paths: list[Path], opts: list[str]) -> str:
+    h = hashlib.sha256()
+    for p in paths:
+        h.update(Path(p).read_bytes())
+    h.update(" ".join(opts).encode())
+    return h.hexdigest()[:16]
 
 
 def run_search(work: Path, refresh: bool) -> pd.DataFrame:
-    """Combined test FASTA vs each tier's representatives; cached per tier in ``work``."""
+    """Unfiltered representatives (query) vs all held-out chains (target), cached."""
     work.mkdir(parents=True, exist_ok=True)
-    query = work / "test_all.fasta"
-    with open(query, "w") as fh:
+    target = work / "test_all.fasta"
+    with open(target, "w") as fh:
         for path in TEST_FASTAS.values():
             for k, s in sp.read_fasta(path).items():
                 fh.write(f">{k}\n{s}\n")
-    frames = []
-    for t in sp.TIERS:
-        out = work / f"hits_{t}.m8"
-        if refresh or not out.exists():
-            if shutil.which("mmseqs") is None:
-                raise SystemExit("mmseqs not on PATH")
-            target = sp.BUNDLE / "train" / t / f"train_{t}_best.fasta"
-            tmp = work / f"tmp_{t}"
-            cmd = ["mmseqs", "easy-search", str(query), str(target), str(out), str(tmp),
-                   *MMSEQS_ARGS, "--format-output", FMT, "--threads", "8", "-v", "1"]  # fmt: skip
-            print(" ".join(cmd), file=sys.stderr)
-            subprocess.run(cmd, check=True)
-            shutil.rmtree(tmp, ignore_errors=True)
-        h = pd.read_csv(out, sep="\t", names=FMT.split(","))
-        h["search_tier"] = t
-        frames.append(h)
-    return pd.concat(frames, ignore_index=True)
+    query = sp.BUNDLE / "train" / "unfiltered" / "train_unfiltered_best.fasta"
+    opts = panel_search_options()
+    out = work / f"panel_hits_{_digest([query, target], opts)}.tsv"
+    if refresh or not out.exists():
+        if shutil.which("mmseqs") is None:
+            raise SystemExit("mmseqs not on PATH")
+        tmp = work / "tmp_panel"
+        cmd = ["mmseqs", "easy-search", str(query), str(target), str(out), str(tmp),
+               *opts, "--threads", "8", "-v", "1"]  # fmt: skip
+        print(" ".join(cmd), file=sys.stderr)
+        subprocess.run(cmd, check=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+    H = pd.DataFrame([dataclasses.asdict(h) for h in mm.parse_leakage_hits(out)])
+    H["ident"] = H["pident"] / 100.0
+    return H
 
 
-def analyse(hits: pd.DataFrame, set_of: dict, rep_tier: dict):
-    hits = hits.copy()
-    hits["set"] = hits["query"].map(set_of)
-    hits["in_region"] = RULES["test_coverage_30_80"](hits)
-    # union of the four searches: one row per (query, target), best-scoring alignment
-    uni = (
-        hits.sort_values("bits", ascending=False)
-        .drop_duplicates(["query", "target"])
-        .reset_index(drop=True)
-    )
-    uni["ttier"] = uni["target"].map(rep_tier)
-    uni["trank"] = uni["ttier"].map(sp.RANK)
-    uni["score"] = uni.fident * uni.qcov
+def analyse(hits: pd.DataFrame, set_of: dict, reps: dict, rep_tier: dict, rule: str):
+    h = hits.copy()
+    h["set"] = h["test_id"].map(set_of)
+    h["ttier"] = h["train_id"].map(rep_tier)
+    h["trank"] = h["ttier"].map(sp.RANK)
+    h["xcov"] = np.maximum(h.test_cov, h.train_cov) if rule == "either" else h.test_cov
+    h["in_region"] = (h.ident >= ID_MIN) & (h.xcov >= COV_MIN)
+    h["score"] = h.ident * h.xcov
 
     rows = []
     for q, s in set_of.items():
-        h = uni[uni["query"] == q]
-        if h.empty:
+        g = h[h["test_id"] == q]
+        if g.empty:
             rows.append({"id": q, "set": s, "has_hit": False, "in_region": False})
             continue
-        inr = h[h.in_region]
+        inr = g[g.in_region]
         if len(inr):
-            best = inr.sort_values(["trank", "fident", "qcov"], ascending=False).iloc[0]
+            best = inr.sort_values(["trank", "ident", "xcov"], ascending=False).iloc[0]
         else:
-            best = h.sort_values(["score", "fident"], ascending=False).iloc[0]
+            best = g.sort_values(["score", "ident"], ascending=False).iloc[0]
         rows.append({
-            "id": q, "set": s, "has_hit": True, "target": best.target, "fident": best.fident,
-            "qcov": best.qcov, "tcov": best.tcov, "qlen": best.qlen, "tlen": best.tlen,
-            "evalue": best.evalue, "ttier": best.ttier, "in_region": bool(best.in_region),
+            "id": q, "set": s, "has_hit": True, "target": best.train_id, "ident": best.ident,
+            "xcov": best.xcov, "test_cov": best.test_cov, "train_cov": best.train_cov,
+            "test_len": best.test_len, "train_len": best.train_len, "evalue": best.evalue,
+            "ttier": best.ttier, "in_region": bool(best.in_region),
         })  # fmt: skip
     P = pd.DataFrame(rows)
 
     counts = {}
-    for t in sp.TIERS:
-        own = hits[hits.search_tier == t]
-        restricted = uni[uni.trank >= sp.RANK[t]]
+    for t in sp.TIERS:  # cumulative: alignments to that tier's representatives
+        own = h[h.train_id.isin(reps[t])]
         c = {}
         for s in TEST_FASTAS:
             ss = own[own.set == s]
             c[s] = {
-                name: int(ss[rule(ss)]["query"].nunique())
-                for name, rule in RULES.items()
+                name: int(ss[rule_(ss)]["test_id"].nunique())
+                for name, rule_ in RULES.items()
             }
-            c[s]["any_hit"] = int(ss["query"].nunique())
-            rr = restricted[restricted.set == s]
-            c[s]["test_coverage_30_80_from_union"] = int(
-                rr[rr.in_region]["query"].nunique()
-            )
-        c["reps_in_region_any_test_chain"] = int(own[own.in_region]["target"].nunique())
-        c["reps_bidirectional_any_test_chain"] = int(
-            own[RULES["bidirectional_30_80"](own)]["target"].nunique()
+            c[s]["any_hit"] = int(ss["test_id"].nunique())
+        c["reps_in_region_any_test_chain"] = int(
+            own[own.in_region]["train_id"].nunique()
         )
         counts[t] = c
-    return uni, P, counts
+    return h, P, counts
 
 
 def disorder_strip(test_ids: dict, reps: dict):
@@ -231,203 +239,112 @@ def disorder_strip(test_ids: dict, reps: dict):
     return strip
 
 
-def draw(P: pd.DataFrame, counts: dict, strip: list, n_total: int):
+# c and d are half-width cells (W_SINGLE) set side by side in Fig. 3 at 1:1, below a and b
+H_CD = 50.0  # mm, height of both
+AX_Y0_CD, AX_H_CD = 9.5, 34.0  # bottom and height of both axes, mm
+Y_LIM_C = (17.5, 102.0)  # identity (%): no marker on an axis
+X_LIM_C = (-2.0, 102.0)  # coverage (%)
+
+
+def draw_c(P: pd.DataFrame, rule: str):
+    """Fig. 3c: each held-out chain against its closest training representative."""
     import matplotlib.patches as mpatches
     from matplotlib.lines import Line2D
 
-    W, H = sp.W_SINGLE, 80.0
+    W, H = sp.W_SINGLE, H_CD
     fig = sp.figure(W, H)
-
-    def ax_mm(x, y, w, h, **kw):
-        return fig.add_axes([x / W, y / H, w / W, h / H], **kw)
-
-    # ------------------------------------------------------------------ c1 scatter
-    X0, Y0, AW, AH = 11.0, 37.0, 42.0, 33.0
-    ax = ax_mm(X0, Y0, AW, AH)
-    axx = ax_mm(X0, Y0 + AH + 0.6, AW, 5.5, sharex=ax)
-    axy = ax_mm(X0 + AW + 0.6, Y0, 5.5, AH, sharey=ax)
-    region = mpatches.Rectangle((COV_MIN, ID_MIN), 1.03 - COV_MIN, 1.03 - ID_MIN, facecolor=REGION_FILL,
-                                edgecolor=REGION_HATCH, hatch="////", lw=0, zorder=0)  # fmt: skip
-    # edgecolor sets the hatch colour; lw=0 hides the outline
-    region.set_hatch_linewidth(0.4)
-    ax.add_patch(region)
+    ax = fig.add_axes([13.0 / W, AX_Y0_CD / H, 62.0 / W, AX_H_CD / H])
+    hi = Y_LIM_C[1]
+    x0, y0 = 100 * COV_MIN, 100 * ID_MIN
+    ax.add_patch(mpatches.Rectangle((x0, y0), X_LIM_C[1] - x0, hi - y0,
+                                    facecolor=REGION_FILL, lw=0, zorder=0))  # fmt: skip
     ax.plot(
-        [COV_MIN, COV_MIN, 1.03],
-        [1.03, ID_MIN, ID_MIN],
-        color=REGION_LINE,
-        lw=0.6,
-        ls="--",
-        zorder=1,
+        [x0, x0, X_LIM_C[1]], [hi, y0, y0], color=REGION_LINE, lw=0.7, ls="--", zorder=1
     )
-    ax.text(COV_MIN - 0.015, 0.66, "excluded by the\ncorrected criterion", rotation=90, ha="right",
-            va="center", fontsize=FS_SMALL, color=REGION_TEXT, linespacing=1.0)  # fmt: skip
-    pts = P[P.has_hit].copy()
-    rng = np.random.default_rng(0)
-    for s, marker, size in (
-        ("test_trizod", "o", (4.0, 6.5)),
-        ("test_chezod117", "^", (6.0, 9.0)),
-    ):
-        for t in sp.TIERS:
-            for inr in (False, True):
-                sub = pts[(pts.set == s) & (pts.ttier == t) & (pts.in_region == inr)]
-                if sub.empty:
-                    continue
-                x = np.clip(
-                    sub.qcov.to_numpy() + rng.uniform(-0.004, 0.004, len(sub)), 0, 1.0
-                )
-                y = np.clip(
-                    sub.fident.to_numpy() + rng.uniform(-0.004, 0.004, len(sub)), 0, 1.0
-                )
-                ax.scatter(
-                    x, y, s=size[inr], marker=marker, facecolor=sp.TIER_COLORS[t],
-                    edgecolor=EDGE_COLOR, linewidths=EDGE_LW, alpha=0.95 if inr else 0.75,
-                    zorder=(3 if inr else 2) + (s == "test_chezod117"),
-                )  # fmt: skip
-    ax.set_xlim(-0.02, 1.03)
-    ax.set_ylim(0.17, 1.03)
-    ax.set_xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
-    ax.set_xlabel("Fraction of the test chain covered")
-    ax.set_ylabel("Identity to the closest training representative")
-    bins_x = np.linspace(0, 1, 26)
-    bins_y = np.linspace(0.2, 1, 21)
-    for s, col in (
-        ("test_trizod", sp.CAT["test"]),
-        ("test_chezod117", sp.CAT["chezod"]),
-    ):
+    ax.text((x0 + X_LIM_C[1]) / 2, (y0 + hi) / 2 + 4, "Excluded", ha="center", va="center",
+            color=sp.CAT["neutral"], fontsize=sp.FS_TICK)  # fmt: skip
+    pts = P[P.has_hit]
+    handles = []
+    for s in ("test_trizod", "test_chezod117"):
+        lab, col, marker, size = SET_STYLE[s]
         sub = pts[pts.set == s]
-        axx.hist(
-            sub.qcov, bins=bins_x, histtype="step", color=col, lw=0.6, density=True
-        )
-        axy.hist(sub.fident, bins=bins_y, histtype="step", color=col, lw=0.6, density=True,
-                 orientation="horizontal")  # fmt: skip
-    for a in (axx, axy):
-        for side in ("top", "right", "left", "bottom"):
-            a.spines[side].set_visible(False)
-        a.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
-    axx.axvline(COV_MIN, color=REGION_LINE, lw=0.5, ls="--")
-    axy.axhline(ID_MIN, color=REGION_LINE, lw=0.5, ls="--")
-
-    # right column: legend + counts
-    xr = X0 + AW + 8.0
-    h_t = [
-        Line2D(
-            [],
-            [],
-            ls="",
-            marker="o",
-            ms=2.8,
-            mfc=sp.TIER_COLORS[t],
-            mec=EDGE_COLOR,
-            mew=EDGE_LW,
-            label=t,
-        )
-        for t in sp.TIERS
-    ]
-    h_s = [
-        Line2D(
-            [],
-            [],
-            ls="",
-            marker=m,
-            ms=ms,
-            mfc=sp.CAT["light"],
-            mec=EDGE_COLOR,
-            mew=EDGE_LW,
-            label=lab,
-        )
-        for m, ms, lab in (("o", 2.8, "TriZOD test"), ("^", 3.2, "CheZOD117"))
-    ]
-    leg1 = fig.legend(handles=h_t, loc="upper left", bbox_to_anchor=(xr / W, 77.5 / H), fontsize=FS_SMALL,
-                      title="Tier of representative", title_fontsize=FS_SMALL, alignment="left",
-                      handletextpad=0.2, labelspacing=0.15, borderaxespad=0.0)  # fmt: skip
-    fig.add_artist(leg1)
-    leg2 = fig.legend(handles=h_s, loc="upper left", bbox_to_anchor=(xr / W, 61.5 / H), fontsize=FS_SMALL,
-                      title="Test set (margins)", title_fontsize=FS_SMALL, alignment="left",
-                      handletextpad=0.2, labelspacing=0.15, borderaxespad=0.0)  # fmt: skip
-    for txt, col in zip(leg2.get_texts(), (sp.CAT["test"], sp.CAT["chezod"])):
-        txt.set_color(col)
-    n_nohit = int((~P.has_hit).sum())
-    fig.text(xr / W, 52.5 / H, f"Not shown: {n_nohit} of {n_total}\nchains without an\nalignment", fontsize=FS_SMALL,
-             color=sp.CAT["neutral"], va="top", linespacing=1.05)  # fmt: skip
-    # counts table (pre-fix)
-    yt = 44.0
-    split_label = "frozen split, pre-fix" if sp.IS_FROZEN else f"{sp.RELEASE} split"
-    fig.text(xr / W, yt / H, f"In shaded region\n({split_label})", fontsize=FS_SMALL,
-             color=REGION_TEXT, va="top", linespacing=1.05)  # fmt: skip
-    cx = [xr + 13.5, xr + 25.0]
-    yy = yt - 6.0
-    fig.text(
-        cx[0] / W,
-        yy / H,
-        "TriZOD",
-        fontsize=FS_SMALL,
-        ha="right",
-        va="center",
-        color=sp.CAT["test"],
-    )
-    fig.text(
-        cx[1] / W,
-        yy / H,
-        "CheZOD117",
-        fontsize=FS_SMALL,
-        ha="right",
-        va="center",
-        color=sp.CAT["chezod"],
-    )
-    for i, t in enumerate(sp.TIERS):
-        y_ = yy - 2.3 * (i + 1)
-        fig.text(xr / W, y_ / H, t, fontsize=FS_SMALL, va="center", color="black")
-        fig.text(cx[0] / W, y_ / H, f"{counts[t]['test_trizod']['test_coverage_30_80']}", fontsize=FS_SMALL,
-                 ha="right", va="center")  # fmt: skip
-        fig.text(cx[1] / W, y_ / H, f"{counts[t]['test_chezod117']['test_coverage_30_80']}", fontsize=FS_SMALL,
-                 ha="right", va="center")  # fmt: skip
-    fig.text(1.0 / W, 72.5 / H, "c1", fontsize=6.5, fontweight="bold", va="bottom")
-
-    # ------------------------------------------------------------------ c2 strip
-    ax2 = ax_mm(33.0, 6.2, 53.0, 14.6)
-    cls_cols = ["#D9D9D9", "#969696", "#252525"]
-    for j, s in enumerate(strip):
-        left = 0.0
-        for c, (v, cc) in enumerate(zip(s["shares"], cls_cols)):
-            ax2.barh(j, v, left=left, color=cc, height=0.74, edgecolor="white", lw=0.3)
-            if v >= 0.07:
-                ax2.text(left + v / 2, j, f"{100 * v:.0f}", ha="center", va="center", fontsize=FS_SMALL,
-                         color="black" if c == 0 else "white")  # fmt: skip
-            left += v
-    ax2.set_yticks(range(len(strip)))
-    ax2.set_yticklabels([f"{s['set']} ({s['n']:,})" for s in strip])
-    for tl, s in zip(ax2.get_yticklabels(), strip):
-        tl.set_color(
-            s["color"]
-            if s["set"] in ("CheZOD117", "TriZOD test")
-            else sp.CAT["neutral"]
-        )
-    ax2.invert_yaxis()
-    ax2.set_xlim(0, 1)
-    ax2.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
-    ax2.set_xticklabels(["0", "25", "50", "75", "100"])
-    ax2.spines["left"].set_visible(False)
-    ax2.tick_params(left=False)
-    ax2.set_xlabel("Chains (%)", labelpad=1.0)
-    h_c = [
-        mpatches.Patch(color=c, label=lab)
-        for c, lab in zip(cls_cols, ["≤ 10 %", "10–90 %", "≥ 90 %"])
-    ]
-    fig.legend(handles=h_c, loc="lower left", bbox_to_anchor=(33.0 / W, 21.6 / H), ncol=3, handlelength=1.0,
-               handletextpad=0.3, columnspacing=0.9, borderaxespad=0.0, fontsize=FS_SMALL)  # fmt: skip
-    fig.text(
-        7.0 / W, 22.4 / H, "Residues with G > 0.65:", fontsize=FS_SMALL, va="bottom"
-    )
-    fig.text(1.0 / W, 22.4 / H, "c2", fontsize=6.5, fontweight="bold", va="bottom")
-
+        ax.scatter(100 * sub.xcov, 100 * sub.ident, s=size, marker=marker, facecolor=col,
+                   edgecolor="white", linewidths=0.25, alpha=0.9, zorder=3)  # fmt: skip
+        n_all = int((P.set == s).sum())
+        handles.append(
+            Line2D([], [], ls="", marker=marker, ms=3.6, mfc=col, mec="white", mew=0.25,
+                   label=f"{lab} ({len(sub):,} of {n_all:,})")
+        )  # fmt: skip
+    ax.set_xlim(*X_LIM_C)
+    ax.set_ylim(*Y_LIM_C)
+    ax.set_xticks([0, 20, 40, 60, 80, 100])
+    ax.set_yticks([20, 40, 60, 80, 100])
+    ax.set_xlabel("Coverage of the better-covered chain (%)" if rule == "either"
+                  else "Coverage of the held-out chain (%)")  # fmt: skip
+    ax.set_ylabel("Identity to closest\ntraining chain (%)")
+    fig.legend(handles=handles, loc="lower left", bbox_to_anchor=(13.0 / W, (AX_Y0_CD + AX_H_CD + 1.0) / H),
+               ncol=2, handletextpad=0.1, columnspacing=1.0, borderaxespad=0.0)  # fmt: skip
     sp.fig_label(fig, "c", 0.0, 0.0)
+    return fig
+
+
+def draw_d(strip: list):
+    """Fig. 3d: chains of each set by their share of disordered residues."""
+    import matplotlib.patches as mpatches
+    from matplotlib.lines import Line2D
+
+    W, H = sp.W_SINGLE, H_CD
+    fig = sp.figure(W, H)
+    ys = [0.0, 1.0, 2.4, 3.4, 4.4, 5.4]
+    ax = fig.add_axes([30.0 / W, AX_Y0_CD / H, 45.0 / W, AX_H_CD / H])
+    for y, s in zip(ys, strip):
+        left = 0.0
+        for c, (v, cc) in enumerate(zip(s["shares"], CLASS_COLORS)):
+            ax.barh(y, v, left=left, color=cc, height=0.66, edgecolor="white", lw=0.5)
+            if v >= 0.09:
+                ax.text(left + v / 2, y, f"{100 * v:.0f}", ha="center", va="center",
+                        fontsize=sp.FS_TICK, color="black" if c == 0 else "white")  # fmt: skip
+            left += v
+    labels = [f"{s['set'].replace('Training, ', '')} ({s['n']:,})" for s in strip]
+    ax.set_yticks(ys)
+    ax.set_yticklabels(labels, fontsize=sp.FS_BODY)
+    ax.set_ylim(ys[-1] + 0.55, -0.55)
+    ax.set_xlim(0, 1)
+    ax.set_xticks([0, 0.5, 1.0])
+    ax.set_xticklabels(["0", "50", "100"])
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlabel("Chains (%)")
+    # group label for the four training rows, left of their tick labels
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    inv = fig.transFigure.inverted()
+    x_left = min(t.get_window_extent(renderer).x0 for t in ax.get_yticklabels()[2:])
+    x_fig = inv.transform((x_left, 0))[0] - 1.2 / W
+    f0, f1 = (inv.transform(ax.transData.transform((0, y)))[1]
+              for y in (ys[2] - 0.33, ys[-1] + 0.33))  # fmt: skip
+    fig.add_artist(Line2D([x_fig, x_fig], [f0, f1], color=sp.CAT["neutral"], lw=0.6))
+    fig.text(x_fig - 0.8 / W, (f0 + f1) / 2, "Training", rotation=90, ha="right",
+             va="center", fontsize=sp.FS_BODY)  # fmt: skip
+    # class key above the axes, right-aligned with it, preceded by its title
+    h_c = [mpatches.Patch(facecolor=c, edgecolor="none", label=lab)
+           for c, lab in zip(CLASS_COLORS, CLASS_LABELS)]  # fmt: skip
+    leg = fig.legend(handles=h_c, loc="lower right", bbox_to_anchor=(75.0 / W, (AX_Y0_CD + AX_H_CD + 1.0) / H),
+                     ncol=3, handlelength=1.0, handletextpad=0.35, columnspacing=0.9,
+                     borderaxespad=0.0)  # fmt: skip
+    fig.canvas.draw()
+    x0 = inv.transform(leg.get_window_extent(renderer).p0)[0]
+    y_mid = inv.transform(leg.get_texts()[0].get_window_extent(renderer).p0)[1]
+    fig.text(x0 - 0.8 / W, y_mid, f"Residues with G > {sp.G_DIS}:", ha="right", va="bottom",
+             fontsize=sp.FS_TICK)  # fmt: skip
+    sp.fig_label(fig, "d", 0.0, 0.0)
     return fig
 
 
 def main(argv=None) -> None:
     ap = sp.cli(__doc__)
     ap.add_argument("--work-dir", type=Path, default=sp.TMP / "fig3c_split")
-    ap.add_argument("--refresh", action="store_true", help="re-run the mmseqs searches")
+    ap.add_argument("--refresh", action="store_true", help="re-run the mmseqs search")
     args = sp.parse_args(ap, argv)
 
     test_ids = {s: list(sp.read_fasta(p)) for s, p in TEST_FASTAS.items()}
@@ -442,60 +359,60 @@ def main(argv=None) -> None:
     for t in sp.TIERS:  # strictest tier at which a chain is a representative
         for i in reps[t]:
             rep_tier[i] = t
+    rule = leakage_rule()
 
     hits = run_search(args.work_dir, args.refresh)
-    uni, P, counts = analyse(hits, set_of, rep_tier)
+    H, P, counts = analyse(hits, set_of, reps, rep_tier, rule)
+    n_in = int(P.in_region.sum())
+    if n_in:
+        print(
+            f"WARNING: {n_in} held-out chains lie in the excluded region",
+            file=sys.stderr,
+        )
     strip = disorder_strip(test_ids, reps)
 
-    fig = draw(P, counts, strip, len(set_of))
-    pdf = sp.save(fig, "fig3c")
+    pdf = sp.save(draw_c(P, rule), "fig3c")
+    pdf_d = sp.save(draw_d(strip), "fig3d")
 
     plotted = {
         s: {
             "n": int((P.set == s).sum()),
+            "drawn": int(((P.set == s) & P.has_hit).sum()),
             "no_hit": int(((P.set == s) & ~P.has_hit).sum()),
             "in_region": int(((P.set == s) & P.in_region).sum()),
-            "in_region_by_strictest_tier_of_plotted_rep": {
-                t: int(((P.set == s) & P.in_region & (P.ttier == t)).sum())
-                for t in sp.TIERS
-            },
+            "max_identity_drawn": round(
+                float(P[(P.set == s) & P.has_hit].ident.max()), 3
+            ),
         }
         for s in TEST_FASTAS
     }
     out = {
         "definition": {
-            "search": f"mmseqs easy-search {' '.join(MMSEQS_ARGS)} (mmseqs {mmseqs_version()}); one search per tier",
-            "query": f"{len(set_of)} held-out chains (TriZOD_test_set.fasta + CheZOD117_test_set.fasta)",
-            "target": "train/<tier>/train_<tier>_best.fasta ("
-            + (
-                "frozen 2026-10 split, BEFORE fix (a))"
-                if sp.IS_FROZEN
-                else f"{sp.RELEASE} split, pipeline {sp.PIPELINE})"
-            ),
-            "test_coverage_30_80": "identity >= 0.30 and test-chain coverage (qcov) >= 0.80 (the corrected criterion; shaded)",
-            "bidirectional_30_80": "identity >= 0.30 and qcov >= 0.80 and tcov >= 0.80 (the pipeline's current stage-2 definition)",
-            "id50_testcov50": "identity >= 0.50 and qcov >= 0.50",
-            "id90_testcov50": "identity >= 0.90 and qcov >= 0.50",
-            "cumulative": "a chain counts at tier t if an alignment to a representative of tier t satisfies the rule "
-            "(that tier's own search)",
-            "test_coverage_30_80_from_union": "same, from the union of searches restricted to tier-t representatives",
+            "release": sp.RELEASE,
+            "pipeline": sp.PIPELINE,
+            "search": f"mmseqs easy-search train_unfiltered_best.fasta (query) vs TriZOD_test_set.fasta + "
+            f"CheZOD117_test_set.fasta (target) {' '.join(panel_search_options())} (mmseqs {mmseqs_version()}); "
+            "the build's stage-2 options with --min-seq-id lowered from 0.3",
+            "leakage_rule": rule,
+            "x": "max(test-chain, training-chain coverage)"
+            if rule == "either"
+            else "test-chain coverage",
+            "region": f"identity >= {ID_MIN} and x >= {COV_MIN} (removed from training by the build)",
+            "plotted_alignment": "per held-out chain: an in-region alignment if any, else the largest identity x x",
+            "cumulative": "a chain counts at tier t if an alignment to a representative of tier t satisfies the rule; "
+            "one search, E-values against the held-out target database as in the build",
+            "rules": {
+                "either_30_80": ">= 30 % identity over >= 80 % of the test or the training chain",
+                "test_30_80": ">= 30 % identity over >= 80 % of the test chain",
+                "both_30_80": ">= 30 % identity over >= 80 % of both chains",
+                "test_50_50": ">= 50 % identity over >= 50 % of the test chain",
+                "test_90_50": ">= 90 % identity over >= 50 % of the test chain",
+            },
         },
         "counts_by_tier": counts,
         "plotted_points": plotted,
-        "median_identity_of_plotted_alignment": float(P[P.has_hit].fident.median()),
-        "verified_containments": {
-            q: uni[(uni["query"] == q) & (uni.target == t)][
-                ["fident", "qcov", "tcov", "qlen", "tlen"]
-            ]
-            .round(3)
-            .to_dict("records")
-            for q, t in [
-                ("51709_1_1_1", "53339_1_1_1"),
-                ("19221_1_1_1", "19219_1_1_1"),
-                ("15813_1_1_1", "30456_1_1_1"),
-            ]
-        },
-        "c2_disorder_class_pct": {
+        "median_identity_of_plotted_alignment": float(P[P.has_hit].ident.median()),
+        "d_disorder_class_pct": {
             s["set"]: {
                 "n": s["n"],
                 **dict(
@@ -512,7 +429,7 @@ def main(argv=None) -> None:
     }
     data_dir = sp.out_dir("fig3_data")
     data_dir.mkdir(parents=True, exist_ok=True)
-    P.to_csv(data_dir / "fig3c1_points.csv", index=False)
+    P.to_csv(data_dir / "fig3c_points.csv", index=False)
     pd.DataFrame(
         [
             {
@@ -522,10 +439,10 @@ def main(argv=None) -> None:
             }
             for s in strip
         ]
-    ).to_csv(data_dir / "fig3c2_strip.csv", index=False)
+    ).to_csv(data_dir / "fig3d_disorder_classes.csv", index=False)
     (data_dir / "fig3c_numbers.json").write_text(json.dumps(out, indent=1))
     print(json.dumps(out, indent=1))
-    print(f"wrote {pdf}", file=sys.stderr)
+    print(f"wrote {pdf} and {pdf_d}", file=sys.stderr)
 
 
 if __name__ == "__main__":
