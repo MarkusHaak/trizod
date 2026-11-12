@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fig. 1b -- scale: TriZOD against CheZOD1325 in chains, residues and sequence clusters.
+"""Fig. 1c -- scale: TriZOD against CheZOD1325 in chains, residues and sequence clusters.
 
 The panel is a dumbbell plot on one log axis, one row per like-for-like count, with the
 fold change written above each row (the axis is logarithmic, so equal folds span equal
-distances):
+distances). TriZOD is a black filled circle and CheZOD1325 a grey open circle (the entity
+encodings of ``style_paper.ENTITY``), named by direct labels on the top row:
 
 * **chains** -- scored chains in the release (one Parquet row each) against the
   1,325 CheZOD1325 proteins;
@@ -34,16 +35,18 @@ Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig1c_scale.py \
         --out-dir <draft>/Figures/paper
 Outputs: ``<out-dir>/fig1c.pdf`` (vector, ``W_DOUBLE`` - 105 - 3 = 52 mm wide and
-46.6 mm high, placed at 1:1 beside the 105-mm overview diagram ``fig1a_overview.tex``
-with a 3-mm gap, so the two fill the 160-mm text width; the file keeps its old name) and
-``<out-dir>/source_data/fig1c.csv``; prints the plotted numbers and compares them
-with the writing plan's preview values (Appendix A13).
+66 mm high, placed at 1:1 in the second row of Fig. 1 beside the 105-mm record of panel b,
+``fig1b.pdf`` from ``fig1b_record.py``, with a 3-mm gap, so the two fill the 160-mm text
+width) and ``<out-dir>/source_data/fig1c.csv``; prints the plotted numbers and compares
+them with the macros of the draft's ``numbers.tex`` (``<out-dir>/../../numbers.tex``)
+when that file exists.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -64,18 +67,30 @@ CZ117_SEQS = sp.CHEZOD / "seth_github" / "CheZOD117_test_set_sequences.fasta"
 MIN_LEN = 20  # like-for-like scope: chains of at least 20 aa (the build's assembly cut)
 CLUSTER_ARGS = ["--min-seq-id", "0.5", "-c", "0.8", *COMMON, "--threads", "1"]
 
-# writing plan, Fig. 1 table and Appendix A13 (for the self-check only)
-PLAN = {
-    "trizod_chains": 16851,
-    "trizod_residues": 1560162,
-    "trizod_clusters_like": 6531,
-    "trizod_clusters_all": 8486,
-    "trizod_seqs_like": 9482,
-    "trizod_seqs_all": 12745,
-    "cz1325_chains": 1325,
-    "cz1325_residues": 149672,
-    "cz1325_clusters": 1316,
+# the numbers.tex macros the text quotes for this panel (for the self-check only)
+CHECK_MACROS = {
+    "trizod_chains": "nChainsScored",
+    "trizod_residues": "nResiduesScored",
+    "trizod_seqs_like": "nSeqsTriZODNonBoundTwenty",
+    "trizod_clusters_like": "nClustersTriZODNonBound",
+    "trizod_clusters_all": "nClustersTriZODAll",
+    "cz1325_chains": "nCheZODFullProteins",
+    "cz1325_residues": "nCheZODFullResidues",
+    "cz1325_clusters": "nClustersCheZODFull",
 }
+
+
+def read_macros(path: Path) -> dict:
+    """Integer values of ``CHECK_MACROS`` in ``numbers.tex`` (empty if it is missing)."""
+    if not path.exists():
+        return {}
+    txt = path.read_text()
+    out = {}
+    for key, name in CHECK_MACROS.items():
+        m = re.search(r"\\newcommand\{\\" + name + r"\}\{([0-9{},]+)\}", txt)
+        if m:
+            out[key] = int(re.sub(r"[^0-9]", "", m.group(1)))
+    return out
 
 
 # ----------------------------------------------------------------------------------
@@ -211,27 +226,29 @@ def compute(work: Path) -> pd.DataFrame:
 # ----------------------------------------------------------------------------------
 # plot
 # ----------------------------------------------------------------------------------
-# Placed at 1:1 beside the overview diagram of Fig. 1a (105 x 46.6 mm, TikZ): the two
-# fill the full text width (W_DOUBLE = 160 mm) with a 3-mm gap, and the heights match.
-PANEL_A_W = 105.0  # width of fig1a_overview.tex (three 31-mm boxes, two 6-mm gaps)
-GAP_W = 3.0  # \hfill gap between the two panels in sections/fig1.tex
-FIG_W, FIG_H = sp.W_DOUBLE - PANEL_A_W - GAP_W, 46.6
-AX_BOX = (14.5, 9.6, 34.5, 28.0)  # left, top, width, height (mm)
+# Fig. 1 layout (story blueprint 10.1): the flow of panel a (TikZ, 160 mm) above; in the
+# second row the record of panel b (fig1b_record.py, 105 mm) and this panel, 3 mm apart,
+# both placed at 1:1, so 105 + 3 + 52 mm fill the 160-mm text width.
+PANEL_B_W = 105.0  # width of fig1b.pdf (fig1b_record.FIG_W)
+GAP_W = 3.0  # \hfill gap between panels b and c in sections/fig1.tex
+FIG_W, FIG_H = sp.W_DOUBLE - PANEL_B_W - GAP_W, 66.0  # height as fig1b_record.FIG_H
+# axes box (left, top, width, height in mm): the top and bottom match the first track
+# and the residue axis of panel b, so the two x axes sit on one line
+AX_BOX = (14.0, 3.4, 35.5, 55.7)  # bottom 59.1 mm = fig1b_record.AXIS_BOTTOM
 XLIM = (7e2, 3e6)
 ROWS = [  # (quantity, row label), top to bottom
     ("chains", "Chains"),
     ("residues", "Residues"),
     ("clusters", "Sequence\nclusters"),
 ]
-C_TRIZOD = sp.CAT["neutral"]
-C_CHEZOD = sp.CAT["chezod"]
-C_LINK = "#B3B3B3"
-MS = 4.6  # marker diameter (pt)
+LETTER_BASELINE = 2.5  # mm from the top, as the letters of panels a and b
+# one colour per entity (style_paper.ENTITY): TriZOD black filled, CheZOD1325 grey open
+C_LINK = sp.CAT["light"]
+MS = 5.0  # marker diameter (pt)
 
 
 def plot(d: pd.DataFrame, out_name: str) -> None:
     from matplotlib import ticker as mticker
-    from matplotlib.lines import Line2D
 
     fig = sp.figure(FIG_W, FIG_H)
     left, top, w, h = AX_BOX
@@ -239,54 +256,45 @@ def plot(d: pd.DataFrame, out_name: str) -> None:
     ax.set_xscale("log")
     ax.set_xlim(*XLIM)
     n = len(ROWS)
-    ax.set_ylim(n - 0.45, -0.75)  # top row first; headroom for the fold labels
+    ax.set_ylim(n - 0.45, -0.7)  # top row first; room above for the fold labels
     v = d.set_index(["quantity", "set"]).value
     for i, (q, _) in enumerate(ROWS):
         tz, cz = v[(q, "TriZOD")], v[(q, "CheZOD1325")]
-        ax.plot([cz, tz], [i, i], color=C_LINK, lw=1.2, solid_capstyle="butt", zorder=2)
-        for x, c in ((cz, C_CHEZOD), (tz, C_TRIZOD)):
-            ax.plot(
-                x, i, "o", ms=MS, color=c, mec="white", mew=0.6, zorder=3, clip_on=False
-            )
-        ax.text(
+        ax.plot([cz, tz], [i, i], color=C_LINK, lw=1.4, solid_capstyle="butt", zorder=2)
+        for x, key in ((cz, "chezod1325"), (tz, "release")):
+            ax.plot(x, i, **sp.marker_kw(key, ms=MS, mew=1.0), zorder=3, clip_on=False)
+        sp.direct_label(
+            ax,
             np.sqrt(tz * cz),  # midpoint on the log axis
-            i - 0.2,
-            f"{tz / cz:.1f}\u00d7",
+            i,
+            f"{tz / cz:.1f}×",
+            dx_mm=0,
+            dy_mm=1.4,
             ha="center",
             va="bottom",
-            fontsize=sp.FS_BODY,
             fontweight="bold",
-            color="black",
         )
+    # direct labels instead of a legend, on the "Residues" row: it has free space left of
+    # the CheZOD1325 circle, and room under the TriZOD dot inside the axes (on the top
+    # row the two labels crowded one dot and crossed the 10k grid line; review item 8)
+    v1 = ROWS[1][0]
+    knock = {"facecolor": "white", "edgecolor": "none", "pad": 0.4}  # gap in the grid
+    sp.direct_label(ax, v[(v1, "CheZOD1325")], 1, "CheZOD1325", dx_mm=-1.6, ha="right",
+                    bbox=knock, zorder=4)  # fmt: skip
+    sp.direct_label(ax, v[(v1, "TriZOD")], 1, "TriZOD", dx_mm=1.2, dy_mm=-1.8, ha="right",
+                    va="top", bbox=knock, zorder=4)  # fmt: skip
     ax.set_yticks(range(n))
-    ax.set_yticklabels([lab for _, lab in ROWS], fontsize=sp.FS_BODY, linespacing=1.1)
+    ax.set_yticklabels([lab for _, lab in ROWS], linespacing=1.1)
     ax.tick_params(axis="y", length=0, pad=3)
     ax.spines["left"].set_visible(False)
     ax.xaxis.set_minor_locator(mticker.NullLocator())  # decades only: fewer marks
     ax.xaxis.grid(True, which="major", color="0.88", lw=0.4, zorder=0)
     ax.set_axisbelow(True)
-    ax.set_xlabel("Count (log scale)")
-    handles = [
-        Line2D([], [], ls="", marker="o", ms=MS, color=C_TRIZOD, label="TriZOD"),
-        Line2D([], [], ls="", marker="o", ms=MS, color=C_CHEZOD, label="CheZOD1325"),
-    ]
-    fig.legend(
-        handles=handles,
-        loc="upper left",
-        bbox_to_anchor=(left / FIG_W, 1 - 4.6 / FIG_H),
-        ncol=2,
-        fontsize=sp.FS_TICK,
-        handlelength=0.8,
-        handletextpad=0.3,
-        columnspacing=1.2,
-        borderaxespad=0,
-        borderpad=0,
-    )
-    # panel letter on a baseline 2.5 mm below the top edge, as "a" in fig1a_overview.tex
+    ax.set_xlabel("Count (log scale)", labelpad=1.0)
     fig.text(
         0.0,
-        1 - 2.5 / FIG_H,
-        "b",
+        1 - LETTER_BASELINE / FIG_H,
+        "c",
         fontsize=sp.FS_PANEL,
         fontweight="bold",
         ha="left",
@@ -296,9 +304,12 @@ def plot(d: pd.DataFrame, out_name: str) -> None:
 
 
 # ----------------------------------------------------------------------------------
-def _check(name, got, plan, tol=0):
-    ok = abs(got - plan) <= tol
-    print(f"  {'OK  ' if ok else 'DIFF'} {name}: data {got:,}  plan {plan:,}")
+def _check(name, got, ref, tol=0):
+    if ref is None:
+        print(f"  ---- {name}: data {got:,}  (no macro to compare)")
+        return True
+    ok = abs(got - ref) <= tol
+    print(f"  {'OK  ' if ok else 'DIFF'} {name}: data {got:,}  numbers.tex {ref:,}")
     return ok
 
 
@@ -312,52 +323,50 @@ def main() -> None:
     print(d.drop(columns=["mmseqs_command", "mmseqs_version"]).to_string(index=False))
     print("cluster command:", d.mmseqs_command[d.quantity == "clusters"].iloc[0])
     v = d.set_index(["quantity", "set"]).value
+    numbers = args.out_dir.resolve().parents[1] / "numbers.tex"
+    ref = read_macros(numbers)
     print(
-        "check against the writing plan (A13; cluster counts may differ by a few between"
+        f"check against {numbers} (cluster counts may differ by a few between single- "
+        "and multi-threaded MMseqs2 runs):"
+        if ref
+        else f"no {numbers}: values printed without a check"
     )
-    print("single- and multi-threaded MMseqs2 runs):")
-    _check("TriZOD chains", int(v[("chains", "TriZOD")]), PLAN["trizod_chains"])
-    _check(
-        "TriZOD scored residues",
-        int(v[("residues", "TriZOD")]),
-        PLAN["trizod_residues"],
-    )
-    _check(
-        "TriZOD like-for-like sequences",
-        d.attrs["n_seqs_like"],
-        PLAN["trizod_seqs_like"],
-    )
-    _check("TriZOD all sequences", d.attrs["n_seqs_all"], PLAN["trizod_seqs_all"])
-    _check(
-        "TriZOD like-for-like clusters",
-        int(v[("clusters", "TriZOD")]),
-        PLAN["trizod_clusters_like"],
-        10,
-    )
-    _check(
-        "TriZOD all-sequence clusters",
-        int(v[("clusters", "TriZOD (all sequences)")]),
-        PLAN["trizod_clusters_all"],
-        10,
-    )
-    _check(
-        "CheZOD1325 proteins", int(v[("chains", "CheZOD1325")]), PLAN["cz1325_chains"]
-    )
-    _check(
-        "CheZOD1325 scored residues",
-        int(v[("residues", "CheZOD1325")]),
-        PLAN["cz1325_residues"],
-    )
-    _check(
-        "CheZOD1325 clusters",
-        int(v[("clusters", "CheZOD1325")]),
-        PLAN["cz1325_clusters"],
-        10,
-    )
+    for label, got, key, tol in (
+        ("TriZOD chains", v[("chains", "TriZOD")], "trizod_chains", 0),
+        ("TriZOD scored residues", v[("residues", "TriZOD")], "trizod_residues", 0),
+        (
+            "TriZOD like-for-like sequences",
+            d.attrs["n_seqs_like"],
+            "trizod_seqs_like",
+            0,
+        ),
+        (
+            "TriZOD like-for-like clusters",
+            v[("clusters", "TriZOD")],
+            "trizod_clusters_like",
+            10,
+        ),
+        (
+            "TriZOD all-sequence clusters",
+            v[("clusters", "TriZOD (all sequences)")],
+            "trizod_clusters_all",
+            10,
+        ),
+        ("CheZOD1325 proteins", v[("chains", "CheZOD1325")], "cz1325_chains", 0),
+        (
+            "CheZOD1325 scored residues",
+            v[("residues", "CheZOD1325")],
+            "cz1325_residues",
+            0,
+        ),
+        ("CheZOD1325 clusters", v[("clusters", "CheZOD1325")], "cz1325_clusters", 10),
+    ):
+        _check(label, int(got), ref.get(key), tol)
     for q in ("chains", "residues", "clusters"):
         print(f"  ratio {q}: {v[(q, 'TriZOD')] / v[(q, 'CheZOD1325')]:.2f}x")
     print(
-        f"  ratio clusters (all sequences): {v[('clusters', 'TriZOD (all sequences)')] / v[('clusters', 'CheZOD1325')]:.2f}x"
+        "  ratio clusters (all sequences): "
+        f"{v[('clusters', 'TriZOD (all sequences)')] / v[('clusters', 'CheZOD1325')]:.2f}x"
     )
 
     (args.out_dir / "source_data").mkdir(parents=True, exist_ok=True)

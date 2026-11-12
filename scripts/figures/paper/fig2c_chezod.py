@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fig. 2c -- TriZOD reproduces CheZOD1325 where the methods are comparable.
+"""Fig. 3a (Fig. 2c on 11 Nov 2026) -- run like CheZOD, TriZOD reproduces its scores.
 
 ECDF of the per-entry mean absolute error (MAE) between TriZOD Z-scores and the
 published CheZOD1325 Z-scores, for two re-referencing modes:
@@ -29,16 +29,23 @@ sequence-match offset, residues where both scores exist, >= 5 residues), so the
 medians reproduce ``reproduce_summary.json`` for the same inputs. The entries
 whose potenci-only Z agrees with CheZOD within 0.1 at every compared residue are
 counted on stdout and flagged in the Source Data (no longer drawn as a rug).
-Colours follow the paper's fixed meanings: orange = the CheZOD method
-(without LACS), ink = the released labels (with LACS). The legend wording,
-"Without LACS (CheZOD method)" / "With LACS (released labels)", is the one the
-captions and Supplementary Fig. S17 use.
+Colours follow the paper's fixed meanings (style_paper.ENTITY): grey dashed = the
+CheZOD method (without LACS; the CheZOD1325 entity), black = the released labels
+(with LACS). The two curves are labelled directly (no legend): "Run like CheZOD
+(without LACS)" and "As released (with LACS)", the wording of the Fig. 3 caption and
+of the R3 heading. The median of each curve is marked where it crosses 0.5 (open grey
+circle, filled black circle) and printed beside the mark with two decimals, the
+precision of ``\\maeCheZODPotenciOnlyShort`` and ``\\maeCheZODBothShort``.
+
+Story-blueprint redesign (12 Nov 2026): 52 x 52 mm (was 58 mm), direct labels instead
+of the legend, medians marked, x axis ending at 6 (the largest per-entry error is 4.7),
+so the last tick is 1 and the decade ticks keep apart at 7 pt.
 
 Run (code worktree root):
-    uv run --extra figures --with pyarrow python scripts/figures/paper/fig2c_chezod.py \
+    uv run --extra figures --with pyarrow python scripts/figures/paper/fig2c_chezod.py \\
         --out-dir <draft>/Figures/paper [--potenci-only PATH]
-Outputs: <out-dir>/fig2c_chezod.pdf (58 x 52 mm, placed at 1:1 beside Fig. 2b; the row
-layout is imported from ``fig2a_kpaired.py``) and <out-dir>/source_data/fig2c_chezod.csv.
+Outputs: <out-dir>/fig3a_chezod.pdf (52 x 52 mm, placed at 1:1 beside Fig. 3b; the row
+layout is imported from ``fig2a_kpaired.py``) and <out-dir>/source_data/fig3a_chezod.csv.
 """
 
 from __future__ import annotations
@@ -53,9 +60,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import style_paper as sp  # noqa: E402
 from fig2a_kpaired import (  # noqa: E402  (row layout)
+    A_W,
     AX_H,
     AX_TOP,
-    C_W,
     FIG_H,
     XLABEL_Y_MM,
 )
@@ -67,7 +74,8 @@ PO = sp.CHEZOD_VER / "trizod_potenci_only.json"  # pre-build (2026-06-22)
 BOTH = sp.BUNDLE / "scores" / "unfiltered" / "scores.json"  # 2026-10 release
 WITHIN = 0.1  # "within 0.1 Z at every residue"
 FLOOR = 1e-3  # errors below this are drawn at the floor (log axis)
-OUT_NAME = "fig2c_chezod"  # Fig. 2c (fig2c.pdf until 11 Nov 2026)
+X_MAX = 6.0  # right end of the x axis (largest per-entry error: 4.7)
+OUT_NAME = "fig3a_chezod"  # Fig. 3a (fig2c_chezod.pdf on 11 Nov, fig2c.pdf before)
 # Offset columns as named by 2026-10 code; a pre-build scores.json has only
 # ``off_<atom>``/``lacs_off_<atom>``.
 CURRENT_SCHEMA_COLS = (off_sigma_col("CA"), total_off_ppm_col("CA"))
@@ -134,16 +142,23 @@ def ecdf(v):
     return x, np.arange(1, len(x) + 1) / len(x)
 
 
-FIG_W = C_W  # 58 mm; with Fig. 2b and the row gap, the 160 mm text width
-# axes (left, top, width, height) in mm; top, height and x-label height as in Fig. 2b
-BOX = (13.0, AX_TOP, FIG_W - 13.0 - 2.5, AX_H)
+FIG_W = A_W  # 52 mm; with Fig. 3b and the row gap, the 160 mm text width
+LEFT, RIGHT = 12.0, 2.0  # axes left edge (as Fig. 3c) and right margin, mm
+YLABEL_X_MM = 4.6  # right edge of the y title, mm from the left edge (as Fig. 3c)
+# axes (left, top, width, height) in mm; top, height and x-label height as in Fig. 3b
+BOX = (LEFT, AX_TOP, FIG_W - LEFT - RIGHT, AX_H)
 MODES = {
-    # colour by meaning: orange = the CheZOD method, ink = TriZOD's released labels
+    # colour by meaning: grey dashed = the CheZOD method, black = the released labels
     "potenci-only": {
-        "color": sp.CAT["chezod"],
-        "label": "Without LACS\n(CheZOD method)",
+        **sp.line_kw("chezod1325"),
+        "entity": "chezod1325",
+        "label": "Run like CheZOD\n(without LACS)",
     },
-    "both": {"color": "#1A1A1A", "label": "With LACS\n(released labels)"},
+    "both": {
+        **sp.line_kw("release"),
+        "entity": "release",
+        "label": "As released\n(with LACS)",
+    },
 }
 
 
@@ -151,48 +166,67 @@ def plot(res: dict) -> None:
     """ECDF of the per-entry MAE on a log axis; errors below ``FLOOR`` sit at the floor.
 
     About 180 potenci-only entries agree with CheZOD to rounding (MAE < 0.001), so the
-    left tick reads "<=0.001" and the curve starts from zero. The key sits in the empty
-    upper left; the grey line at 0.5 reads off the medians.
+    left tick reads "<=0.001" and the curve starts from zero. The light line at 0.5 reads
+    off the medians, which are marked on it. The run-like-CheZOD curve is named in the
+    empty upper left, above its own curve; the as-released curve in the empty lower
+    right, beside its own curve.
     """
     fig = sp.figure(FIG_W, FIG_H)
     left, top, w, h = BOX
     ax = fig.add_axes([left / FIG_W, 1 - (top + h) / FIG_H, w / FIG_W, h / FIG_H])
-    ax.axhline(0.5, color="0.82", lw=0.5, zorder=0)
+    ax.axhline(0.5, color=sp.CAT["light"], lw=0.5, zorder=0)
+    med = {}
     for mode, st in MODES.items():
         maes = [v[0] for v in res[mode].values()]
+        med[mode] = float(np.median(maes))
         x, y = ecdf(np.maximum(maes, FLOOR))
         x = np.concatenate([[FLOOR], x])
         y = np.concatenate([[0.0], y])
-        ax.step(
-            x, y, where="post", color=st["color"], lw=1.2, zorder=2, label=st["label"]
-        )
-    # the two curves leave the upper left empty: the key goes there
-    ax.legend(
-        loc="upper left",
-        frameon=False,
-        handlelength=1.4,
-        handletextpad=0.5,
-        labelspacing=0.6,
-        borderaxespad=0.1,
-        fontsize=sp.FS_TICK,
+        ax.step(x, y, where="post", color=st["color"], ls=st["ls"], lw=1.2, zorder=2)
+    # medians: the entity's marker where the curve crosses 0.5, value beside it
+    for mode, st in MODES.items():
+        ax.plot(med[mode], 0.5, zorder=4, **sp.marker_kw(st["entity"], ms=4.2, mew=1.0))
+    po, bo = med["potenci-only"], med["both"]
+    sp.direct_label(ax, po, 0.5, f"{po:.2f}", dx_mm=-1.6, dy_mm=1.6, ha="right")
+    sp.direct_label(ax, bo, 0.5, f"{bo:.2f}", dx_mm=1.6, dy_mm=-1.6, ha="left")
+    # direct labels for the two curves
+    # run like CheZOD: above the left part of its own curve (which stays below 0.3 there)
+    # and above its median value
+    sp.direct_label(
+        ax,
+        FLOOR,
+        0.76,
+        MODES["potenci-only"]["label"],
+        dx_mm=0.6,
+        ha="left",
+        linespacing=1.1,
+    )
+    # as released: right of its own curve's foot (the curve reaches 0.3 at an error of
+    # 0.29, so the label starts at 0.30 plus 0.8 mm)
+    sp.direct_label(
+        ax, 0.30, 0.2, MODES["both"]["label"], dx_mm=0.8, ha="left", linespacing=1.1
     )
     ax.set_xscale("log")
-    ax.set_xlim(FLOOR * 0.8, 10)
+    ax.set_xlim(FLOOR * 0.8, X_MAX)
     ax.set_ylim(0, 1.0)
-    ax.set_xticks([1e-3, 1e-2, 1e-1, 1, 10], ["≤0.001", "0.01", "0.1", "1", "10"])
+    ax.set_xticks([1e-3, 1e-2, 1e-1, 1], ["≤0.001", "0.01", "0.1", "1"])
     ax.xaxis.set_minor_locator(mticker.NullLocator())
+    ax.xaxis.set_minor_formatter(mticker.NullFormatter())
     ax.set_yticks([0, 0.5, 1.0], ["0", "0.5", "1"])
-    # x label at the same height as Fig. 2b's, so the two panels align in the row
+    # x title at the same height as Fig. 3b's, so the two panels align in the row
     fig.text(
         (left + w / 2) / FIG_W,
         XLABEL_Y_MM / FIG_H,
-        "Mean absolute error per entry",
+        # |dZ| against the published CheZOD1325 Z-score, not an "error": CheZOD is the
+        # reference here, not the truth; the axis is logarithmic (figure review item 9)
+        "Mean |ΔZ| per entry (log scale)",
         ha="center",
         va="bottom",
         fontsize=sp.FS_BODY,
     )
     ax.set_ylabel("Cumulative fraction of entries")
-    sp.fig_label(fig, "c", 0.0, 0.0)
+    ax.yaxis.set_label_coords((YLABEL_X_MM - left) / w, 0.5)
+    sp.fig_label(fig, "a", 0.0, 0.0)
     sp.save(fig, OUT_NAME)
 
 

@@ -27,10 +27,13 @@ Derived intermediates (raw-file scan, mmseqs searches/clusterings) are cached in
 like-for-like cluster counts and the case-study clusters; without it those macros
 fall back to the writing plan's values and are marked UNREPRODUCED.
 
-Status codes (index column): STABLE (survives the planned rebuild), PENDING-REBUILD
-(moves with rebuild fixes (a)-(f)), PREVIEW (exploratory / pre-build analysis to be
-recomputed with controls), PROVISIONAL (stale DisProt numbers), UNREPRODUCED (plan
-value kept; this script could not recompute it -- the reason is given).
+Status codes (index column): STABLE (final for the build the script ran on), PENDING-REBUILD
+(moves with rebuild fixes (a)-(f); only emitted on the frozen pre-fix 2026-10 build
+trizod-5b8147a), PREVIEW (exploratory analysis, or one that needs inputs other than the
+release, such as the CheZOD reproduction's scoring run), PROVISIONAL (stale DisProt numbers),
+UNREPRODUCED (plan value kept; this script could not recompute it -- the reason is given).
+The code tags each number with the status it has on the frozen build; :func:`resolve_status`
+maps it to the build the script runs on (see ``RELEASE_RERUN``).
 
 Run (from the code checkout; never in a process that runs the scoring pipeline). Outputs go to
 the required ``--out-dir`` (the manuscript-draft directory); ``--write-only`` rewrites them from
@@ -90,6 +93,43 @@ STABLE, PENDING, PREVIEW, PROVISIONAL, UNREPRO = (
     "PROVISIONAL",
     "UNREPRODUCED",
 )
+
+# Status resolution (12 Nov 2026, blueprint number actions 1-2). The code tags a number
+# PENDING-REBUILD when it was expected to move with the planned rebuild (fixes (a)-(f)), and
+# PREVIEW when the analysis predated the release it now reads. Both tags describe the frozen
+# pre-fix build (FROZEN_BUILD). On any later build -- the build of record is BUILD_OF_RECORD --
+# the rebuild has happened, so PENDING-REBUILD numbers are final for that build (STABLE), and
+# the PREVIEW analyses listed in RELEASE_RERUN, which read nothing but that build's release
+# (Parquet, shifts, bundle), are final too. Every other PREVIEW stays PREVIEW: the CheZOD
+# reproduction (scored with pre-release code in data/interim/chezod_verification/; it needs a
+# scoring-pipeline run), documented values, and the exploratory ports that the figure
+# definitions (\rRepFig*, \condRatioFig*, \pctDeviantFig*) supersede.
+FROZEN_BUILD = "trizod-5b8147a"  # = RB_FROZEN_BUILD; the pre-fix 2026-10 split
+BUILD_OF_RECORD = "trizod-a481315"  # the 2026-11-11 snapshot build the paper reports
+RELEASE_RERUN = [
+    (r"(nKPairs|kpair|kbin|slope[ZG]PerShift)", "paired shift-count test (Fig. 3b; fig2a_kpaired.residue_pairs definition)"),
+    (r"base(AaMean|Ridge)", "sequence-only baselines (supp_s10_baselines)"),
+    (r"(rhoRepResidue|rhoSqrtRepResidue|aucRepResidue)", "replicate ceilings of the baseline table (supp_s10_baselines.tier_ceilings)"),
+    (r"(rRepFigNoRedep|rRepFigMatchedNoRedep|nRepPairsFigNoRedep|nRepPairSeqsFigNoRedep|maeRepFigNoRedep|nRedepositPairsFig)",
+     "replicate r without identical-data re-depositions (Fig. 4c definition otherwise)"),
+]  # fmt: skip
+BUILD = {"pipeline_version": None}  # set in main() from the MANIFEST
+RESOLVED = Counter()  # (from-status) -> count of numbers re-tagged STABLE on this build
+
+
+def resolve_status(name: str, status: str) -> str:
+    """The status of a number on the build the script runs on (see RELEASE_RERUN)."""
+    pv = BUILD["pipeline_version"]
+    if pv is None or pv == FROZEN_BUILD:
+        return status
+    if status == PENDING:
+        RESOLVED[PENDING] += 1
+        return STABLE
+    if status == PREVIEW and any(re.match(rx, name) for rx, _ in RELEASE_RERUN):
+        RESOLVED[PREVIEW] += 1
+        return STABLE
+    return status
+
 
 # Section keys (index grouping = section of first use in the manuscript).
 SECTIONS = OrderedDict(
@@ -239,6 +279,7 @@ class Registry:
         if re.search(r"(?<!\\)%|\\\\%", value) or value.count("{") != value.count("}"):
             raise ValueError(f"unsafe LaTeX value for {name}: {value!r}")
         ok = None if plan is None else plan_matches(value, plan)
+        status = resolve_status(name, status)
         self.names.add(name)
         self.items.append(
             Num(name, value, definition, source, status, section, plan, ok, note)
@@ -4876,18 +4917,20 @@ def sec_replicates(C):
     same, diff = cond_pairs(df[~df.is_bound])
     srcE = "Parquet; non-bound replicate pairs, <= 50 pairs per sequence, seed 0; same: |dpH| <= 0.2 and |dT| <= 2 K; different: |dpH| >= 1 or |dT| >= 10 K (port of one_idea/teaser.py section E)"
     R.add(
-        "nCondPairsSame",
+        "nCondPairsSamePort",
         I(len(same)),
-        "same-condition replicate pairs (non-bound)",
+        "same-condition replicate pairs (non-bound; exploratory port, <= 50 pairs per sequence; "
+        "renamed from nCondPairsSame on 12 Nov 2026, which now holds the Fig. 4a count)",
         srcE,
         PREVIEW,
         "r4",
         "898",
     )
     R.add(
-        "nCondPairsDifferent",
+        "nCondPairsDifferentPort",
         I(len(diff)),
-        "different-condition replicate pairs (non-bound)",
+        "different-condition replicate pairs (non-bound; exploratory port, <= 50 pairs per sequence; "
+        "renamed from nCondPairsDifferent on 12 Nov 2026)",
         srcE,
         PREVIEW,
         "r4",
@@ -5593,7 +5636,7 @@ def sec_ubiquitin(C):
             hits, columns=["q", "t", "fid", "qcov", "tcov", "e", "aln", "ql", "tl"]
         )
         H = H[(H.fid >= 0.8) & (H.qcov >= 0.9) & (H.tcov >= 0.9)]
-        srcm = "mmseqs easy-search of the case sequence vs all 16,851 chains, >= 80 % id, >= 90 % query and target coverage"
+        srcm = f"mmseqs easy-search of the case sequence vs all {len(df):,} chains of the {REL} release, >= 80 % id, >= 90 % query and target coverage"
         for k_, cid in cases.items():
             mem = df[df.id.isin(set(H[H.q == k_].t))]
             R.add(
@@ -7744,11 +7787,22 @@ def sec_fig3_replicates(C):
         "r4",
         "42",
     )
-    # Fig. 3b1: same vs different conditions
+    # Fig. 3b1 (Fig. 4a of the story blueprint): same vs different conditions. Since 12 Nov 2026
+    # only chains that DEPOSIT pH and temperature take part (fig3_replicates.deposited_conditions):
+    # the release fills a missing value with an unflagged default, which could put a pair in the
+    # wrong condition class.
     Cp = fr.condition_pairs(D)
     raw = fr.boot_conditions(Cp, matched=False)
     mat = fr.boot_conditions(Cp, matched=True)
-    src_c = "scripts/figures/paper/fig3_replicates.py condition_pairs + boot_conditions (Fig. 3b1; unfiltered labels)"
+    src_c = "scripts/figures/paper/fig3_replicates.py condition_pairs (chains with deposited pH and temperature only) + boot_conditions (Fig. 3b1; unfiltered labels)"
+    dep = fr.deposited_conditions(D)
+    nb_multi = D.nb.groupby("sequence")["entry_id"].transform("nunique") >= 2
+    nodep = ~(dep["ph"] & dep["temperature"]).reindex(D.nb["id"]).to_numpy()
+    R.add("nCondChainsNotDepositedPhT", I((nodep & nb_multi.to_numpy()).sum()), "non-bound chains of sequences measured in >= 2 entries whose own condition list lacks a deposited pH or temperature; left out of the condition comparison (Fig. 3b1 / 4a)", src_c, STABLE, "r4")  # fmt: skip
+    C0 = fr.condition_pairs(D, deposited_only=False)
+    for cond, T in (("same", "Same"), ("different", "Diff")):
+        R.add(f"nCondPairs{T}", I(raw[cond]["n_pairs"]), f"{cond}-condition replicate pairs of the condition comparison (= \\nCondPairsFig{T}; chains with deposited pH and temperature only)", src_c, STABLE, "r4")  # fmt: skip
+        R.add(f"nCondPairsFig{T}WithImputed", I(int((C0.cond == cond).sum())), f"{cond}-condition pairs under the earlier definition that also used imputed pH or temperature (before 12 Nov 2026)", "fig3_replicates.condition_pairs(deposited_only=False)", STABLE, "r4")  # fmt: skip
     for cond, T in (("same", "Same"), ("different", "Diff")):
         R.add(f"nCondPairsFig{T}", I(raw[cond]["n_pairs"]), f"{cond}-condition replicate pairs (Fig. 3b1)", src_c, STABLE, "r4", {"same": "949", "different": "984"}[cond])  # fmt: skip
         R.add(f"nCondSeqsFig{T}", I(raw[cond]["n_sequences"]), f"sequences behind the {cond}-condition pairs", src_c, STABLE, "r4")  # fmt: skip
@@ -7825,7 +7879,9 @@ def write_tex(path: Path, C) -> None:
         "% percent sign (6.8\\%); ratio* macros are bare numbers (append $\\times$ or '-fold'); negative",
         "% values use \\ensuremath{-}. Write \\macro{} (empty group) before a following word.",
         "% Status codes in the comments: STABLE / PENDING-REBUILD / PREVIEW / PROVISIONAL / UNREPRODUCED.",
-        "% Wrap PENDING-REBUILD values in \\pending{} and PROVISIONAL values in \\provisional{} in prose.",
+        "% STABLE = final for this build (PENDING-REBUILD occurs only on the frozen pre-fix build).",
+        "% Wrap PENDING-REBUILD values in \\pending{}, PREVIEW values in \\provisional{} where the text",
+        "% quotes them, and PROVISIONAL values in \\provisional{} in prose.",
         "",
         MARKERS,
     ]
@@ -7859,8 +7915,14 @@ def write_index(path: Path, C) -> None:
     out = [
         "# Numbers index for the TriZOD draft",
         "",
-        f"Generated by `scripts/manuscript/make_numbers.py` on {time.strftime('%Y-%m-%d %H:%M')} from the frozen build "
-        f"`{C.manifest['pipeline_version']}` (release label `{C.manifest['version']}`). **Do not edit by hand**: re-run the script after the rebuild.",
+        f"Generated by `scripts/manuscript/make_numbers.py` on {time.strftime('%Y-%m-%d %H:%M')} from the build "
+        f"`{C.manifest['pipeline_version']}` (release label `{C.manifest['version']}`)"
+        + (
+            " -- the build of record."
+            if C.manifest.get("pipeline_version") == BUILD_OF_RECORD
+            else f" -- NOT the build of record (`{BUILD_OF_RECORD}`)."
+        )
+        + " **Do not edit by hand**: re-run the script.",
         "",
         f"{n} macros: "
         + ", ".join(
@@ -7874,9 +7936,22 @@ def write_index(path: Path, C) -> None:
         "Wrap every PENDING-REBUILD value (and any claim resting on it) in `\\pending{}`, every PROVISIONAL value in `\\provisional{}`. "
         "If a number is missing, write `\\needsnumber{<definition and source>}`.",
         "",
-        "**Status codes.** STABLE survives the planned rebuild. PENDING-REBUILD moves with fixes (a)-(f). PREVIEW is an exploratory or "
-        "pre-build analysis to recompute with the stated controls (the CheZOD reproduction is pre-build: re-run on 2026-10 code). "
-        "PROVISIONAL is a stale DisProt number. UNREPRODUCED keeps the writing plan's value because this script cannot recompute it; the reason is in the source column.",
+        "**Status codes.** STABLE is final for this build. PENDING-REBUILD (moves with rebuild fixes (a)-(f)) occurs only on the frozen "
+        f"pre-fix build `{FROZEN_BUILD}`; on a later build the rebuild has happened and those numbers are STABLE. PREVIEW is an exploratory "
+        "analysis (superseded by a figure definition) or one that needs inputs other than this build's release: the CheZOD reproduction "
+        "(`data/interim/chezod_verification/`, scored with pre-release code) stays PREVIEW until it is re-run with the scoring pipeline on the "
+        "release code. PROVISIONAL is a stale DisProt number. UNREPRODUCED keeps the writing plan's value because this script cannot recompute it; "
+        "the reason is in the source column.",
+        "",
+        "**Status on this build.** "
+        + (
+            f"{C.resolved.get(PENDING, 0)} numbers tagged PENDING-REBUILD for the frozen build and {C.resolved.get(PREVIEW, 0)} PREVIEW numbers of "
+            "analyses that read only this build's release are reported as STABLE: "
+            + "; ".join(f"`{rx}` ({why})" for rx, why in RELEASE_RERUN)
+            + "."
+            if C.manifest.get("pipeline_version") != FROZEN_BUILD
+            else "frozen build: statuses as tagged."
+        ),
         "",
         "**Marker macros** (defined at the top of `numbers.tex`): `\\pending{}`, `\\provisional{}`, `\\placeholder{}`, `\\ownerdraft{RA}{}`, "
         "`\\authornote{}`, `\\needsnumber{}`; `\\draftmarkersoff` renders them as plain text. Use `\\placeholder{}` at the start of a "
@@ -7981,6 +8056,7 @@ def main(argv=None):
         R.items[:] = [Num(**x) for x in d["items"]]
         C = Ctx()
         C.manifest = d["manifest"]
+        C.resolved = d.get("resolved", {})
         out_dir.mkdir(parents=True, exist_ok=True)
         write_tex(out_dir / "numbers.tex", C)
         write_index(out_dir / "numbers_index.md", C)
@@ -7990,7 +8066,11 @@ def main(argv=None):
         return
     C = load_context(a.refresh)
     C.refresh = a.refresh
+    C.out_dir = out_dir
     REL = C.manifest.get("version", REL)
+    BUILD["pipeline_version"] = C.manifest.get("pipeline_version")
+    if BUILD["pipeline_version"] != BUILD_OF_RECORD:
+        print(f"  NOTE: build {BUILD['pipeline_version']} is not the build of record {BUILD_OF_RECORD}", file=sys.stderr)  # fmt: skip
     steps = [sec_snapshot, sec_tiers, sec_filter_losses, sec_test_sets, sec_residues, sec_tolerant_labels, sec_annotations, sec_offsets,
              sec_panav, sec_shifts, sec_sidechain_doc, sec_chezod, sec_clusters_and_leakage, sec_ubiquitin, sec_replicates,
              sec_fig3_replicates, sec_failures, sec_discussion_revision, sec_cosolvents_pressure, sec_conditions_chain, sec_results_b_revision, sec_front_revision, sec_fig1_revision, sec_methods_b_revision, sec_organisms, sec_review_supp_text, sec_supp_figs_revision, sec_params,
@@ -7999,6 +8079,8 @@ def main(argv=None):
         steps.insert(-2, sec_baselines)
     steps.append(sec_rev_results_a)  # results_a.tex revision (31 Oct)
     steps.append(sec_methods_a_revision)  # methods_a.tex revision (31 Oct)
+    steps.append(sec_story_blueprint)  # story blueprint numbers (12 Nov)
+    steps.append(sec_review_science)  # science review (12 Nov)
     for fn in steps:
         t = time.time()
         fn(C)
@@ -8006,9 +8088,10 @@ def main(argv=None):
             f"  {fn.__name__}: {time.time() - t:.0f} s ({len(R.items)} macros)",
             file=sys.stderr,
         )
+    C.resolved = dict(RESOLVED)
     dump.write_text(
-        json.dumps({"manifest": C.manifest, "items": [it.__dict__ for it in R.items]})
-    )
+        json.dumps({"manifest": C.manifest, "resolved": C.resolved, "items": [it.__dict__ for it in R.items]})
+    )  # fmt: skip
     out_dir.mkdir(parents=True, exist_ok=True)
     write_tex(out_dir / "numbers.tex", C)
     write_index(out_dir / "numbers_index.md", C)
@@ -8236,7 +8319,9 @@ def sec_methods_b_revision(C):
     assert fr.SEED == f2a.SEED == s7.SEED, (fr.SEED, f2a.SEED, s7.SEED)
     R.add("seedPairs", I(fr.SEED), "seed of the replicate-pair sampling (Figs. 2a, 3a; Supplementary Fig. S7) and of the sequence bootstraps", "scripts/figures/paper/fig3_replicates.py, fig2a_kpaired.py, supp_s7_replicates.py SEED", STABLE, "par")  # fmt: skip
     R.add("seedConditionPairs", I(fr.SEED + 1), "seed of the same- versus different-condition pair sampling (Fig. 3b)", "scripts/figures/paper/fig3_replicates.py condition_pairs(): random.Random(SEED + 1)", STABLE, "par")  # fmt: skip
-    R.add("substringGateMin", I(20), "minimum length (residues) of an exact-substring containment that the planned release gate rejects", "audit report decision D2 (three containment pairs are only 21-22 aa long)", PENDING, "par")  # fmt: skip
+    from trizod.dataset.mmseqs import SUBSTRING_MIN_LEN
+
+    R.add("substringGateMin", I(SUBSTRING_MIN_LEN), "minimum length (residues) of an exact-substring containment that the release gate rejects", "trizod/dataset/mmseqs.py SUBSTRING_MIN_LEN (package_release gate; audit report decision D2: three containment pairs are only 21-22 aa long)", PENDING, "par")  # fmt: skip
 
 
 def sec_review_supp_text(C):
@@ -8690,7 +8775,7 @@ def sec_rev_results_a(C):
 # live \nLeakTestCovCommon*, \nLeakBidirCommon*, \idContain*, \lenContain* and \nSubstring* macros
 # are defined on the CURRENT split and become 0 (or change) once the rebuild lands. While the
 # frozen build is current, sec_results_b_revision() checks every pinned value against the live one.
-RB_FROZEN_BUILD = "trizod-5b8147a"
+RB_FROZEN_BUILD = FROZEN_BUILD  # "trizod-5b8147a"
 RB_PREFIX_PINNED = {
     # live macro: (pinned value, definition of the frozen quantity)
     **{f"nLeakTestCovCommon{s}{T}": (v, f"{s} test chains with a {T.lower()} training representative at identity >= 30 % over >= 80 % of the TEST chain, build alignment block (Fig. 3c1 search), FROZEN 2026-10 split before fix (a)")
@@ -8841,6 +8926,7 @@ def sec_results_b_revision(C):
     for name, T in (("TriZOD test", "TriZOD"), ("CheZOD117", "CheZOD")):
         r_ = TC.loc[name]
         R.add(f"rhoRepTest{T}", F(r_.rho_res, 3), f"residue-level Spearman rho between {name} chains and their own replicates (Supplementary Fig. S10)", src10, STABLE, "r5")  # fmt: skip
+        R.add(f"rhoSqrtRepTest{T}", F(math.sqrt(r_.rho_res), 3), f"square root of \\rhoRepTest{T}: the approximate ceiling of a predictor's Spearman rho with one measurement, {name} (Fig. 5c)", src10, STABLE, "r5")  # fmt: skip
         R.add(f"rRepTest{T}", F(r_.pearson_res, 3), f"residue-level Pearson r between {name} chains and their own replicates", src10, STABLE, "r5")  # fmt: skip
         R.add(f"nRepChainsTest{T}", I(r_.n_test_chains_with_replicates), f"{name} chains with at least one replicate outside the test sets", src10, STABLE, "r5")  # fmt: skip
         R.add(f"nRepPairsTest{T}", I(r_.n_pairs), f"test-chain / replicate pairs behind those values, {name}", src10, STABLE, "r5")  # fmt: skip
@@ -8911,24 +8997,17 @@ def sec_results_b_revision(C):
 def sec_fig1_revision(C):
     """Numbers added in the fig1.tex revision (31 Oct; reviewer nmr_expert, Fig. 1a k classes).
 
-    \\nUbqDiUbChains: of the Fig. 1a core-strip chains in the lowest median-k class (non-bound
-    ubiquitin, mean G < 0.5, chain median k <= 6; the \\nUbqClassKLow set of sec_ubiquitin),
-    those that are subunits of covalently linked diubiquitins (n_copies >= 2) and carry only
-    1H and 15N backbone shifts (trizod_shifts.parquet, is_backbone atoms). PREVIEW like the
-    other teaser numbers, because the Fig. 1a chain selection is under review."""
+    \\nUbqDiUbChains: of the native non-bound ubiquitin chains in the lowest median-k class
+    (fig1a_ubiquitin.select_chains, the \\nUbqClassKLow set of sec_ubiquitin), those that are
+    subunits of covalently linked diubiquitins (n_copies >= 2) and carry only 1H and 15N
+    backbone shifts (trizod_shifts.parquet, is_backbone atoms). Until 12 Nov 2026 this used
+    the writing plan's mean G < 0.5 selection (PREVIEW); it now uses the figure's own native
+    chain set, so Methods' "all \\nUbqClassKLow chains are diubiquitin subunits" is checked
+    on one chain set (\\checkUbqKLowAllDiUb)."""
     df = C.df
-    u = df[(df.sequence == UBQ) & ~df.is_bound]
-    medk = np.array(
-        [
-            np.nanmedian(
-                np.where(
-                    np.isfinite(np.asarray(g, float)), np.asarray(k, float), np.nan
-                )
-            )
-            for g, k in zip(u.gscores, u.k)
-        ]
-    )
-    low = u[(u.meanG.to_numpy() < 0.5) & (medk > 0) & (medk <= 6)]
+    f2a = paper("fig1a_ubiquitin")
+    ub = f2a.select_chains(df)
+    low = ub[ub.native & (ub.k_class == list(f2a.sp.K_CLASSES)[0])]
     sh = pq.read_table(
         PATHS.shifts,
         columns=["id", "atom_id", "is_backbone"],
@@ -8937,10 +9016,11 @@ def sec_fig1_revision(C):
     atoms = sh[sh.is_backbone].groupby("id")["atom_id"].agg(lambda s: set(s))
     hn_only = {i for i, a in atoms.items() if a <= {"H", "N"}}
     diub = low[(low.n_copies >= 2) & low["id"].isin(hn_only)]
-    src = ("Parquet sequence, is_bound, gscores, k, n_copies (non-bound ubiquitin, mean G < 0.5, median k <= 6); "
-           "trizod_shifts.parquet atom_id of is_backbone shifts (only H and N); entries 30234, 52078, 52108, 52115, 52139")  # fmt: skip
-    R.add("nUbqDiUbChains", I(len(diub)), "Fig. 1a core-strip chains with median k <= 6 that are 1H-15N-only subunits of covalently linked diubiquitins (n_copies >= 2)", src, PREVIEW, "r2")  # fmt: skip
-    R.add("nUbqDiUbEntries", I(diub.entry_id.nunique()), "diubiquitin entries behind \\nUbqDiUbChains", src, PREVIEW, "r2")  # fmt: skip
+    src = ("Parquet sequence, is_bound, k, mask, n_copies + raw sample components (fig1a_ubiquitin.select_chains: native "
+           "non-bound ubiquitin, median k <= 6); trizod_shifts.parquet atom_id of is_backbone shifts (only H and N)")  # fmt: skip
+    R.add("nUbqDiUbChains", I(len(diub)), "native non-bound ubiquitin chains with median k <= 6 (Fig. 3c) that are 1H-15N-only subunits of covalently linked diubiquitins (n_copies >= 2)", src, STABLE, "r2")  # fmt: skip
+    R.add("nUbqDiUbEntries", I(diub.entry_id.nunique()), "diubiquitin entries behind \\nUbqDiUbChains", src, STABLE, "r2")  # fmt: skip
+    R.add("checkUbqKLowAllDiUb", "yes" if len(diub) == len(low) else f"NO ({len(diub)} of {len(low)})", "check, not quoted: every native ubiquitin chain with median k <= 6 is a diubiquitin subunit (Methods; Fig. 3c caption)", src, STABLE, "r2")  # fmt: skip
 
 
 def _scan_temperature_units() -> dict:
@@ -9239,6 +9319,284 @@ def sec_supp_figs_revision(C):
     R.add("nReplicateGalleryEligible", I(n_elig), "sequences whose non-bound chains come from at least \\minReplicateGalleryEntries entries (the gallery's sampling frame)", "Parquet sequence, entry_id, is_bound (supp_s8_replicate_gallery.gallery)", STABLE, "r2")  # fmt: skip
     R.add("caseClusterIdentity", P(100 * s8.MIN_FIDENT, 0), "minimum sequence identity of a case-study cluster member to the seed chain (mmseqs easy-search; sec_ubiquitin and Supplementary Fig. S8a-c)", "supp_s8_replicate_gallery.MIN_FIDENT = make_numbers sec_ubiquitin H.fid >= 0.8", STABLE, "par")  # fmt: skip
     R.add("caseClusterCoverage", P(100 * s8.MIN_COV, 0), "minimum query and target coverage of a case-study cluster member", "supp_s8_replicate_gallery.MIN_COV = make_numbers sec_ubiquitin qcov, tcov >= 0.9", STABLE, "par")  # fmt: skip
+
+
+def _num_or_int(x, nd: int = 1) -> str:
+    """An integer when x is integral, else x with ``nd`` decimals (temperatures, k)."""
+    x = float(x)
+    return I(x) if abs(x - round(x)) < 1e-6 else F(x, nd)
+
+
+def sec_story_blueprint(C):
+    """Numbers new in the story blueprint (reports/story/STORY_BLUEPRINT.md, 10.2; 12 Nov 2026).
+
+    (1) Repeated measurements over ALL chains (Fig. 2d, R2): exact sequences measured in >= 2
+        entries, their chains, the maximum entries per sequence (release_stats.repeat_stats).
+    (2) Exact-sequence alpha-synuclein (R7 topic sentence) and ubiquitin (Fig. 2d label); these
+        count one exact sequence, not the MMseqs2 case clusters of \\nCase*.
+    (3) The ubiquitin selection rule (R4, Methods): ubiquitin has the most non-bound entries
+        among sequences whose non-bound chains are mostly ordered (median chain-mean G < 0.2).
+    (4) Single-study one-factor pairs (Fig. 4b, Supplementary Table 14):
+        fig3_replicates.one_factor_pairs (rule in its docstring; deposited pH, temperature and
+        ionic strength only); the table is written to <out-dir>/Figures/paper/fig3_data/.
+    The test-set ceilings \\rhoSqrtRepTest* are added beside \\rhoRepTest* (sec_results_b_revision)."""
+    rs_ = paper("release_stats")
+    df = C.df
+    st = rs_.repeat_stats(df)
+    src1 = "Parquet sequence, entry_id (all chains); scripts/figures/paper/release_stats.py repeat_stats / repeat_histogram (Fig. 2d)"
+    R.add("nSeqsMultiEntry", I(st["n_seqs_multi_entry"]), "exact sequences measured in two or more BMRB entries (all chains of the release)", src1, STABLE, "r1", "1,881")  # fmt: skip
+    R.add("nChainsMultiEntry", I(st["n_chains_multi_entry"]), "chains of those sequences", src1, STABLE, "r1", "5,608")  # fmt: skip
+    R.add("nEntriesMaxPerSeq", I(st["n_entries_max_per_seq"]), "largest number of BMRB entries that measured one exact sequence (all chains)", src1, STABLE, "r1", "45")  # fmt: skip
+    R.add("nSeqsAtMaxEntries", I(st["n_seqs_at_max"]), "exact sequences measured in \\nEntriesMaxPerSeq entries (" + " and ".join(x.replace("α", "alpha") for x in st["labels_at_max"]) + ")", src1, STABLE, "r1")  # fmt: skip
+    nseq = next(it for it in R.items if it.name == "nSequencesScored")
+    assert plainify(nseq.value).replace(",", "") == str(st["n_sequences"]), (
+        nseq.value,
+        st["n_sequences"],
+    )
+    src2 = "Parquet sequence == release_stats.ASYN / UBQ (exact sequence; all chains, bound included)"
+    R.add("nChainsASynExact", I(st["n_chains_asyn_exact"]), "chains with the exact human alpha-synuclein sequence (UniProt P37840, 140 aa; = the CheZOD117 chain 6968_1_1_1)", src2, STABLE, "r5", "84")  # fmt: skip
+    R.add("nEntriesASynExact", I(st["n_entries_asyn_exact"]), "BMRB entries behind those chains", src2, STABLE, "r5", "45")  # fmt: skip
+    R.add("nEntriesUbqExact", I(st["n_entries_ubq_exact"]), "BMRB entries with a chain of the exact 76-aa ubiquitin sequence, all chains (= \\nUbqEntries; Fig. 2d label)", src2, STABLE, "r1", "36")  # fmt: skip
+    ue = next(it for it in R.items if it.name == "nUbqEntries")
+    assert plainify(ue.value).replace(",", "") == str(st["n_entries_ubq_exact"])
+    chk = rs_.ubq_most_entries_ordered(df)
+    R.add("checkUbqMostEntriesOrdered", "yes" if chk["top_is_ubq"] else "NO", "check, not quoted: ubiquitin has the most non-bound entries among sequences whose non-bound chains have a median chain-mean G below 0.2 "
+          f"(ubiquitin {chk['top_n_entries']} entries, median chain-mean G {chk['top_median_mean_g']:.3f}; next: {chk['runner_up_n_entries']} entries)",
+          "Parquet gscores (unfiltered labels), is_bound, entry_id; release_stats.ubq_most_entries_ordered", STABLE, "r2")  # fmt: skip
+    R.add("nEntriesOrderedRunnerUp", I(chk["runner_up_n_entries"]), "non-bound entries of the runner-up in that ubiquitin check (the next mostly ordered sequence)", "release_stats.ubq_most_entries_ordered", STABLE, "r2")  # fmt: skip
+
+    # (4) single-study one-factor pairs
+    fr = paper("fig3_replicates")
+    D = fr.Data()
+    out_csv = C.out_dir / "Figures" / "paper" / "fig3_data" / fr.ONE_FACTOR_CSV
+    Pp = fr.one_factor_pairs(D, out_csv=out_csv)
+    P0 = fr.one_factor_pairs(D, deposited_only=False)
+    src4 = (f"scripts/figures/paper/fig3_replicates.py one_factor_pairs (blueprint 6.5: one study, one factor, deposited pH / T / ionic "
+            f"strength, clean state, >= {fr.ONE_FACTOR_MIN_RES} co-scored residues; unfiltered labels); table: Figures/paper/fig3_data/{fr.ONE_FACTOR_CSV}")  # fmt: skip
+    tp, ph = Pp[Pp.factor == "temperature"], Pp[Pp.factor == "pH"]
+    R.add("nOneFactorPairs", I(len(Pp)), "single-study replicate pairs that differ in exactly one factor, pH or temperature (Fig. 4b denominator; Supplementary Table 14)", src4, STABLE, "r4", "53")  # fmt: skip
+    R.add("nOneFactorPairsTemp", I(len(tp)), "of them temperature pairs (|dT| >= 10 K, |dpH| <= 0.2, equal ionic strength)", src4, STABLE, "r4", "28")  # fmt: skip
+    R.add("nOneFactorPairsPh", I(len(ph)), "of them pH pairs (|dpH| >= 1, |dT| <= 2 K, equal ionic strength)", src4, STABLE, "r4", "25")  # fmt: skip
+    R.add("nOneFactorSeqs", I(Pp.sequence.nunique()), "distinct sequences behind the one-factor pairs", src4, STABLE, "r4")  # fmt: skip
+    R.add("nOneFactorStudies", I(Pp.citation_title.str.casefold().nunique()), "distinct studies (citation titles) behind the one-factor pairs", src4, STABLE, "r4")  # fmt: skip
+    R.add("medAbsDGOneFactorPairs", F(Pp.mean_absdg.median(), 3), "median over the one-factor pairs of the per-pair mean |dG| over co-scored residues (the measure of \\condAbsDGFigSame)", src4, STABLE, "r4")  # fmt: skip
+    R.add("medAbsDGOneFactorPairsTemp", F(tp.mean_absdg.median(), 3), "same, temperature pairs", src4, STABLE, "r4")  # fmt: skip
+    R.add("medAbsDGOneFactorPairsPh", F(ph.mean_absdg.median(), 3), "same, pH pairs", src4, STABLE, "r4")  # fmt: skip
+    R.add("maxCrossRunOneFactorPh", I(ph.cross_run_len.max()), "longest run of residues crossing from G > 0.65 to G < 0.35 among the pH pairs", src4, STABLE, "r4")  # fmt: skip
+    R.add("nOneFactorPairsRanked", I(int(Pp.rankable.sum())), "one-factor pairs that rank (a crossing run; rest of the chain agrees, median |dG| < 0.06; median k within 2)", src4, STABLE, "r4")  # fmt: skip
+    R.add("nOneFactorPairsWithImputed", I(len(P0)), "one-factor pairs if imputed pH, temperature or ionic strength were accepted (diagnostic; not the rule)", src4 + "; deposited_only=False", STABLE, "r4")  # fmt: skip
+    top = fr.top_one_factor_pair(Pp)
+    if top is not None:
+        R.add("idOneFactorTopA", S(top.a), f"top-ranked one-factor pair (Fig. 4b), chain at the lower {top.factor}", src4, STABLE, "r4")  # fmt: skip
+        R.add("idOneFactorTopB", S(top.b), f"top-ranked one-factor pair, chain at the higher {top.factor}", src4, STABLE, "r4")  # fmt: skip
+        R.add("entryOneFactorTopA", S(top.entry_a), "BMRB entry of \\idOneFactorTopA", src4, STABLE, "r4")  # fmt: skip
+        R.add("entryOneFactorTopB", S(top.entry_b), "BMRB entry of \\idOneFactorTopB", src4, STABLE, "r4")  # fmt: skip
+        R.add("factorOneFactorTop", S(top.factor), "the factor that differs in the top-ranked pair", src4, STABLE, "r4")  # fmt: skip
+        R.add("tempOneFactorTopA", _num_or_int(top.temperature_a), "temperature (K) of \\idOneFactorTopA", src4, STABLE, "r4")  # fmt: skip
+        R.add("tempOneFactorTopB", _num_or_int(top.temperature_b), "temperature (K) of \\idOneFactorTopB", src4, STABLE, "r4")  # fmt: skip
+        R.add("phOneFactorTopA", F(top.ph_a, 1), "pH of \\idOneFactorTopA", src4, STABLE, "r4")  # fmt: skip
+        R.add("phOneFactorTopB", F(top.ph_b, 1), "pH of \\idOneFactorTopB", src4, STABLE, "r4")  # fmt: skip
+        R.add("ionicOneFactorTop", F(top.ionic_strength_a, 2), "ionic strength (M) of the top-ranked pair (both chains)", src4, STABLE, "r4")  # fmt: skip
+        R.add("kMedOneFactorTopA", _num_or_int(top.medk_a), "median shift count k of \\idOneFactorTopA over co-scored residues", src4, STABLE, "r4")  # fmt: skip
+        R.add("kMedOneFactorTopB", _num_or_int(top.medk_b), "median shift count k of \\idOneFactorTopB over co-scored residues", src4, STABLE, "r4")  # fmt: skip
+        R.add("nOneFactorTopCoscored", I(top.n_coscored), "co-scored residues of the top-ranked pair", src4, STABLE, "r4")  # fmt: skip
+        R.add("nOneFactorTopRun", I(top.cross_run_len), "length of its longest run of residues crossing from G > 0.65 in one chain to G < 0.35 in the other", src4, STABLE, "r4")  # fmt: skip
+        R.add("resOneFactorTopRunStart", I(top.cross_start), "first residue (sequence position) of that run", src4, STABLE, "r4")  # fmt: skip
+        R.add("resOneFactorTopRunEnd", I(top.cross_end), "last residue (sequence position) of that run", src4, STABLE, "r4")  # fmt: skip
+        R.add("idOneFactorTopDisordered", S(top.disordered_in), "the chain of the top-ranked pair that is disordered in the run", src4, STABLE, "r4")  # fmt: skip
+        R.add("nOneFactorTopCross", I(top.n_cross_residues), "all crossing residues of the top-ranked pair", src4, STABLE, "r4")  # fmt: skip
+        R.add("absDGOneFactorTop", F(top.mean_absdg, 3), "per-pair mean |dG| of the top-ranked pair", src4, STABLE, "r4")  # fmt: skip
+        R.add("absDGOneFactorTopRest", F(top.rest_median_absdg, 3), "median |dG| over its non-crossing co-scored residues", src4, STABLE, "r4")  # fmt: skip
+
+
+def sec_review_science(C):
+    """Numbers of the science review (reports/story/review/science.md; 12 Nov 2026).
+
+    (1) Is the condition effect a study effect? The pairs of the condition comparison (Fig. 4a;
+        fig3_replicates.condition_pairs, deposited pH and temperature only) split by study:
+        within one study = the two entries share a normalised citation title or DOI;
+        across studies = comparable on a key both carry, nothing shared
+        (fig3_replicates.study_condition_pairs). Medians and ratios with sequence-bootstrap
+        CIs (fig3_replicates.boot_study_conditions, matched="class": the main analysis's
+        shift-count matching repeated within each study class -- different-condition pairs
+        re-weighted to that class's same-condition |dk| profile, and across-study
+        same-condition pairs to the within-study ones). Sensitivity: without sample-state
+        differences (fig3b_conditions.state_clean_pairs); one factor only (temperature-only,
+        pH-only different-condition pairs); research group (same study OR a shared depositor,
+        _Entry_author, against neither). Pair table: Figures/paper/fig3_data/<STUDY_CSV>.
+    (2) Fig. 1b: chains that qualify under the example rule (fig1b_record.select_example).
+    (3) "Deposited" text values: chains whose deposited value the pipeline reads but float()
+        does not ('298K', '293,15', '298-303'); the \\n*NotDeposited* macros now use the
+        pipeline's reading (paper_raw_scan.chain_deposited) everywhere.
+    (4) Fig. 5c like-for-like: the ridge baseline's Spearman rho on exactly the residue pairs
+        behind each replicate ceiling (each test chain weighted by its number of replicate
+        pairs; supp_s10_baselines.ridge_on_replicate_chains, unrounded), per training tier, with
+        95 % CIs from the ceiling's own bootstrap (test chains resampled with all their pairs,
+        same seed and draws)."""
+    fr = paper("fig3_replicates")
+    f3b = paper("fig3b_conditions")
+    D = fr.Data()
+    Cp = fr.condition_pairs(D)
+    Sp = fr.study_condition_pairs(D, Cp)
+    out_csv = C.out_dir / "Figures" / "paper" / "fig3_data" / fr.STUDY_CSV
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    keep = ["sequence", "cond", "study", "shared_author", "a", "b", "dph", "dT", "mean_absdk", "n", "pair_mean_absdg"]  # fmt: skip
+    Sp[keep].round({"dph": 3, "dT": 2, "mean_absdk": 3, "pair_mean_absdg": 4}).to_csv(out_csv, index=False)  # fmt: skip
+    b = fr.boot_study_conditions(Sp, matched="class")
+    src = (f"scripts/figures/paper/fig3_replicates.py study_condition_pairs + boot_study_conditions(matched='class'); the Fig. 4a pairs "
+           f"(condition_pairs, deposited pH and T) split by a shared citation title or DOI; 1,000 sequence bootstraps; table Figures/paper/fig3_data/{fr.STUDY_CSV}")  # fmt: skip
+    CT = {"same": "Same", "different": "Diff"}
+    ST = {"within": "WithinStudy", "across": "AcrossStudy"}
+    for (c_, s_), d in b["cells"].items():
+        nm = f"{CT[c_]}{ST[s_]}"
+        ref = (
+            "unweighted (the reference)"
+            if (c_, s_) == ("same", "within")
+            else "re-weighted to the within-study same-condition |dk| profile"
+            if c_ == "same"
+            else f"re-weighted to the {s_}-study same-condition |dk| profile"
+        )
+        R.add(f"nCondPairs{nm}", I(d["n_pairs"]), f"{c_}-condition pairs of the condition comparison whose two entries are {'from one study' if s_ == 'within' else 'from different studies'} (shared citation title or DOI)", src, STABLE, "r4")  # fmt: skip
+        R.add(f"nCondSeqs{nm}", I(d["n_sequences"]), "sequences behind those pairs", src, STABLE, "r4")  # fmt: skip
+        R.add(f"condAbsDG{nm}", F(d["median_absdg"], 3), f"median per-pair mean |dG|, {c_} conditions, {s_} studies; {ref}", src, STABLE, "r4")  # fmt: skip
+        R.add(f"condAbsDG{nm}Lo", F(d["lo"], 3), "lower 95 % sequence-bootstrap bound of that median", src, STABLE, "r4")  # fmt: skip
+        R.add(f"condAbsDG{nm}Hi", F(d["hi"], 3), "upper 95 % sequence-bootstrap bound of that median", src, STABLE, "r4")  # fmt: skip
+    R.add("nCondPairsStudyUnclassified", I(b["n_unclassified"]), "condition pairs whose entries share no comparable study key (neither both titles nor both DOIs); left out of the study split", src, STABLE, "r4")  # fmt: skip
+    ratio_defs = {
+        "condRatioWithinStudy": ("cond_within", "ratio of median per-pair |dG|, different / same conditions, pairs from ONE study (shift-count matched within the class)"),
+        "condRatioAcrossStudy": ("cond_across", "same ratio, pairs from DIFFERENT studies"),
+        "studyRatioSameCond": ("study_same", "ratio of median per-pair |dG|, different studies / one study, same conditions (across-study pairs re-weighted to the within-study |dk| profile)"),
+        "studyRatioDiffCond": ("study_diff", "ratio of median per-pair |dG|, different studies / one study, different conditions"),
+        "condStudyInteraction": ("interaction", "\\condRatioAcrossStudy / \\condRatioWithinStudy (1 = conditions act alike within and across studies)"),
+    }  # fmt: skip
+    for mac, (k, d_) in ratio_defs.items():
+        rr = b["ratios"][k]
+        R.add(mac, F(rr["est"], 2), d_, src, STABLE, "r4")  # fmt: skip
+        R.add(f"{mac}Lo", F(rr["lo"], 2), "lower 95 % sequence-bootstrap bound of that ratio", src, STABLE, "r4")  # fmt: skip
+        R.add(f"{mac}Hi", F(rr["hi"], 2), "upper 95 % sequence-bootstrap bound of that ratio", src, STABLE, "r4")  # fmt: skip
+    dd = Sp[(Sp.cond == "different") & Sp.study.notna()]
+    for s_, T in (("within", "WithinStudy"), ("across", "AcrossStudy")):
+        x = dd[dd.study == s_]
+        R.add(f"pctCondDiffBothFactors{T}", P(100 * ((x.dph >= fr.DIFF["dph"]) & (x.dT >= fr.DIFF["dT"])).mean()), f"share of the different-condition pairs {s_} studies that differ in BOTH pH (>= 1) and temperature (>= 10 K)", src, STABLE, "r4")  # fmt: skip
+    # sensitivity: no sample-state difference; one factor only; research group
+    clean = f3b.state_clean_pairs(D, Cp)
+    bc = fr.boot_study_conditions(fr.study_condition_pairs(D, clean), matched="class")
+    srcc = (
+        src
+        + "; pairs whose chains differ in sample state removed (fig3b_conditions.state_clean_pairs)"
+    )
+    for k, mac in (
+        ("cond_within", "condRatioWithinStudyStateClean"),
+        ("cond_across", "condRatioAcrossStudyStateClean"),
+    ):
+        rr = bc["ratios"][k]
+        R.add(mac, F(rr["est"], 2), f"{ratio_defs[mac.replace('StateClean', '')][1]}; pairs without a sample-state difference", srcc, STABLE, "r4")  # fmt: skip
+        R.add(f"{mac}Lo", F(rr["lo"], 2), "lower 95 % sequence-bootstrap bound of that ratio", srcc, STABLE, "r4")  # fmt: skip
+        R.add(f"{mac}Hi", F(rr["hi"], 2), "upper 95 % sequence-bootstrap bound of that ratio", srcc, STABLE, "r4")  # fmt: skip
+    one = {
+        "Temp": ("temperature only, |dT| >= 10 K and |dpH| <= 0.2", (Sp.dT >= fr.DIFF["dT"]) & (Sp.dph <= fr.SAME["dph"])),
+        "Ph": ("pH only, |dpH| >= 1 and |dT| <= 2 K", (Sp.dph >= fr.DIFF["dph"]) & (Sp.dT <= fr.SAME["dT"])),
+    }  # fmt: skip
+    for tag, (desc, m) in one.items():
+        bo = fr.boot_study_conditions(Sp[(Sp.cond == "same") | m], matched="class")
+        srco = src + f"; different-condition pairs restricted to {desc}"
+        for k, s_ in (("cond_within", "WithinStudy"), ("cond_across", "AcrossStudy")):
+            rr = bo["ratios"][k]
+            mac = f"condRatio{s_}{tag}Only"
+            R.add(mac, F(rr["est"], 2), f"ratio of median per-pair |dG|, different / same conditions, {'one study' if s_ == 'WithinStudy' else 'different studies'}, different-condition pairs that change {desc}", srco, STABLE, "r4")  # fmt: skip
+            R.add(f"{mac}Lo", F(rr["lo"], 2), "lower 95 % sequence-bootstrap bound of that ratio", srco, STABLE, "r4")  # fmt: skip
+            R.add(f"{mac}Hi", F(rr["hi"], 2), "upper 95 % sequence-bootstrap bound of that ratio", srco, STABLE, "r4")  # fmt: skip
+            R.add(f"nCondPairsDiff{s_}{tag}Only", I(bo["cells"][("different", "within" if s_ == "WithinStudy" else "across")]["n_pairs"]), f"different-condition pairs behind \\{mac}", srco, STABLE, "r4")  # fmt: skip
+
+    def _group(study, shared):  # one group: one study or a shared depositor
+        if study is None or (isinstance(study, float) and np.isnan(study)):
+            return None
+        if study == "within" or shared == True:  # noqa: E712 -- shared is True / False / NaN
+            return "within"
+        return "across" if shared == False else None  # noqa: E712
+
+    G_ = Sp.copy()
+    G_["study"] = [_group(st_, sh_) for st_, sh_ in zip(Sp.study, Sp.shared_author)]
+    bg = fr.boot_study_conditions(G_, matched="class")
+    srcg = (
+        src
+        + "; research group: one study OR a shared depositor (_Entry_author family name + first initial; paper_raw_scan.entry_authors) against neither"
+    )
+    for k, mac, d_ in (("cond_within", "condRatioWithinGroup", "ratio of median per-pair |dG|, different / same conditions, pairs from one research group (one study or a shared depositor)"),
+                       ("cond_across", "condRatioAcrossGroup", "same ratio, pairs from groups that share no depositor and no study"),
+                       ("study_same", "groupRatioSameCond", "ratio of median per-pair |dG|, no shared depositor or study / one group, same conditions")):  # fmt: skip
+        rr = bg["ratios"][k]
+        R.add(mac, F(rr["est"], 2), d_, srcg, STABLE, "r4")  # fmt: skip
+        R.add(f"{mac}Lo", F(rr["lo"], 2), "lower 95 % sequence-bootstrap bound of that ratio", srcg, STABLE, "r4")  # fmt: skip
+        R.add(f"{mac}Hi", F(rr["hi"], 2), "upper 95 % sequence-bootstrap bound of that ratio", srcg, STABLE, "r4")  # fmt: skip
+    for c_ in ("same", "different"):
+        cell = bg["cells"][(c_, "across")]
+        R.add(f"nCondPairs{CT[c_]}AcrossGroup", I(cell["n_pairs"]), f"{c_}-condition pairs whose entries share no depositor and no study", srcg, STABLE, "r4")  # fmt: skip
+        R.add(f"nCondSeqs{CT[c_]}AcrossGroup", I(cell["n_sequences"]), "sequences behind those pairs", srcg, STABLE, "r4")  # fmt: skip
+
+    # (2) Fig. 1b example rule
+    f1b = paper("fig1b_record")
+    cid, tab = f1b.select_example()
+    src2 = "scripts/figures/paper/fig1b_record.py select_example (rule in its RULE dict; Methods)"
+    R.add("nFigOneBQualifying", I(len(tab)), "chains that qualify for the Fig. 1b example under its selection rule (the example is the top-ranked one)", src2, STABLE, "r1", "54")  # fmt: skip
+    R.add("idFigOneBExample", S(cid), "the chain shown in Fig. 1b (top of the ranked qualifying chains)", src2, STABLE, "r1")  # fmt: skip
+
+    # (3) deposited values written as text
+    s4 = paper("supp_s4_conditions")
+    d4, _ = s4.load()
+    src3 = "supp_s4_conditions.load: <cond>_deposited (pipeline reading, paper_raw_scan.chain_deposited) against <cond>_deposited_raw_scan (float() only)"
+    for col, nm in (("ph", "Ph"), ("temperature", "Temp"), ("ionic_strength", "Ionic")):
+        n_txt = int((d4[f"{col}_deposited"] & ~d4[f"{col}_deposited_raw_scan"]).sum())
+        n_rev = int((~d4[f"{col}_deposited"] & d4[f"{col}_deposited_raw_scan"]).sum())
+        assert n_rev == 0, (col, n_rev)  # the pipeline reads every value float() reads
+        R.add(f"n{nm}DepositedAsText", I(n_txt), f"chains whose deposited {col.replace('_', ' ')} is written as text the pipeline reads ('298K', '293,15', '298-303'); counted as deposited", src3, STABLE, "r4")  # fmt: skip
+
+    # (4) Fig. 5c like-for-like check of the replicate ceiling
+    s10 = paper("supp_s10_baselines")
+    import style_paper as _sp
+
+    df10 = _sp.load_main(s10.COLUMNS)
+    preds = s10.predictions(df10)
+    pairs = s10.test_ceiling_pairs(df10)
+    src4 = ("scripts/figures/paper/supp_s10_baselines.py predictions + test_ceiling_pairs; ridge rho on the residue pairs behind the ceiling "
+            "(ridge_on_replicate_chains, unrounded); 95 % CI: test chains resampled with all their pairs (boot_rho, the ceiling's seed and draws)")  # fmt: skip
+    for name, T in (("TriZOD test", "TriZOD"), ("CheZOD117", "CheZOD")):
+        by_test: dict = {}
+        for tid, _, y, p, pos in pairs[name]:
+            by_test.setdefault(tid, []).append((y, p, pos))
+        rho_t, lo_t, hi_t, gap_lo, gap = {}, {}, {}, [], []
+        ceil_groups = [[(y, p) for y, p, _ in g] for g in by_test.values()]
+        rho_ceil = s10._pooled_rho([y for g in ceil_groups for y, _ in g], [p for g in ceil_groups for _, p in g])  # fmt: skip
+        ceil_bs = np.sqrt(np.clip(s10.boot_rho(ceil_groups, s10.N_BOOT, s10.BOOT_SEED), 0, None))  # fmt: skip
+        for t_ in TIERS:
+            v = preds[(t_, "one-hot ridge", name)]
+            at = {
+                i: (c_, pos_) for i, c_, pos_ in zip(v["ids"], v["chains"], v["scored"])
+            }
+            groups = []
+            for tid, g in by_test.items():
+                (y_all, p_all), scored = at[tid]
+                grp = []
+                for y, _, pos in g:
+                    k = np.searchsorted(scored, pos)
+                    assert np.array_equal(scored[k], pos) and np.allclose(y_all[k], y)
+                    grp.append((y, p_all[k]))
+                groups.append(grp)
+            rho_t[t_] = s10._pooled_rho(
+                [y for g in groups for y, _ in g], [p for g in groups for _, p in g]
+            )
+            bs = s10.boot_rho(groups, s10.N_BOOT, s10.BOOT_SEED)
+            lo_t[t_], hi_t[t_] = np.nanpercentile(bs, [2.5, 97.5])
+            gap_lo.append(np.nanpercentile(ceil_bs - bs, 2.5))
+            gap.append(np.sqrt(max(rho_ceil, 0.0)) - rho_t[t_])
+        R.add(f"baseRidgeRhoOnRepMin{T}", F(min(rho_t.values()), 3), f"{name}: lowest Spearman rho of the ridge baseline across the four training tiers, on exactly the residue pairs behind the replicate ceiling \\rhoSqrtRepTest{T} (like-for-like)", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"baseRidgeRhoOnRepMax{T}", F(max(rho_t.values()), 3), f"{name}: highest such rho across the four training tiers", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"baseRidgeRhoOnRepLo{T}", F(min(lo_t.values()), 3), f"{name}: lowest lower 95 % bound of those four rho values", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"baseRidgeRhoOnRepHi{T}", F(max(hi_t.values()), 3), f"{name}: highest upper 95 % bound of those four rho values", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"ceilGapOnRepMin{T}", F(min(gap), 3), f"{name}: smallest (over tiers) gap between the replicate ceiling and the ridge rho on the same residue pairs", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"ceilGapOnRepLo{T}", F(min(gap_lo), 3), f"{name}: lowest (over tiers) lower 95 % bound of ceiling minus ridge rho on the same residue pairs and bootstrap draws (> 0: the ceiling lies above the baseline)", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"rhoSqrtRepTest{T}Lo", F(float(np.nanpercentile(ceil_bs, 2.5)), 3), f"lower 95 % bound of \\rhoSqrtRepTest{T} (Fig. 5c band)", src4, STABLE, "r5")  # fmt: skip
+        R.add(f"rhoSqrtRepTest{T}Hi", F(float(np.nanpercentile(ceil_bs, 97.5)), 3), f"upper 95 % bound of \\rhoSqrtRepTest{T} (Fig. 5c band)", src4, STABLE, "r5")  # fmt: skip
 
 
 PATHS: Paths

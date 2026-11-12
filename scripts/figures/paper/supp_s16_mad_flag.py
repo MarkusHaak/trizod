@@ -215,24 +215,29 @@ def main():
     ax.set_xlabel("Flagged shifts")
     sp.fig_label(fig, "b", 0, 46)
 
-    # c: per tier
-    ax = ax_mm(88, 50, 28, 38)
-    x = np.arange(len(TIERS))
+    # c: per tier, as horizontal bars so the tier names stay horizontal (figure review
+    # item 16: no rotated tick labels)
+    ax = ax_mm(92, 50, 26, 38)
+    y = np.arange(len(TIERS))
     v = [tier[tr]["per_1000"] for tr in TIERS]
-    ax.bar(x, v, width=0.66, color=[sp.TIER_COLORS[tr] for tr in TIERS], lw=0)
-    for xi, tr in zip(x, TIERS):
+    ax.barh(y, v, height=0.62, color=[sp.TIER_COLORS[tr] for tr in TIERS], lw=0)
+    for yi, tr in zip(y, TIERS):
         ax.text(
-            xi,
             tier[tr]["per_1000"] + 0.03,
+            yi,
             f"{tier[tr]['per_1000']:.2f}",
-            ha="center",
-            va="bottom",
+            ha="left",
+            va="center",
             fontsize=sp.FS_SMALL,
         )
-    ax.set_xticks(x)
-    ax.set_xticklabels(TIERS, rotation=35, ha="right", rotation_mode="anchor")
-    ax.set_ylim(0, max(v) * 1.2)
-    ax.set_ylabel("Flags per 1,000 shifts")
+    ax.set_yticks(y)
+    ax.set_yticklabels(TIERS)
+    ax.tick_params(axis="y", length=0)
+    ax.set_ylim(len(TIERS) - 0.5, -0.5)
+    ax.set_xlim(0, max(v) * 1.35)
+    ax.set_xticks([0, 0.5, 1.0])
+    ax.set_xticklabels(["0", "0.5", "1"])
+    ax.set_xlabel("Flags per 1,000 shifts")
     sp.fig_label(fig, "c", 74, 46)
 
     # d: metal vs other

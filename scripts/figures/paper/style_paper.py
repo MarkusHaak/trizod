@@ -3,26 +3,30 @@
 Every generator in ``scripts/figures/paper/`` imports this module first, so all
 figures share one look and one set of inputs:
 
-* **Size.** Nature Computational Science artwork is at most 180 mm wide
-  (``W_DOUBLE``); a single column is 88 mm (``W_SINGLE``). Use :func:`figure`
-  with millimetres.
-* **Type.** Sans-serif (Arial, falling back to Helvetica / DejaVu Sans), 6 pt
-  body text, 5.5 pt ticks, 8 pt bold lower-case panel letters, and nothing
-  smaller than ``FS_SMALL`` = 5.3 pt. NCS sets no text below 5 pt at final size,
-  and the draft places the artwork at ``\\textwidth`` (177.7 mm, a scale of
-  0.987), so 5.3 pt prints at 5.2 pt. :func:`save` enforces the floor on every
-  text item, including generator-local sizes and sub/superscripts, and labels
-  log axes with plain numbers (1, 10, 100, 1,000) instead of 10^n, whose
-  exponent matplotlib sets at 70 % of the tick size. Lay text out at
-  ``FS_SMALL`` or larger (not a local 5.0 pt constant), so the floor never moves
-  it after layout. Fonts are embedded as TrueType (``pdf.fonttype = 42``) so the
-  PDFs stay editable.
-* **Colour.** Okabe--Ito for categories, matching the construction schematic
-  (``2026-06-22_TriZOD_redundancy_reduction.tex``): orange = CheZOD sets,
-  bluish green = training, blue = TriZOD test set, vermillion = removed /
-  held out. The four nested tiers use one sequential reddish-purple ramp,
-  light = permissive (unfiltered) to dark = strict, so "darker is stricter"
-  and the tier colours never collide with the category colours.
+* **Size.** Artwork is drawn at its final size and placed at 1:1: 160 mm for the
+  full text width (``W_DOUBLE``), 78 mm for a half-width cell (``W_SINGLE``);
+  both fit Nature's 180 mm / 88 mm limits. Use :func:`figure` with millimetres.
+* **Type.** Sans-serif (Arial, falling back to Helvetica / DejaVu Sans). All text
+  is 7 pt (``FS_BODY`` = ``FS_TICK`` = 7: axis titles, tick labels, legends,
+  direct labels), panel letters are 8 pt bold lower case (``FS_PANEL``), and
+  nothing is smaller than ``FS_SMALL`` = 6 pt (NCS sets no text below 5 pt at
+  final size). :func:`save` enforces the floor on every text item, including
+  generator-local sizes and sub/superscripts, and labels log axes with plain
+  numbers (1, 10, 100, 1,000) instead of 10^n, whose exponent matplotlib sets at
+  70 % of the tick size. Lay text out at ``FS_SMALL`` or larger, so the floor
+  never moves it after layout. Fonts are embedded as TrueType
+  (``pdf.fonttype = 42``) so the PDFs stay editable.
+* **Colour.** One colour per entity, in every main and Supplementary figure
+  (story blueprint 6.8; ``reports/story/STYLE_NOTES.md``), each with a second cue
+  in :data:`ENTITY`: TriZOD release black filled, CheZOD1325 grey ``#8C8C8C``
+  open, CheZOD117 vermillion triangle, TriZOD test set blue circle, training
+  bluish green; removed / excluded items light grey with hatching (patches) or
+  a dash (lines), never a hue. Replicate conditions use :data:`COND` (same black,
+  different bluish green, different but state-clean bluish green open). The four
+  nested tiers use one sequential reddish-purple ramp, light = permissive
+  (unfiltered) to dark = strict, so "darker is stricter"; shift count k is a
+  brown-to-gold ramp (``trizod_k``: none of the entity hues, no grey). Two groups of one entity (ordered and disordered residues) differ by
+  marker and fill in ink (:data:`CONTRAST`), never by grey, which is CheZOD1325.
 * **Output.** Vector PDF into the directory given by the required ``--out-dir``
   argument (the draft's ``Figures/paper``; :func:`set_out_dir`), data tables into
   its sub-folders; an optional PNG preview goes to a scratch directory for visual
@@ -49,6 +53,7 @@ import json
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -184,7 +189,7 @@ G_DIS = 0.65  # binary disorder cut used throughout the paper
 BACKBONE_ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 
 # ----------------------------------------------------------------------------------
-# colours
+# colours: one colour per entity, in every main and Supplementary figure
 # ----------------------------------------------------------------------------------
 OKABE_ITO = {
     "black": "#000000",
@@ -197,14 +202,178 @@ OKABE_ITO = {
     "purple": "#CC79A7",
     "grey": "#8C8C8C",
 }
-CAT = {
-    "chezod": OKABE_ITO["orange"],
-    "train": OKABE_ITO["green"],
-    "test": OKABE_ITO["blue"],
-    "removed": OKABE_ITO["vermillion"],
-    "neutral": "#4D4D4D",
-    "light": "#BDBDBD",
+INK = "#000000"  # text, axes and the TriZOD release
+INK_SOFT = "#4D4D4D"  # secondary text, CI whiskers, separators
+GREY_CHEZOD = OKABE_ITO["grey"]  # CheZOD1325 (3.4:1 on white), always with open markers
+GREY_REMOVED = "#B3B3B3"  # removed / excluded items, always hatched or dashed
+HATCH = "////"  # hatching of removed / excluded areas (hatch colour = edgecolor)
+DASH_REMOVED = (0, (3.0, 1.5))  # the line counterpart of the hatching
+
+
+class _Palette(dict):
+    """``CAT``: a dict that warns when a legacy, ambiguous key is read."""
+
+    ALIASES = {"chezod": "chezod1325"}
+
+    def __getitem__(self, key):
+        if key in self.ALIASES:
+            warnings.warn(
+                f"style_paper.CAT[{key!r}] is ambiguous: use CAT['chezod1325'] (grey, "
+                "the CheZOD1325 set and the CheZOD method) or CAT['chezod117'] "
+                "(vermillion, the CheZOD117 test set)",
+                stacklevel=2,
+            )
+        return super().__getitem__(key)
+
+
+CAT = _Palette(
+    {
+        # entities (story blueprint 6.8); their second cue (marker, fill, line) is in ENTITY
+        "release": INK,  # TriZOD release, all chains: black, filled
+        "chezod1325": GREY_CHEZOD,  # CheZOD1325 (and "run as CheZOD"): grey, open
+        "chezod117": OKABE_ITO["vermillion"],  # CheZOD117 test set: vermillion triangle
+        "test": OKABE_ITO["blue"],  # TriZOD test set: blue circle
+        "train": OKABE_ITO["green"],  # training representatives: bluish green
+        "removed": GREY_REMOVED,  # removed / excluded: light grey + HATCH / DASH_REMOVED
+        "lacs": OKABE_ITO["skyblue"],  # LACS offset source (Supplementary Figs. 6, 15)
+        # neutrals, not entities
+        "neutral": INK_SOFT,  # secondary ink
+        "light": "#BDBDBD",  # reference lines and guides (G = 0.65, medians)
+        # legacy alias, kept so old call sites still run (warns): the CheZOD method /
+        # CheZOD1325. New code names the set: chezod1325 or chezod117.
+        "chezod": GREY_CHEZOD,
+    }
+)
+
+# The second cue of each entity, so a figure stays readable in grey scale and for
+# colour-blind readers. Keys are those of CAT; use marker_kw(), line_kw(), patch_kw().
+ENTITY = {
+    "release": {"color": INK, "marker": "o", "mfc": INK, "ls": "-", "label": "TriZOD"},
+    "chezod1325": {
+        "color": GREY_CHEZOD,
+        "marker": "o",
+        "mfc": "white",
+        "ls": "--",
+        "label": "CheZOD1325",
+    },
+    "chezod117": {
+        "color": CAT["chezod117"],
+        "marker": "^",
+        "mfc": CAT["chezod117"],
+        "ls": "-",
+        "label": "CheZOD117",
+    },
+    "test": {
+        "color": CAT["test"],
+        "marker": "o",
+        "mfc": CAT["test"],
+        "ls": "-",
+        "label": "TriZOD test set",
+    },
+    "train": {
+        "color": CAT["train"],
+        "marker": "o",
+        "mfc": CAT["train"],
+        "ls": "-",
+        "label": "Training",
+    },
+    "removed": {
+        "color": GREY_REMOVED,
+        "marker": "x",
+        "mfc": "none",
+        "ls": DASH_REMOVED,
+        "hatch": HATCH,
+        "label": "Removed",
+    },
 }
+
+# Replicate pairs by their conditions (Fig. 4a): same = black filled, different pH or
+# temperature = bluish green filled, different but state-clean = bluish green open.
+COND = {
+    "same": {"color": INK, "marker": "o", "mfc": INK, "label": "Same conditions"},
+    "different": {
+        "color": OKABE_ITO["green"],
+        "marker": "o",
+        "mfc": OKABE_ITO["green"],
+        "label": "Different pH or temperature",
+    },
+    "different_state_clean": {
+        "color": OKABE_ITO["green"],
+        "marker": "o",
+        "mfc": "white",
+        "label": "Different, without state differences",
+    },
+}
+
+# Two groups of one entity (ordered vs disordered residues, chains that deviate from
+# their replicates vs chains that agree): both in ink, told apart by marker and fill.
+CONTRAST = {
+    "focus": {"color": "#1A1A1A", "marker": "o", "mfc": "#1A1A1A"},
+    "control": {"color": "#1A1A1A", "marker": "s", "mfc": "white"},
+}
+
+
+def _style(key_or_style) -> dict:
+    """An ENTITY / COND / CONTRAST entry, given by its ENTITY key or as the dict itself."""
+    return ENTITY[key_or_style] if isinstance(key_or_style, str) else key_or_style
+
+
+def marker_kw(key_or_style, ms: float | None = None, mew: float = 0.8) -> dict:
+    """``ax.plot`` keyword arguments for an entity's marker (no line).
+
+    ``ax.plot(x, y, **sp.marker_kw("chezod117"))`` draws vermillion triangles;
+    ``sp.marker_kw(sp.COND["different_state_clean"])`` an open bluish-green circle.
+    """
+    st = _style(key_or_style)
+    kw = {
+        "ls": "",
+        "marker": st["marker"],
+        "color": st["color"],
+        "mfc": st["mfc"],
+        "mec": st["color"],
+        "mew": mew,
+    }
+    if ms is not None:
+        kw["ms"] = ms
+    return kw
+
+
+def line_kw(key_or_style, lw: float | None = None) -> dict:
+    """``ax.plot`` / ``ax.step`` keyword arguments for an entity's line."""
+    st = _style(key_or_style)
+    kw = {"color": st["color"], "ls": st.get("ls", "-")}
+    if lw is not None:
+        kw["lw"] = lw
+    return kw
+
+
+def patch_kw(key_or_style) -> dict:
+    """Keyword arguments for a bar or area of an entity (removed: white, hatched)."""
+    st = _style(key_or_style)
+    if st.get("hatch"):
+        return {
+            "facecolor": "white",
+            "edgecolor": st["color"],  # hatch colour; lw=0 hides the outline
+            "hatch": st["hatch"],
+            "lw": 0,
+        }
+    return {"facecolor": st["color"], "edgecolor": "none", "lw": 0}
+
+
+def entity_handle(key_or_style, label: str | None = None, kind: str = "marker", **kw):
+    """A legend handle (marker, line or patch) for an entity; prefer direct labels."""
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    st = _style(key_or_style)
+    label = st.get("label", "") if label is None else label
+    if kind == "patch":
+        return Patch(label=label, **patch_kw(st), **kw)
+    if kind == "line":
+        return Line2D([], [], label=label, **line_kw(st), **kw)
+    return Line2D([], [], label=label, **{"ms": 3.6, **marker_kw(st), **kw})
+
+
 TIER_COLORS = {
     "unfiltered": "#D7A9CB",
     "tolerant": "#B86AA6",
@@ -213,16 +382,35 @@ TIER_COLORS = {
 }
 TIER_MARKERS = {"unfiltered": "o", "tolerant": "s", "moderate": "D", "strict": "^"}
 
-# Per-residue shift count k (1-21) is drawn with viridis everywhere (the colour bar of
-# Supplementary Fig. S2). Figures that bin chains by their median k (Fig. 1a) sample
-# viridis at each class centre, so a class colour matches the colour bar at its k.
-K_CMAP = "viridis"
+# Per-residue shift count k (1-21) is drawn with one sequential map everywhere (the colour
+# bar of Supplementary Fig. S2, the strips of Fig. 4b). Figures that bin chains by their
+# median k (Fig. 3c) sample the map at each class centre, so a class colour matches the
+# colour bar at its k. Since 12 Nov 2026 (figure review item 14) the map is a brown-to-gold
+# ramp, "trizod_k": viridis put k <= 6 in the dark purple of the strict tier and k 7-15 in
+# the bluish green of "different conditions" and training; cividis (the review's first
+# option) has a neutral grey middle, which is CheZOD1325 (Fig. 3a, next to Fig. 3c), the
+# "other sample" chains of Supplementary Fig. S8 and the density of Supplementary Fig. S2.
+# Brown - ochre - gold avoids purple, green, blue, grey and the vermillion of CheZOD117,
+# and its lightness rises monotonically (readable in grey scale and for colour-blind eyes).
+K_CMAP_COLORS = ["#4a2a0a", "#9c6a1e", "#d9a82e", "#f3d75e"]  # k = 1 ... 21
+K_CMAP = "trizod_k"
+
+
+def _register_k_cmap() -> None:
+    import matplotlib as mpl
+    from matplotlib.colors import LinearSegmentedColormap
+
+    if K_CMAP not in mpl.colormaps:
+        mpl.colormaps.register(LinearSegmentedColormap.from_list(K_CMAP, K_CMAP_COLORS))
+
+
+_register_k_cmap()
 K_RANGE = (1, 21)
 K_CLASSES = {"≤6": (0, 6), "7–15": (7, 15), "16–21": (16, 21)}  # (lo, hi], inclusive hi
 
 
 def k_color(k: float) -> str:
-    """Hex colour of shift count ``k`` on the shared viridis scale."""
+    """Hex colour of shift count ``k`` on the shared k scale (:data:`K_CMAP`)."""
     import matplotlib as mpl
 
     lo, hi = K_RANGE
@@ -244,16 +432,16 @@ MM = 1 / 25.4
 W_SINGLE = 78.0
 W_DOUBLE = 160.0
 
-# Minimum text size. NCS sets no figure text below 5 pt at final size. The draft
-# places 180 mm artwork at \textwidth (505.69 pt = 177.7 mm in the zHenriquesLab
-# layout; Article.log) and 88 mm cells at 0.4889 \textwidth, so every panel prints at
-# ~0.987 of its drawn size and 5.0 pt in the artwork becomes 4.9 pt on the page.
+# Text sizes. Nature sets figure text at 5-7 pt at final size; the paper uses the top of
+# that range for everything (blueprint 6.8). The draft's text width is 160 mm and the
+# artwork is drawn at that width (half width: 78 mm), so it is placed at 1:1 and a size
+# here is the size on the page.
 TEXTWIDTH_MM = 160.0
-PLACE_SCALE = TEXTWIDTH_MM / W_DOUBLE  # ~0.987
+PLACE_SCALE = TEXTWIDTH_MM / W_DOUBLE  # 1.0: placed at 1:1
 MIN_PT_PLACED = 5.0  # NCS minimum at final size
-FS_SMALL = 6.0  # smallest size in the artwork (5.9 pt as placed); save() enforces it
-FS_TICK = 6.5  # tick labels
-FS_BODY = 7.0  # axis labels and body text: Nature's 7 pt ceiling, as large as allowed
+FS_SMALL = 6.0  # the floor: nothing smaller (save() enforces it); cell values, notes
+FS_TICK = 7.0  # tick labels and legends: the same 7 pt as all other text
+FS_BODY = 7.0  # axis titles, direct labels, body text: Nature's 7 pt ceiling
 FS_PANEL = 8.0  # bold lower-case panel letters (Nature: 8 pt)
 SCRIPT_SHRINK = 0.7  # mathtext sub/superscript size relative to its base (fixed in mpl)
 COMPACT_FROM = 1e5  # log axes reaching this value label 1,000 as 1k, 10^6 as 1M
@@ -263,7 +451,7 @@ RC = {
     "font.family": "sans-serif",
     "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
     "font.size": FS_BODY,
-    "axes.titlesize": 7.0,
+    "axes.titlesize": FS_BODY,
     "axes.labelsize": FS_BODY,
     "xtick.labelsize": FS_TICK,
     "ytick.labelsize": FS_TICK,
@@ -336,6 +524,36 @@ def fig_label(fig, letter: str, x_mm: float, y_mm_from_top: float) -> None:
         fontweight="bold",
         va="top",
         ha="left",
+    )
+
+
+def direct_label(
+    ax,
+    x: float,
+    y: float,
+    text: str,
+    dx_mm: float = 1.0,
+    dy_mm: float = 0.0,
+    ha: str = "left",
+    va: str = "center",
+    color: str = INK,
+    fontsize: float = FS_BODY,
+    **kw,
+):
+    """Write ``text`` beside the mark or line end at data point ``(x, y)``.
+
+    The offset is in millimetres, so it does not change with the axis scale (log axes
+    included). The text stays in ink; the coloured mark beside it carries the identity
+    (blueprint 6.8). Use it instead of a legend wherever there is room.
+    """
+    from matplotlib.transforms import offset_copy
+
+    tr = offset_copy(
+        ax.transData, fig=ax.figure, x=dx_mm * MM, y=dy_mm * MM, units="inches"
+    )
+    kw.setdefault("clip_on", False)
+    return ax.text(
+        x, y, text, transform=tr, ha=ha, va=va, color=color, fontsize=fontsize, **kw
     )
 
 
@@ -555,11 +773,58 @@ def enforce_min_text(fig, floor: float = FS_SMALL) -> int:
     return n
 
 
+def _drawn_texts(fig):
+    """The text items ``fig`` draws: tick labels inside the view, labels, legends, notes."""
+    for ax in _all_axes(fig):
+        for axis in (ax.xaxis, ax.yaxis):
+            try:
+                ticks = axis._update_ticks()  # only the ticks inside the view
+            except AttributeError:  # pragma: no cover - older/newer matplotlib
+                ticks = axis.get_major_ticks()
+            for tick in ticks:
+                yield tick.label1
+                yield tick.label2
+            yield axis.label
+            yield axis.offsetText
+        yield from (ax.title, ax._left_title, ax._right_title)
+        yield from ax.texts
+        if ax.get_legend() is not None:
+            yield from ax.get_legend().get_texts()
+            yield ax.get_legend().get_title()
+    yield from fig.texts
+    for leg in fig.legends:
+        yield from leg.get_texts()
+        yield leg.get_title()
+
+
+def text_outside(fig, tol_mm: float = 0.1) -> list:
+    """Visible text items that reach beyond the canvas, so the PDF would clip them.
+
+    Returns ``(text, mm beyond the edge)`` pairs. Raising all text to 7 pt can push a
+    key or a tick label over the edge of a tightly laid-out panel; :func:`save` reports
+    them.
+    """
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    w, h = fig.bbox.width, fig.bbox.height
+    px_per_mm = fig.dpi * MM
+    out = []
+    for t in _drawn_texts(fig):
+        if not t.get_visible() or not t.get_text().strip():
+            continue
+        bb = t.get_window_extent(r)
+        over = max(-bb.x0, -bb.y0, bb.x1 - w, bb.y1 - h) / px_per_mm
+        if over > tol_mm:
+            out.append((t.get_text()[:30].replace("\n", " "), round(float(over), 1)))
+    return out
+
+
 def save(fig, name: str, preview: bool = True, min_text: bool = True) -> Path:
     """Write ``<out-dir>/<name>.pdf`` (vector); PNG preview to PREVIEW_DIR if set.
 
     With ``min_text`` (default) the figure first passes :func:`enforce_min_text`,
     so no glyph is smaller than ``FS_SMALL`` and log axes carry plain numbers.
+    Text that reaches beyond the canvas is reported on stderr (:func:`text_outside`).
     """
     fig_dir = out_dir()  # fail before the (slow) text-floor pass
     if min_text:
@@ -569,6 +834,12 @@ def save(fig, name: str, preview: bool = True, min_text: bool = True) -> Path:
                 f"style_paper: {name}: {n} text edit(s) to reach the {FS_SMALL} pt floor",
                 file=sys.stderr,
             )
+    outside = text_outside(fig)
+    if outside:
+        print(
+            f"style_paper: {name}: text beyond the canvas (mm): {outside[:6]}",
+            file=sys.stderr,
+        )
     fig_dir.mkdir(parents=True, exist_ok=True)
     out = fig_dir / f"{name}.pdf"
     fig.savefig(
