@@ -1,0 +1,26 @@
+{
+  "count": 452,
+  "seed": 42,
+  "sample_fraction": 0.25,
+  "written": "2026-11-10",
+  "mode": "trim",
+  "trimmed_from": {
+    "count": 460,
+    "written": "2026-08-11",
+    "mode": "redraw"
+  },
+  "dropped": [
+    "10238_1_1_1",
+    "34568_1_1_1",
+    "36154_1_1_1",
+    "36170_1_1_1",
+    "36521_1_1_1",
+    "50683_1_1_1",
+    "50871_1_1_1",
+    "50900_1_1_1"
+  ],
+  "renamed": {
+    "36288_1_1_1": "36385_1_1_1"
+  },
+  "reason": "v0.4.0 rebuild: 36170 withdrawn from BMRB; 34568, 36154, 50683 in TFE/DMSO and 36521, 50871, 50900 in acetonitrile (audit I-06, I-07, cosolvent fix); 36288 withdrawn, kept via its identical-sequence re-deposition 36385; 10238 dropped because strict training representative 10237 holds the same two domains in swapped order (one alignment covers 74 %/70 %, both pieces 96 %/91 %, which the single-alignment coverage rule cannot see)"
+}

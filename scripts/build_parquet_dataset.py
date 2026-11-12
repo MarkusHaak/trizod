@@ -1,0 +1,883 @@
+"""Build the single-file Parquet release of the TriZOD dataset.
+
+Consolidates the multi-file staged release bundle (per-tier FASTA + per-tier
+``scores.json`` JSONL + ``clusters_best.tsv`` + test FASTAs) into ONE
+self-contained Parquet table, one row per scored protein chain.
+
+Design (see docs): the per-tier ``scores.json`` files nest (strict subset
+moderate subset tolerant subset unfiltered), and so do the per-tier
+training-representative sets and clustering pools, so a single row per chain
+plus a handful of ordinal/categorical columns encodes every published view's
+membership:
+
+  * ``split``       one of train / redundant / test_chezod117 / test_trizod / excluded
+  * ``train_tier``  strictest tier at which the chain is a training representative
+  * ``pool_tier``   strictest tier whose redundancy-reduction pool contains the chain
+
+A chain's per-tier *records* are NOT interchangeable, though (audit issue I-01).
+Tolerant is the only tier that combines a finite ``--max-offset`` (3 sigma) with
+``--reject-shift-type-only``: it masks an over-limit atom type out of the score
+and nulls that type's ``off_<a>_sigma`` / ``total_off_<a>_ppm``, where the
+unfiltered run applies the offset and scores the type -- 1,073 of the 15,073
+tolerant records of release 2026-10 differ from the unfiltered run, 478 of them
+training representatives. Moderate and strict reject such a chain outright, so
+their records equal the unfiltered ones. Each row is therefore read, labels and
+offsets alike, from ONE record: that of the tier that selected the chain, named
+in ``label_tier_source`` -- its ``train_tier`` if it is a training
+representative, otherwise the strictest tier whose ``scores.json`` holds it
+(``LABEL_SOURCE_RULE`` in ``trizod.dataset.tiers``, shared with
+``trizod.dataset.deploy_fasta`` so the deploy FASTA agrees chain for chain,
+and published as the ``label_source`` metadata key).
+``tests/test_release_label_consistency.py`` checks a built Parquet against the
+bundle's per-tier files.
+
+Per-residue labels are stored as equal-length list columns aligned 1:1 to the
+sequence; unscored positions are NaN in the score columns and False in the
+explicit boolean ``mask`` (no magic sentinel that could leak into a regression
+loss).
+
+The companion shift table (``--shifts-out``) is a second, flat long Parquet
+holding every assigned chemical shift **on a canonical residue** of every
+released chain — backbone and side chain, 11,839,037 values in release 2026-08
+(``bmrb.get_deposited_shifts``, which drops the 0.139 % of deposited values
+sitting on a non-canonical residue). It joins on ``id`` with the main table,
+ships ``val_ppm`` exactly as deposited, and adds ``val_corrected_ppm`` wherever
+a trustworthy referencing offset transfers (``trizod.shifts.annotate_offsets``);
+that column is NULL, never a copy of the raw value, where none does. Every C,
+CA, CB and N row also carries the far-outlier flag ``mad_z`` / ``is_far_outlier``
+against the frozen median/MAD reference (``trizod.shifts.outliers``).
+
+The main table's physical layout (sort order, row groups) is ``SORT_KEYS`` /
+``ROW_GROUP_SIZE``; ``sort_order_doc`` is its published explanation.
+
+Every column is declared once, in ``COLUMNS`` below, together with the record it
+is read from. ``tests/test_parquet_columns.py`` asserts that declaration against
+the two upstream producers (``trizod.trizod.output_dataset`` and
+``trizod.dataset.composition.detect_bound``), so a column added upstream fails a
+test here instead of silently never reaching the deposit — which is exactly how
+the C1b/C3/C4 annotations came to stop one step short of the Parquet.
+
+Usage:
+    uv run --with pyarrow python scripts/build_parquet_dataset.py \
+        --in-bundle     <path to trizod-dataset-2026-06/> \
+        --out           <path to trizod_dataset.parquet> \
+        [--composition-csv <path to _composition_cache.csv>] \
+        [--shifts-out <path to trizod_shifts.parquet>]
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import logging
+import math
+from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+from trizod import paths
+from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS
+from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
+from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
+from trizod.dataset.tiers import (
+    LABEL_SOURCE_RULE,
+    TIER_ORDER,
+    label_source_tier,
+    strictest_tier,
+)
+from trizod.offsets import (
+    lacs_off_ppm_col,
+    legacy_lacs_off_col,
+    legacy_off_col,
+    off_sigma_col,
+    total_off_ppm_col,
+)
+from trizod.shifts import (
+    annotate_mad,
+    annotate_offsets,
+    chain_offsets,
+    iter_shift_frames,
+    load_mad_reference,
+    write_shift_parquet,
+)
+from trizod.shifts.parquet import import_pyarrow
+
+# Publication order of the per-atom offset columns. Deliberately NOT
+# ``BACKBONE_ATOMS`` (whose order is the internal shift-array column order):
+# these columns are published, so their order is frozen at what v0.3.0 shipped.
+BACKBONE = ["C", "CA", "CB", "H", "HA", "HB", "N"]
+assert set(BACKBONE) == set(BACKBONE_ATOMS)
+# Three offset columns per atom, in three DIFFERENT units -- the names say which:
+# off_<a>_sigma is a multiple of the per-atom POTENCI RMSD, lacs_off_<a>_ppm and
+# total_off_<a>_ppm are ppm. total_off is the one to subtract from a deposited
+# shift; adding the first two together is a unit error worth up to 21.2 ppm.
+OFF_FIELDS = [off_sigma_col(a) for a in BACKBONE]
+LACS_FIELDS = [lacs_off_ppm_col(a) for a in BACKBONE]
+TOTAL_OFF_FIELDS = [total_off_ppm_col(a) for a in BACKBONE]
+
+#: Table-level documentation of the 21 offset columns, mirroring the
+#: ``correction_formula`` key of ``trizod_shifts.parquet``. The main table is
+#: where the offsets actually ship, and it used to document them nowhere at all
+#: while the companion — which carries none of them — explained them
+#: exhaustively. Everything a consumer needs to convert is stated here,
+#: REFINED_WEIGHTS included, so the conversion never has to be looked up.
+OFFSET_COLUMNS_DOC = (
+    "Three referencing-offset columns per backbone atom A in "
+    + "/".join(BACKBONE)
+    + ", in TWO DIFFERENT UNITS. "
+    "off_A_sigma: the POTENCI/AIC residual offset, in multiples of the per-atom "
+    "POTENCI RMSD REFINED_WEIGHTS[A] -- NOT ppm. --max-offset (3/3/2 per tier) "
+    "is compared against this column, which is why it stays in sigma. "
+    "lacs_off_A_ppm: the LACS offset, in ppm; it is subtracted straight off the "
+    "deposited shift. total_off_A_ppm: derived, in ppm, and the ONLY one to "
+    "use downstream -- total_off_A_ppm = lacs_off_A_ppm + off_A_sigma * "
+    "REFINED_WEIGHTS[A], so that corrected_ppm = deposited_ppm - "
+    "total_off_A_ppm reproduces the shift TriZOD scored. ADDING off_A_sigma "
+    "AND lacs_off_A_ppm TOGETHER IS A UNIT ERROR worth up to 21.2 ppm. "
+    "REFINED_WEIGHTS (ppm) = "
+    + ", ".join(f"{a}:{REFINED_WEIGHTS[a]:g}" for a in BACKBONE)
+    + ". A null offset means it was never computed for that atom, or was "
+    "rejected by --max-offset -- never a zero. Per-value corrected shifts, "
+    "including the side-chain transfer policy, are published in "
+    "trizod_shifts.parquet (val_ppm / val_corrected_ppm / offset_applied_ppm / "
+    "offset_source)."
+)
+
+# pyarrow is deliberately NOT a project dependency (nothing in the pipeline or
+# the dataset chain needs it), so it is imported lazily — the column contract
+# below stays importable, and testable, without it.
+COMPOSITION_CACHE_NAME = "_composition_cache.csv"
+
+#: Physical layout of the main table, requested by David Wagemann for his web
+#: viewer, which reads the deposit over HTTP range requests: sorted rows in small
+#: row groups with statistics, so a filter on ``entry_id`` reads one ~400 kB
+#: group instead of the whole file. Explained to consumers by ``sort_order_doc``.
+SORT_KEYS = [("entry_id", "ascending"), ("id", "ascending")]
+ROW_GROUP_SIZE = 500
+
+
+def sort_order_doc(row_group_size: int) -> str:
+    """The ``sort_order`` table metadata: the layout, in the consumer's terms."""
+    keys = ",".join(name for name, _ in SORT_KEYS)
+    first = SORT_KEYS[0][0]
+    return (
+        f"{keys} ascending, in string (byte) order: {first} is a string, so "
+        f"'10001' sorts before '979'. Written in row groups of {row_group_size} "
+        f"rows with min/max statistics on every column, so a filter on {first} "
+        f"touches one row group. id is sorted within each entry but is not "
+        f"globally monotone ('1000_1_1_1' follows '10000_1_1_1'), so filter on "
+        f"{first} when pruning matters."
+    )
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    records = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
+def read_fasta_ids(path: Path) -> set[str]:
+    ids: set[str] = set()
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith(">"):
+                ids.add(line[1:].split()[0])
+    return ids
+
+
+def read_fasta_attrs(path: Path) -> dict[str, dict[str, str]]:
+    """Parse the ``key=value`` tokens a FASTA header carries after the ID.
+
+    ``trizod.dataset.testset`` writes ``>ID label_tier=... pinned_id=...``; a
+    bundle staged before that existed simply has no tokens, which resolves to an
+    empty attribute dict (and therefore a null column), never a made-up value.
+    """
+    attrs: dict[str, dict[str, str]] = {}
+    with open(path) as fh:
+        for line in fh:
+            if not line.startswith(">"):
+                continue
+            tokens = line[1:].split()
+            if not tokens:
+                continue
+            attrs[tokens[0]] = dict(
+                tok.split("=", 1) for tok in tokens[1:] if "=" in tok
+            )
+    return attrs
+
+
+def read_composition_cache(path: Path) -> dict[str, dict[str, str]]:
+    """``entryID -> raw composition row`` from ``_composition_cache.csv``.
+
+    Written by ``trizod dataset build`` from
+    :func:`trizod.dataset.composition.detect_bound`, keyed on the BMRB entry ID
+    (not the chain ID), and covering every parsed entry — including the ones
+    that never reach a tier.
+    """
+    rows: dict[str, dict[str, str]] = {}
+    with open(path, newline="") as fh:
+        for row in csv.DictReader(fh):
+            entry_id = clean_str(row.get("entryID"))
+            if entry_id is not None:
+                rows[entry_id] = row
+    return rows
+
+
+def read_cluster_map(path: Path) -> tuple[set[str], dict[str, str], dict[str, float]]:
+    """Return (member set, member->best_repr, member->member_quality)."""
+    members: set[str] = set()
+    best: dict[str, str] = {}
+    quality: dict[str, float] = {}
+    with open(path) as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            m = row["member"]
+            members.add(m)
+            best[m] = row["best_repr"]
+            try:
+                quality[m] = float(row["member_quality"])
+            except (KeyError, ValueError, TypeError):
+                quality[m] = None
+    return members, best, quality
+
+
+def as_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        f = float(value)
+    except (ValueError, TypeError):
+        return None
+    return f if not math.isnan(f) else None
+
+
+def as_int(value) -> int | None:
+    f = as_float(value)
+    return int(f) if f is not None else None
+
+
+def clean_str(value) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+#: Spellings of "unset" that reach the composition cache as text: NMR-STAR nulls
+#: and pandas nulls stringified by ``to_csv``. Never coerced to a value.
+_NULL_TEXT = frozenset({"", "nan", "none", "<na>", "null", "."})
+
+
+def as_bool(value) -> bool | None:
+    """Truthy text (CSV) or a real bool (JSON) -> bool; unset -> None.
+
+    Deliberately returns None rather than False for anything unrecognised: a
+    silent False here would read downstream as "classified, and negative".
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if s in _NULL_TEXT:
+        return None
+    if s in ("true", "t", "1", "yes", "y"):
+        return True
+    if s in ("false", "f", "0", "no", "n"):
+        return False
+    return None
+
+
+def as_str_list(value) -> list[str] | None:
+    """``"CA;ZN"`` -> ``["CA", "ZN"]``; ``""`` -> ``[]``; unset -> None.
+
+    ``detect_bound`` emits these three fields as ``";".join(sorted(...))``, so
+    splitting on ``;`` recovers exactly what it encoded — a list column beats a
+    delimiter-joined string for consumers, and the round trip is the classifier's
+    own convention rather than a new one invented here. An entry with no ligands
+    is an empty list (a measured absence); an entry with no composition record at
+    all is null (unknown).
+    """
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return []
+    if s.lower() in _NULL_TEXT:
+        return None
+    return [part.strip() for part in s.split(";") if part.strip()]
+
+
+# --------------------------------------------------------------------------- #
+# column contract
+# --------------------------------------------------------------------------- #
+
+#: Arrow type per token. Tokens (not ``pa`` objects) so ``COLUMNS`` can be
+#: imported without pyarrow installed.
+ARROW_TYPES = {
+    "string": lambda pa: pa.string(),
+    "bool": lambda pa: pa.bool_(),
+    "int32": lambda pa: pa.int32(),
+    "float32": lambda pa: pa.float32(),
+    "float64": lambda pa: pa.float64(),
+    "list<bool>": lambda pa: pa.list_(pa.bool_()),
+    "list<int32>": lambda pa: pa.list_(pa.int32()),
+    "list<float32>": lambda pa: pa.list_(pa.float32()),
+    "list<string>": lambda pa: pa.list_(pa.string()),
+}
+
+#: Where a column's value comes from. ``scores`` = one ``scores.json`` record,
+#: ``composition`` = the ``_composition_cache.csv`` row for the chain's entry ID,
+#: ``testset`` = the TriZOD test-set FASTA header, ``derived`` = computed from
+#: the bundle's FASTAs / cluster TSVs / other columns.
+ORIGINS = ("scores", "composition", "testset", "derived")
+
+
+@dataclass(frozen=True)
+class Column:
+    """One Parquet column: its name, its Arrow type, and where its value is read.
+
+    ``convert`` maps the raw value of ``source`` in the ``origin`` record;
+    ``derive`` instead computes the value from the per-row context (and takes
+    precedence). A column may set both ``source`` and ``derive`` — ``source``
+    then only records which upstream key the column consumes, which is what the
+    coverage tests check.
+    """
+
+    name: str
+    arrow: str
+    origin: str = "derived"
+    source: str | None = None
+    convert: Callable | None = None
+    derive: Callable | None = None
+
+    def __post_init__(self):
+        assert self.arrow in ARROW_TYPES, f"unknown arrow type {self.arrow!r}"
+        assert self.origin in ORIGINS, f"unknown origin {self.origin!r}"
+        assert self.derive is not None or self.convert is not None, self.name
+        assert self.derive is not None or self.source is not None, self.name
+
+
+def _scores(name, arrow, source, convert):
+    return Column(name, arrow, origin="scores", source=source, convert=convert)
+
+
+def _composition(name, arrow, convert):
+    # source == name: the cache column is the classifier's own key
+    return Column(name, arrow, origin="composition", source=name, convert=convert)
+
+
+#: THE column contract. Order is the Parquet column order; the first 42 entries
+#: are the published v0.3.0 layout and must not be reordered, renamed or
+#: retyped — new columns are appended.
+COLUMNS: list[Column] = [
+    _scores("id", "string", "ID", clean_str),
+    _scores("entry_id", "string", "entryID", clean_str),
+    _scores("entity_id", "string", "entityID", clean_str),
+    _scores("entity_assem_id", "string", "entity_assemID", clean_str),
+    _scores("st_id", "string", "stID", clean_str),
+    _scores("entity_name", "string", "entity_name", clean_str),
+    Column("sequence", "string", "scores", "seq", derive=lambda c: c["seq"]),
+    Column("length", "int32", derive=lambda c: len(c["seq"])),
+    Column("gscores", "list<float32>", "scores", "gscores", derive=lambda c: c["g"]),
+    Column("zscores", "list<float32>", "scores", "zscores", derive=lambda c: c["z"]),
+    Column("k", "list<int32>", "scores", "k", derive=lambda c: c["k"]),
+    Column("mask", "list<bool>", derive=lambda c: c["mask"]),
+    Column("n_scored", "int32", derive=lambda c: sum(c["mask"])),
+    Column("split", "string", derive=lambda c: c["split"]),
+    Column("train_tier", "string", derive=lambda c: c["train_tier"]),
+    Column("pool_tier", "string", derive=lambda c: c["pool_tier"]),
+    Column("cluster_repr", "string", derive=lambda c: c["cluster_repr"]),
+    Column("quality", "float64", derive=lambda c: c["quality"]),
+    _scores("exp_method", "string", "exp_method", clean_str),
+    _scores("exp_method_subtype", "string", "exp_method_subtype", clean_str),
+    _scores("ph", "float32", "pH", as_float),
+    _scores("temperature", "float32", "temperature", as_float),
+    _scores("ionic_strength", "float32", "ionic_strength", as_float),
+    _scores("total_bbshifts", "int32", "total_bbshifts", as_int),
+    _scores("bbshift_positions_post", "int32", "bbshift_positions_post", as_int),
+    _scores("bbshift_types_post", "int32", "bbshift_types_post", as_int),
+    _scores("citation_title", "string", "citation_title", clean_str),
+    _scores("citation_doi", "string", "citation_DOI", clean_str),
+    *[_scores(f, "float32", f, as_float) for f in OFF_FIELDS],
+    *[_scores(f, "float32", f, as_float) for f in LACS_FIELDS],
+    # float64: total_off is what a consumer subtracts from a deposited ppm shift,
+    # so it must not lose precision relative to the shifts themselves
+    *[_scores(f, "float64", f, as_float) for f in TOTAL_OFF_FIELDS],
+    # --- appended in v0.4.0 --------------------------------------------------
+    # Sample-state annotations (plan §3.1/§3.2). Emitted at every tier and
+    # filtered by none of them except the per-tier physical_state deny list.
+    _scores("physical_state", "string", "physical_state", clean_str),
+    _scores("cosolvent_evidence", "bool", "cosolvent_evidence", as_bool),
+    _scores("sample_state_evidence", "string", "sample_state_evidence", clean_str),
+    _scores("membrane_mimetic", "string", "membrane_mimetic", clean_str),
+    # Composition labels (plan §3.3/§3.4), joined on the BMRB entry ID, so every
+    # chain of an entry carries its entry's composition. ``n_entities`` keeps its
+    # published meaning: distinct ``_Entity`` records, NOT the copy count — a
+    # homodimer is one Entity referenced twice, which is what ``n_copies`` and
+    # ``n_entity_assembly_rows`` describe.
+    _composition("n_entities", "int32", as_int),
+    _composition("has_non_polymer", "bool", as_bool),
+    _composition("has_nucleic", "bool", as_bool),
+    _composition("has_metal", "bool", as_bool),
+    _composition("has_metal_ion", "bool", as_bool),
+    _composition("has_metal_cofactor", "bool", as_bool),
+    _composition("has_water", "bool", as_bool),
+    _composition("has_other_ligand", "bool", as_bool),
+    _composition("metal_comp_ids", "list<string>", as_str_list),
+    _composition("ligand_comp_ids", "list<string>", as_str_list),
+    _composition("ligand_names", "list<string>", as_str_list),
+    _composition("multi_protein_assembly", "bool", as_bool),
+    _composition("n_entity_assembly_rows", "int32", as_int),
+    # NA, never 1, when the classifier errored on the entry: build.py's except
+    # branch writes {"is_bound": True, "error": ...} and nothing else.
+    _composition("n_copies", "int32", as_int),
+    _composition("has_conformational_isomer", "bool", as_bool),
+    _composition("is_bound", "bool", as_bool),
+    # Strictest tier the test chain's sequence still satisfies. Only test_trizod
+    # rows have one; null everywhere else.
+    Column(
+        "label_tier", "string", origin="testset", source="label_tier", convert=clean_str
+    ),
+    # --- appended 2026-10 ----------------------------------------------------
+    # Sample pressure in bar from the scored shift table's own condition list,
+    # like ph/temperature. Annotation only: no tier has a pressure ceiling.
+    _scores("pressure_bar", "float32", "pressure_bar", as_float),
+    # --- appended 2026-11 ----------------------------------------------------
+    # Tier whose scores.json record supplied every "scores" column of the row,
+    # labels and offsets included (LABEL_SOURCE_RULE; audit I-01).
+    Column("label_tier_source", "string", derive=lambda c: c["label_tier_source"]),
+]
+
+#: ``scores.json`` keys carried into the Parquet, derived from ``COLUMNS`` so
+#: the two can never disagree.
+SCORES_JSON_SOURCES = frozenset(c.source for c in COLUMNS if c.origin == "scores")
+#: ``detect_bound()`` keys carried into the Parquet.
+COMPOSITION_SOURCES = frozenset(c.source for c in COLUMNS if c.origin == "composition")
+#: ``scores.json`` keys deliberately NOT carried: ``--include-shifts`` adds one
+#: column per backbone atom holding re-referenced shifts, while the deposit ships
+#: every shift, raw and corrected, in ``trizod_shifts.parquet``. The release is
+#: generated without that flag, so these keys are normally absent entirely.
+SCORES_JSON_NOT_CARRIED = frozenset(BACKBONE + BB_EXTRA_ATOM_IDS)
+
+#: Pre-rename offset keys. A ``scores.json`` staged before the offset columns
+#: were renamed for unit safety spells them ``off_CA`` / ``lacs_off_CA``; those
+#: files must still build, and must produce the same numbers.
+LEGACY_OFFSET_KEYS = frozenset(
+    [legacy_off_col(a) for a in BACKBONE] + [legacy_lacs_off_col(a) for a in BACKBONE]
+)
+
+
+def normalize_offset_keys(record: dict) -> dict:
+    """Return ``record`` with the offset block in the current spelling.
+
+    Reads whichever spelling is present and writes ``off_<a>_sigma`` /
+    ``lacs_off_<a>_ppm`` / ``total_off_<a>_ppm``. The sigma->ppm conversion is
+    never done here: :func:`trizod.shifts.chain_offsets` defers to
+    :func:`trizod.offsets.total_offset_ppm`, the single place it is written.
+    """
+    if not LEGACY_OFFSET_KEYS & set(record):
+        return record
+    offsets = chain_offsets(record)
+    out = {k: v for k, v in record.items() if k not in LEGACY_OFFSET_KEYS}
+    for atom in BACKBONE:
+        out[off_sigma_col(atom)] = offsets.sigma[atom]
+        out[lacs_off_ppm_col(atom)] = offsets.lacs_ppm[atom]
+        out[total_off_ppm_col(atom)] = offsets.total_ppm[atom]
+    return out
+
+
+def load_tier_scores(in_bundle: Path) -> dict[str, dict[str, dict]]:
+    """``tier -> {chain ID: record}`` for all four tiers' ``scores.json``.
+
+    All four are required: falling back to the unfiltered record for a missing
+    tier would silently re-introduce I-01. Every tier must also nest inside the
+    unfiltered superset, which is what the rows are enumerated from.
+    """
+    scores: dict[str, dict[str, dict]] = {}
+    for tier in TIER_ORDER:
+        path = in_bundle / "scores" / tier / "scores.json"
+        if not path.is_file():
+            raise SystemExit(
+                f"missing {path}: every tier's scores.json is needed, because a "
+                f"chain's labels come from the tier that selected it ({tier} "
+                "records are not interchangeable with the unfiltered ones)"
+            )
+        scores[tier] = {
+            rec["ID"]: normalize_offset_keys(rec) for rec in read_jsonl(path)
+        }
+    for tier in TIER_ORDER[1:]:
+        stray = sorted(set(scores[tier]) - set(scores["unfiltered"]))
+        if stray:
+            raise SystemExit(
+                f"{len(stray)} {tier} chains are not in the unfiltered "
+                f"scores.json, which must be the superset: {stray[:10]}"
+            )
+    return scores
+
+
+def read_train_reps(in_bundle: Path) -> dict[str, set[str]]:
+    """``tier -> training-representative IDs`` from ``train_<tier>_best.fasta``."""
+    return {
+        t: read_fasta_ids(in_bundle / "train" / t / f"train_{t}_best.fasta")
+        for t in TIER_ORDER
+    }
+
+
+def label_records(
+    in_bundle: Path, reps: dict[str, set[str]] | None = None
+) -> dict[str, tuple[str, dict]]:
+    """``chain ID -> (label_tier_source, that tier's scores.json record)``.
+
+    One entry per chain of the unfiltered superset, in its file order; the
+    tier follows ``LABEL_SOURCE_RULE``. Both the main table and the shift table
+    read a chain from here, so their labels and offsets are the same record.
+    """
+    scores = load_tier_scores(in_bundle)
+    if reps is None:
+        reps = read_train_reps(in_bundle)
+    out: dict[str, tuple[str, dict]] = {}
+    absent = []
+    for rid in scores["unfiltered"]:
+        tier = label_source_tier(rid, reps, scores)
+        rec = scores[tier].get(rid)
+        if rec is None:
+            absent.append(f"{rid} ({tier})")
+            continue
+        out[rid] = (tier, rec)
+    if absent:
+        raise SystemExit(
+            f"{len(absent)} training representatives are missing from their "
+            f"train_tier's scores.json -- the bundle is inconsistent: {absent[:10]}"
+        )
+    return out
+
+
+def arrow_schema(pa):
+    """The Parquet schema, built from ``COLUMNS`` (needs an imported pyarrow)."""
+    return pa.schema([(c.name, ARROW_TYPES[c.arrow](pa)) for c in COLUMNS])
+
+
+def collect_columns(
+    in_bundle: Path,
+    composition_csv: Path | None = None,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> dict:
+    """Assemble every ``COLUMNS`` entry into a name -> list-of-values dict.
+
+    Pure Python, no pyarrow: the join/null behaviour is the part worth testing,
+    and pyarrow is an optional extra. ``labelled`` is
+    ``label_records(in_bundle)``, when already loaded.
+    """
+    reps = read_train_reps(in_bundle)
+    if labelled is None:
+        labelled = label_records(in_bundle, reps)
+    print(f"loaded {len(labelled)} scored chains (unfiltered = superset)")
+    pool = {}
+    best_repr_map: dict[str, str] = {}
+    quality_map: dict[str, float] = {}
+    for t in TIER_ORDER:
+        members, best, quality = read_cluster_map(
+            in_bundle / "train" / t / "clusters_best.tsv"
+        )
+        pool[t] = members
+        # unfiltered pool covers every pooled chain (pools nest); use it as canonical
+        if t == "unfiltered":
+            best_repr_map, quality_map = best, quality
+
+    test_chezod = read_fasta_ids(in_bundle / "test" / "CheZOD117_test_set.fasta")
+    trizod_test_attrs = read_fasta_attrs(in_bundle / "test" / "TriZOD_test_set.fasta")
+    test_trizod = set(trizod_test_attrs)
+    if not any(a.get("label_tier") for a in trizod_test_attrs.values()):
+        print(
+            "  WARNING: no label_tier= on the TriZOD test FASTA headers "
+            "(bundle staged before trizod/dataset/testset.py emitted it) — "
+            "the label_tier column will be null"
+        )
+
+    composition = {}
+    if composition_csv is not None:
+        composition = read_composition_cache(composition_csv)
+        print(f"loaded composition for {len(composition)} BMRB entries")
+        missing_cols = COMPOSITION_SOURCES - set(next(iter(composition.values()), {}))
+        if missing_cols:
+            print(
+                f"  WARNING: {composition_csv} predates "
+                f"{sorted(missing_cols)} — those columns will be null. "
+                "Re-run `trizod dataset build` to refresh it."
+            )
+    else:
+        print("  WARNING: --skip-composition — every composition column will be null")
+
+    cols: dict[str, list] = {c.name: [] for c in COLUMNS}
+    n_comp_hits = 0
+
+    for rid, (source_tier, rec) in labelled.items():
+        seq = rec["seq"]
+        raw_g = rec.get("gscores") or []
+        raw_z = rec.get("zscores") or []
+        raw_k = rec.get("k") or []
+        mask = [g is not None for g in raw_g]
+
+        train_tier = strictest_tier(rid, reps)
+        pool_tier = strictest_tier(rid, pool)
+        if rid in test_chezod:
+            split = "test_chezod117"
+        elif rid in test_trizod:
+            split = "test_trizod"
+        elif train_tier is not None:
+            split = "train"
+        elif pool_tier is not None:
+            split = "redundant"
+        else:
+            split = "excluded"
+
+        comp_row = composition.get(clean_str(rec.get("entryID")))
+        n_comp_hits += comp_row is not None
+        records = {
+            "scores": rec,
+            "composition": comp_row,
+            "testset": trizod_test_attrs.get(rid),
+        }
+        ctx = {
+            "seq": seq,
+            "g": [float(g) if g is not None else float("nan") for g in raw_g],
+            "z": [float(z) if z is not None else float("nan") for z in raw_z],
+            "k": [int(x) if x is not None else 0 for x in raw_k],
+            "mask": mask,
+            "split": split,
+            "train_tier": train_tier,
+            "pool_tier": pool_tier,
+            "cluster_repr": best_repr_map.get(rid),
+            "quality": quality_map.get(rid),
+            "label_tier_source": source_tier,
+        }
+        for col in COLUMNS:
+            if col.derive is not None:
+                cols[col.name].append(col.derive(ctx))
+                continue
+            # An absent upstream record yields null, never a default: "unknown"
+            # and "measured negative" must stay distinguishable downstream.
+            record = records[col.origin]
+            cols[col.name].append(
+                None if record is None else col.convert(record.get(col.source))
+            )
+
+    print(
+        f"composition joined for {n_comp_hits}/{len(labelled)} chains; "
+        f"label_tier for {sum(x is not None for x in cols['label_tier'])}"
+    )
+    print(
+        "labels by selecting tier (label_tier_source):",
+        dict(Counter(cols["label_tier_source"])),
+    )
+    return cols
+
+
+def build(
+    in_bundle: Path,
+    out_path: Path,
+    composition_csv: Path | None = None,
+    row_group_size: int = ROW_GROUP_SIZE,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> None:
+    cols = collect_columns(in_bundle, composition_csv, labelled)
+
+    pa, pq = import_pyarrow()
+    schema = arrow_schema(pa)
+    table = pa.table({name: cols[name] for name in schema.names}, schema=schema)
+    table = table.sort_by(SORT_KEYS)
+
+    metadata = {
+        b"dataset": b"TriZOD",
+        b"description": b"Per-residue protein-disorder labels from re-referenced BMRB NMR backbone chemical shifts. One row per scored chain; per-residue arrays aligned 1:1 to sequence.",
+        b"tier_order_loose_to_strict": b"unfiltered,tolerant,moderate,strict",
+        b"split_values": b"train,redundant,test_chezod117,test_trizod,excluded",
+        b"mask_semantics": b"mask[i]=true where residue i is scored; gscores/zscores are NaN where mask is false",
+        b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null, and label_tier is null for every non-test_trizod row",
+        b"composition_join": b"composition columns (n_entities .. is_bound) are per BMRB ENTRY, joined on entry_id, from trizod.dataset.composition.detect_bound; n_entities counts distinct _Entity records, so a homodimer is 1 -- see n_copies / n_entity_assembly_rows for stoichiometry",
+        b"composition_list_columns": b"metal_comp_ids, ligand_comp_ids and ligand_names are list<string>; an empty list is a measured absence, null is an unclassified entry",
+        b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
+        b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
+        b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
+        b"label_source": LABEL_SOURCE_RULE.encode(),
+        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted literally from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm); null when not recorded or the unit is missing/unknown; annotation only, never filtered",
+        b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
+        b"sort_order": sort_order_doc(row_group_size).encode(),
+    }
+    table = table.replace_schema_metadata(metadata)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        table,
+        out_path,
+        compression="zstd",
+        compression_level=19,
+        row_group_size=row_group_size,
+        write_statistics=True,
+        sorting_columns=pq.SortingColumn.from_ordering(table.schema, SORT_KEYS),
+    )
+
+    # summary
+    split_counts = Counter(cols["split"])
+    tier_counts = Counter(t for t in cols["train_tier"] if t is not None)
+    n_groups = math.ceil(table.num_rows / row_group_size)
+    print(f"\nwrote {out_path}  ({out_path.stat().st_size / 1e6:.2f} MB)")
+    print(f"rows: {table.num_rows}   columns: {table.num_columns}")
+    sort_keys = ",".join(name for name, _ in SORT_KEYS)
+    print(f"sorted by {sort_keys}; {n_groups} row groups of <= {row_group_size}")
+    print("split counts:", dict(split_counts))
+    print("train_tier counts (strictest):", dict(tier_counts))
+
+
+def build_shifts(
+    in_bundle: Path,
+    out_path: Path,
+    pkl_dir: Path,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+) -> None:
+    """Write the chemical-shift table for the bundle's chains.
+
+    Every assigned shift on a canonical residue of every released chain,
+    backbone and side chain (shifts on non-canonical residues are excluded --
+    see :func:`trizod.bmrb.bmrb.get_deposited_shifts`), with ``val_ppm`` as
+    deposited and ``val_corrected_ppm`` beside it. Each chain's offsets come
+    from the same record as its main-table row (:func:`label_records`, the
+    ``label_tier_source`` tier), so an atom type the tolerant tier masked, and
+    whose offset it therefore nulled, is not corrected here either: its rows
+    get ``offset_source`` ``none`` and a NULL ``val_corrected_ppm``. Every
+    chain of the main table is enumerated, so the two join on ``id`` with no
+    orphans on either side. ``labelled`` is ``label_records(in_bundle)``, when
+    already loaded.
+    """
+    if labelled is None:
+        labelled = label_records(in_bundle)
+    offsets = {rid: chain_offsets(rec) for rid, (_, rec) in labelled.items()}
+    print(f"\nbuilding shift table for {len(offsets)} chains from {pkl_dir} ...")
+    if not pkl_dir.is_dir():
+        raise SystemExit(f"BMRB pickle cache not found: {pkl_dir}")
+    # per-chain rejections (AA mismatch, unparsable Seq_ID) are expected in bulk
+    # and would emit thousands of lines; the summary below counts them instead
+    logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
+    reference = load_mad_reference()
+    missing = reference.missing_groups()
+    if missing:
+        raise SystemExit(
+            f"far-outlier reference {reference.source!r} lacks {len(missing)} "
+            f"residue x atom groups, e.g. {missing[:3]}: their shifts would be "
+            "silently unassessed. Regenerate it with scripts/build_mad_reference.py."
+        )
+    print(f"far-outlier reference: {reference.source}")
+    frames = (
+        (cid, annotate_mad(annotate_offsets(df, offsets.get(cid)), reference))
+        for cid, df in iter_shift_frames(list(offsets), pkl_dir)
+    )
+    path, n_rows = write_shift_parquet(frames, out_path, mad_reference=reference)
+
+    _, pq = import_pyarrow()
+    # Aggregate inside Arrow. `.to_pylist()` on the two string columns would
+    # allocate ~12 M Python str objects each -- ~1 GB of transient heap for four
+    # print lines, in the one function that streams its output precisely so the
+    # whole table is never resident.
+    import pyarrow.compute as pc
+
+    table = pq.read_table(
+        path, columns=["id", "is_backbone", "offset_source", "is_far_outlier"]
+    )
+    n_chains = pc.count_distinct(table.column("id")).as_py()
+    n_bb = pc.sum(table.column("is_backbone")).as_py()
+    flags = table.column("is_far_outlier")
+    n_assessed = len(flags) - flags.null_count
+    n_flagged = pc.sum(flags).as_py() or 0
+    flagged_chains = pc.count_distinct(
+        table.filter(pc.fill_null(flags, False)).column("id")
+    ).as_py()
+    source_counts = {
+        row["values"]: row["counts"]
+        for row in table.column("offset_source").value_counts().to_pylist()
+    }
+    withheld = source_counts.get("not_transferable", 0)
+    print(f"wrote {path}  ({path.stat().st_size / 1e6:.2f} MB)")
+    print(f"rows: {n_rows}   chains: {n_chains} / {len(offsets)}")
+    print(f"  backbone: {n_bb}   side chain: {n_rows - n_bb}")
+    print(f"  corrected: {n_rows - withheld}   raw only (NULL): {withheld}")
+    print("  offset_source:", source_counts)
+    print(
+        f"  far outliers: {n_flagged} of {n_assessed} assessed shifts "
+        f"in {flagged_chains} chains"
+    )
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--in-bundle", type=Path, required=True, help="path to trizod-dataset-2026-06/"
+    )
+    ap.add_argument("--out", type=Path, default=None, help="output .parquet path")
+    ap.add_argument(
+        "--composition-csv",
+        type=Path,
+        default=None,
+        help=(
+            "molecular-composition cache written by `trizod dataset build` "
+            "(default: <work-dir>/final_dataset/" + COMPOSITION_CACHE_NAME + ")"
+        ),
+    )
+    ap.add_argument(
+        "--skip-composition",
+        action="store_true",
+        help="write the composition columns as all-null instead of joining them",
+    )
+    ap.add_argument(
+        "--shifts-out",
+        type=Path,
+        default=None,
+        help="also write the complete chemical-shift table here",
+    )
+    ap.add_argument(
+        "--pkl-dir",
+        type=Path,
+        default=paths.PKL_DIR,
+        help="BMRB pickle cache read by --shifts-out (default: tmp/bmrb_entries)",
+    )
+    args = ap.parse_args()
+    if not args.out and not args.shifts_out:
+        ap.error("nothing to do: pass --out and/or --shifts-out")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    composition_csv = None
+    if args.out:
+        # The composition cache lives in the build work dir, not in the bundle
+        # (package_release.py stages only the published artefacts). Missing it is
+        # an error rather than a silent all-null block: these annotations are the
+        # deliverable, and a Parquet that quietly lacks them looks identical.
+        composition_csv = args.composition_csv
+        if args.skip_composition:
+            composition_csv = None
+        elif composition_csv is None:
+            composition_csv = (
+                resolve_dataset_paths().final_dataset / COMPOSITION_CACHE_NAME
+            )
+        if composition_csv is not None and not composition_csv.is_file():
+            ap.error(
+                f"composition cache not found: {composition_csv}\n"
+                "run `trizod dataset build` first, pass --composition-csv, or "
+                "pass --skip-composition to accept null composition columns"
+            )
+    # the four tiers' scores.json, loaded once for the main and the shift table
+    labelled = label_records(args.in_bundle)
+    if args.out:
+        build(args.in_bundle, args.out, composition_csv, labelled=labelled)
+    if args.shifts_out:
+        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)
+
+
+if __name__ == "__main__":
+    main()

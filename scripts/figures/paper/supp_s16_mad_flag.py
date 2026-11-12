@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Supplementary Fig. S16 -- the MAD far-outlier flag of the shift companion table.
+
+``is_far_outlier = |mad_z| > k`` with ``mad_z = (val_ppm - median) / MAD`` per
+(residue type, atom), rounded to 0.01; MAD is the raw median absolute deviation (NOT
+scaled by 1.4826), and the median/MAD reference table is frozen in the code repository
+(``trizod/shifts/mad_reference.csv``, embedded in the Parquet metadata). k = 8 for C, CA
+and N, 12 for CB. Only the raw ``val_ppm`` of C, CA, CB and N is assessed; the N of
+residue 1 (the free N-terminal amine) is not. Nothing is filtered.
+
+Panels
+  a  |mad_z| per assessed atom (log-log histogram; axis "distance from median, MAD
+     units") with the cut-off ("cut-off 8 MAD", 12 for CB) and the flagged share.
+  b  Flags per residue type (atoms pooled; per-atom counts in S16b_flags_by_residue.csv),
+     with the flag rate (flags per 1,000 assessed shifts of that residue type).
+  c  Flags per 1,000 assessed shifts per cumulative tier (the share of chains with at
+     least one flag is in S16_summary.json).
+  d  Flag rate per atom on chains whose assembly contains a metal (``has_metal``) and on
+     all other chains.
+
+Run:  uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s16_mad_flag.py \
+          --out-dir <draft>/Figures/paper
+Outputs: <out-dir>/S16.pdf and <out-dir>/suppfigs_a_data/S16*_*.csv / S16_summary.json.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
+import style_paper as sp  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
+
+TIERS = sp.TIERS
+DATA_SUBDIR = "suppfigs_a_data"  # under --out-dir
+ATOMS = ["C", "CA", "CB", "N"]
+K = {"C": 8.0, "CA": 8.0, "CB": 12.0, "N": 8.0}
+ATOM_LABEL = {"C": "C′", "CA": "Cα", "CB": "Cβ", "N": "N"}  # backbone atoms, Greek
+C_FLAG = "#333333"  # flagged shifts
+C_KEPT = "#BDBDBD"  # shifts below the threshold
+
+
+def fmt(n) -> str:
+    return f"{int(n):,}"
+
+
+def load():
+    meta = pq.read_schema(sp.PQ_SHIFTS).metadata or {}
+    rule = meta.get(b"far_outlier_rule", b"").decode()
+    t = pq.read_table(
+        sp.PQ_SHIFTS,
+        columns=["id", "comp_id", "atom_id", "mad_z", "is_far_outlier"],
+        filters=[("atom_id", "in", ATOMS)],
+    ).to_pandas()
+    t = t[t.mad_z.notna()].copy()
+    for c in ("id", "comp_id", "atom_id"):
+        t[c] = t[c].astype("category")
+    t["absz"] = t.mad_z.abs()
+    t["flag"] = t.is_far_outlier.astype(bool)
+    main = sp.load_main(["id", "has_metal"])
+    metal = set(main.id[main.has_metal.fillna(False).astype(bool)])
+    t["metal"] = t.id.astype(str).isin(metal)
+    return t, rule, main
+
+
+def main():
+    sp.parse_args(sp.cli(__doc__))
+    DATA_OUT = sp.out_dir(DATA_SUBDIR)
+    t, rule, main_df = load()
+    # the published flag is exactly the documented rule
+    for a in ATOMS:
+        s = t[t.atom_id == a]
+        mism = int(((s.absz > K[a]) != s.flag).sum())
+        assert mism == 0, (a, mism)
+    tids = sp.load_tier_ids()
+    summ: dict = {
+        "assessed": len(t),
+        "flagged": int(t.flag.sum()),
+        "pct_flagged": round(100 * t.flag.mean(), 3),
+        "by_atom": {
+            a: {
+                "assessed": int((t.atom_id == a).sum()),
+                "flagged": int(t.flag[t.atom_id == a].sum()),
+            }
+            for a in ATOMS
+        },
+        "rule": rule,
+    }
+    byres = (
+        t.groupby(["comp_id", "atom_id"], observed=True)
+        .flag.sum()
+        .unstack(fill_value=0)
+    )
+    byres = byres.reindex(columns=ATOMS, fill_value=0)
+    n_res = t.groupby("comp_id", observed=True).size()
+    byres["total"] = byres[ATOMS].sum(axis=1)
+    byres["assessed"] = n_res
+    byres["per_1000"] = 1000 * byres.total / byres.assessed
+    byres = byres.sort_values("total", ascending=False)
+    summ["by_residue"] = byres.astype(float).round(3).to_dict(orient="index")
+    tier = {}
+    for tr in TIERS:
+        s = t[t.id.astype(str).isin(tids[tr])]
+        tier[tr] = {
+            "assessed": len(s),
+            "flagged": int(s.flag.sum()),
+            "per_1000": round(1000 * s.flag.mean(), 3),
+            "chains": len(tids[tr]),
+            "chains_flagged": int(s.loc[s.flag, "id"].astype(str).nunique()),
+        }
+        tier[tr]["pct_chains_flagged"] = round(
+            100 * tier[tr]["chains_flagged"] / tier[tr]["chains"], 2
+        )
+    summ["tiers"] = tier
+    met = {
+        "flags_on_metal": int(t.flag[t.metal].sum()),
+        "pct_flags_on_metal": round(100 * t.flag[t.metal].sum() / t.flag.sum(), 2),
+        "pct_assessed_on_metal": round(100 * t.metal.mean(), 2),
+        "per_1000_metal": {
+            a: round(1000 * t.flag[(t.atom_id == a) & t.metal].mean(), 3) for a in ATOMS
+        },
+        "per_1000_other": {
+            a: round(1000 * t.flag[(t.atom_id == a) & ~t.metal].mean(), 3)
+            for a in ATOMS
+        },
+        "metal_chains": int(main_df.has_metal.fillna(False).sum()),
+    }
+    summ["metal"] = met
+    print(
+        json.dumps(
+            {k: v for k, v in summ.items() if k not in ("by_residue", "rule")}, indent=1
+        )
+    )
+    print(byres)
+
+    # ---------------- figure ----------------------------------------------------------
+    # No colour for atoms: each panel already separates them (a, d) or pools them (b),
+    # so flagged shifts are dark ink and unflagged ones light grey. The counts behind
+    # the old in-panel notes are in S16_summary.json.
+    W, H = sp.W_DOUBLE, 104.0
+    fig = sp.figure(W, H)
+
+    def ax_mm(x, y_top, w, h):
+        return fig.add_axes([x / W, 1 - (y_top + h) / H, w / W, h / H])
+
+    # a: four histograms (shared y axis: tick labels on the first panel only)
+    bins = np.logspace(-1, np.log10(2000), 52)
+    aw, agap = 32.0, 5.5
+    for i, a in enumerate(ATOMS):
+        ax = ax_mm(13 + i * (aw + agap), 7, aw, 26)
+        z = np.clip(t.loc[t.atom_id == a, "absz"].to_numpy(), bins[0], bins[-1] * 0.999)
+        h, _ = np.histogram(z, bins=bins)
+        keep = bins[:-1] < K[a]
+        ax.stairs(np.where(keep, h, 0), bins, fill=True, color=C_KEPT, lw=0)
+        ax.stairs(np.where(~keep, h, 0), bins, fill=True, color=C_FLAG, lw=0)
+        ax.axvline(K[a], color="#222222", lw=0.6, ls=(0, (2, 1.5)))
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(1e-1, 2000)
+        ax.set_ylim(0.7, 3e6)
+        ax.set_xticks([0.1, 1, 10, 100, 1000])
+        ax.set_xticklabels(["≤0.1", "1", "10", "100", "1,000"])
+        ax.minorticks_off()
+        ax.set_yticks([1, 1e2, 1e4, 1e6])
+        ab = summ["by_atom"][a]
+        ax.set_title(
+            ATOM_LABEL[a], fontsize=sp.FS_BODY, fontweight="bold", loc="left", pad=1.5
+        )
+        ax.text(
+            0.98,
+            0.97,
+            f"cut-off {K[a]:g} MAD\n{100 * ab['flagged'] / ab['assessed']:.2f}% flagged",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=sp.FS_SMALL,
+        )
+        ax.set_xlabel("Distance from median\n(MAD units)", linespacing=1.1)
+        if i == 0:
+            ax.set_ylabel("Shifts")
+        else:
+            ax.tick_params(axis="y", labelleft=False)
+    sp.fig_label(fig, "a", 0, 3)
+
+    # b: per residue type (all four atoms pooled)
+    ax = ax_mm(16, 50, 52, 45)
+    res = list(byres.index)
+    ys = np.arange(len(res))[::-1]
+    for y, r in zip(ys, res):
+        n = int(sum(byres.loc[r, a] for a in ATOMS))
+        ax.barh(y, n, height=0.72, color=C_FLAG, lw=0)
+        ax.text(
+            n + 15,
+            y,
+            f"{fmt(n)} ({byres.loc[r, 'per_1000']:.1f})",
+            va="center",
+            ha="left",
+            fontsize=sp.FS_SMALL,
+            color="#333333",
+        )
+    ax.set_yticks(ys)
+    ax.set_yticklabels([r.capitalize() for r in res], fontsize=sp.FS_SMALL)
+    ax.tick_params(axis="y", length=0)
+    ax.set_ylim(-0.6, len(res) - 0.4)
+    ax.set_xlim(0, byres.total.max() * 1.45)
+    ax.set_xticks([0, 500, 1000, 1500])
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}"))
+    ax.set_xlabel("Flagged shifts")
+    sp.fig_label(fig, "b", 0, 46)
+
+    # c: per tier
+    ax = ax_mm(88, 50, 28, 38)
+    x = np.arange(len(TIERS))
+    v = [tier[tr]["per_1000"] for tr in TIERS]
+    ax.bar(x, v, width=0.66, color=[sp.TIER_COLORS[tr] for tr in TIERS], lw=0)
+    for xi, tr in zip(x, TIERS):
+        ax.text(
+            xi,
+            tier[tr]["per_1000"] + 0.03,
+            f"{tier[tr]['per_1000']:.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=sp.FS_SMALL,
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels(TIERS, rotation=35, ha="right", rotation_mode="anchor")
+    ax.set_ylim(0, max(v) * 1.2)
+    ax.set_ylabel("Flags per 1,000 shifts")
+    sp.fig_label(fig, "c", 74, 46)
+
+    # d: metal vs other
+    ax = ax_mm(131, 50, 27, 38)
+    xx = np.arange(len(ATOMS))
+    w = 0.38
+    ax.bar(xx - w / 2, [met["per_1000_metal"][a] for a in ATOMS], width=w, color=C_FLAG,
+           lw=0.7, edgecolor=C_FLAG)  # fmt: skip
+    ax.bar(xx + w / 2, [met["per_1000_other"][a] for a in ATOMS], width=w, color="white",
+           edgecolor=C_FLAG, lw=0.7)  # fmt: skip
+    ax.set_xticks(xx)
+    ax.set_xticklabels([ATOM_LABEL[a] for a in ATOMS])
+    ax.set_ylabel("Flags per 1,000 shifts")
+    ax.legend(
+        handles=[
+            Patch(
+                facecolor=C_FLAG, edgecolor=C_FLAG, lw=0.7, label="metal in assembly"
+            ),
+            Patch(facecolor="white", edgecolor=C_FLAG, lw=0.7, label="other chains"),
+        ],
+        loc="upper left",
+        handlelength=1.0,
+        borderaxespad=0.2,
+    )
+    ymax = max(max(met["per_1000_metal"].values()), max(met["per_1000_other"].values()))
+    ax.set_ylim(0, ymax * 1.45)
+    sp.fig_label(fig, "d", 118, 46)
+
+    out = sp.save(fig, "S16")
+    print("wrote", out)
+    DATA_OUT.mkdir(parents=True, exist_ok=True)
+    byres.to_csv(DATA_OUT / "S16b_flags_by_residue.csv")
+    hist = {
+        a: np.histogram(
+            np.clip(
+                t.loc[t.atom_id == a, "absz"].to_numpy(), bins[0], bins[-1] * 0.999
+            ),
+            bins=bins,
+        )[0].tolist()
+        for a in ATOMS
+    }
+    pd.DataFrame({"bin_lo": bins[:-1], "bin_hi": bins[1:], **hist}).to_csv(
+        DATA_OUT / "S16a_absz_hist.csv", index=False
+    )
+    (DATA_OUT / "S16_summary.json").write_text(
+        json.dumps(summ, indent=1, default=float)
+    )
+    return summ
+
+
+if __name__ == "__main__":
+    main()
