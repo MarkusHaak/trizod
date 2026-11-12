@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fig. 2b (Fig. 2a until 11 Nov 2026) -- same residue, different shift count.
+"""Fig. 3b (Fig. 2b on 11 Nov 2026, Fig. 2a before) -- same residue, different shift count.
 
 For every sequence carried by non-bound chains from at least two BMRB entries,
 draw up to 30 chain pairs (seeded), drop same-entry pairs, and compare each
@@ -17,16 +17,23 @@ recomputes with the same code): same pair sampling (``random.Random(0)`` over
 The two y axes are scaled to the same fraction of each score's own
 ordered-to-disordered difference (median score of ordered- vs disordered-
 consensus residues in the pairs), so a shift of equal visual height is an equal
-share of the label's dynamic range. Ordered residues (the message) are drawn in
-ink, disordered residues (the control) in grey; the per-bin pair counts are in
-the Source Data, not in the artwork.
+share of the label's dynamic range. Ordered residues (the message) are filled
+circles, disordered residues (the control) open squares, both in ink
+(``style_paper.CONTRAST``); the two series are labelled directly in the Z-score
+axes, not in a legend. The per-bin pair counts are in the Source Data, not in the
+artwork.
+
+Story-blueprint redesign (12 Nov 2026): the panel is 106 mm wide (was 100 mm), so
+that Fig. 3a (52 mm, ``fig2c_chezod.py``) and this panel fill the 160 mm text
+width with a 2 mm gap; the shared y title now sits clear of the tick labels.
 
 Run (code worktree root):
-    uv run --extra figures --with pyarrow python scripts/figures/paper/fig2a_kpaired.py \
+    uv run --extra figures --with pyarrow python scripts/figures/paper/fig2a_kpaired.py \\
         --out-dir <draft>/Figures/paper
-Outputs: <out-dir>/fig2b_kpaired.pdf (100 x 52 mm; with Fig. 2c, 58 mm, and a 2 mm gap
-it fills the 160 mm text width at 1:1) and <out-dir>/source_data/fig2b_kpaired.csv;
-prints the plotted numbers. ``fig2c_chezod.py`` imports the row layout from here.
+Outputs: <out-dir>/fig3b_kpaired.pdf (106 x 52 mm, placed at 1:1) and
+<out-dir>/source_data/fig3b_kpaired.csv; prints the plotted numbers.
+``fig2c_chezod.py`` imports the row layout (height, axes top and height, x-label
+baseline) from here, so the two panels of the row align.
 """
 
 from __future__ import annotations
@@ -59,7 +66,7 @@ ORDERED_MAX = 0.3  # replicate-consensus G below this: ordered
 DISORDERED_MIN = 0.7  # replicate-consensus G above this: disordered
 BIN_EDGES = [-0.5, 0.5, 3, 6, 9, 21]
 BIN_LABELS = ["0", "1–3", "4–6", "7–9", "≥10"]
-OUT_NAME = "fig2b_kpaired"  # Fig. 2b (was Fig. 2a, fig2a.pdf, until 11 Nov 2026)
+OUT_NAME = "fig3b_kpaired"  # Fig. 3b (fig2b_kpaired.pdf on 11 Nov, fig2a.pdf before)
 
 
 def residue_pairs(parquet: Path) -> pd.DataFrame:
@@ -139,33 +146,69 @@ def summarise(R: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# Fig. 2 bottom row: b (this file) and c (fig2c_chezod.py) side by side, together the
-# 160 mm text width (W_DOUBLE), placed at 1:1 (b at FIG_W / W_DOUBLE of \textwidth).
-C_W = 58.0  # width of Fig. 2c
-ROW_GAP = 2.0  # between b and c
-FIG_W, FIG_H = sp.W_DOUBLE - C_W - ROW_GAP, 52.0  # 100 x 52 mm
-AX_TOP, AX_H = 6.0, 36.5  # shared by b and c, so the axes of the row align
-AX_W, AX_GAP = 37.0, 11.0  # each score's axes; gap holds the G-score tick labels
+# Fig. 3 top row: a (fig2c_chezod.py) and b (this file) side by side, together the 160 mm
+# text width (W_DOUBLE), placed at 1:1 (a at A_W, b at FIG_W of the 160 mm \textwidth).
+A_W = 52.0  # width of Fig. 3a
+ROW_GAP = 2.0  # between a and b
+FIG_W, FIG_H = sp.W_DOUBLE - A_W - ROW_GAP, 52.0  # 106 x 52 mm
+AX_TOP, AX_H = 6.0, 36.5  # shared by a and b, so the axes of the row align
+XLABEL_Y_MM = 1.4  # x-label baseline above the bottom edge; same in fig2c_chezod.py
+YLABEL_X_MM = (
+    2.2  # left edge of the shared, two-line y title (clear of the tick labels)
+)
+LEFT, RIGHT = 12.0, 1.5  # Z axes start; right margin after the G axes
+AX_GAP = 9.0  # between the Z and G axes: holds the G-score tick labels
+AX_W = (FIG_W - LEFT - RIGHT - AX_GAP) / 2  # 41.75 mm each
 # axes boxes in mm: (left, top, width, height)
 BOX = {
-    "Z": (FIG_W - 1.0 - 2 * AX_W - AX_GAP, AX_TOP, AX_W, AX_H),
-    "G": (FIG_W - 1.0 - AX_W, AX_TOP, AX_W, AX_H),
+    "Z": (LEFT, AX_TOP, AX_W, AX_H),
+    "G": (LEFT + AX_W + AX_GAP, AX_TOP, AX_W, AX_H),
 }
 STYLES = {
-    # ordered: the series that carries the message, in full ink; disordered: the control
-    "ordered": {"color": "#1A1A1A", "marker": "o", "mfc": "#1A1A1A", "dx": -0.11},
-    "disordered": {"color": "#8C8C8C", "marker": "s", "mfc": "white", "dx": 0.11},
+    # ordered: the series that carries the message, filled; disordered: the control, open
+    # squares in the same ink (style_paper.CONTRAST; grey is CheZOD1325)
+    "ordered": {**sp.CONTRAST["focus"], "dx": -0.11},
+    "disordered": {**sp.CONTRAST["control"], "dx": 0.11},
 }
-# Both y axes span the same fraction of each score's gap. LO_FRAC leaves room for the
-# lowest whisker (disordered, dk >= 10, G side: Q1 = -0.165 = -0.215 of the G gap).
-LO_FRAC, HI_FRAC = -0.27, 0.82
-YTICKS = {"Z": [0, 4, 8], "G": [0, 0.3, 0.6]}
-XLABEL_Y_MM = 1.4  # x-label baseline above the bottom edge; same in fig2c_chezod.py
+# Both y axes span the same fraction of each score's gap. LO_FRAC leaves room under the
+# disordered whiskers (lowest: dk 1-3 on the Z side, Q1 = -1.89 = -0.19 of the Z gap) for
+# the direct label "Disordered residues".
+# LO_FRAC -0.41 (was -0.36, 12 Nov 2026 review item 15) brings a negative tick into both
+# axes (Z gap 9.96 -> -4.08; G gap 0.778 -> -0.32), so the lower limit carries a tick and
+# the shared span is visible.
+LO_FRAC, HI_FRAC = -0.41, 0.82
+YTICKS = {"Z": [-4, 0, 4, 8], "G": [-0.3, 0, 0.3, 0.6]}
+MS = 3.6  # marker size (pt)
+
+
+def _label_series(ax, S: pd.DataFrame, x: np.ndarray, gap: float) -> None:
+    """Direct labels in the Z-score axes: one name beside each series, no legend.
+
+    "Ordered residues" sits left of the last ordered point (dk >= 10), above the rising
+    line; "Disordered residues" sits under the flat open-square series, right-aligned to
+    the last bin, below the lowest whisker it spans.
+    """
+    o = S[S.state == "ordered"].set_index("dk_bin").loc[BIN_LABELS]
+    d = S[S.state == "disordered"].set_index("dk_bin").loc[BIN_LABELS]
+    x_end = x[-1] + STYLES["ordered"]["dx"]
+    sp.direct_label(
+        ax, x_end, o.dZ_median.iloc[-1], "Ordered residues", dx_mm=-2.4, ha="right"
+    )
+    # under the disordered whiskers of the last three bins
+    y_low = float(d.dZ_q1.iloc[2:].min())
+    sp.direct_label(
+        ax,
+        x[-1] + STYLES["disordered"]["dx"],
+        y_low,
+        "Disordered residues",
+        dx_mm=1.2,
+        dy_mm=-1.0,
+        ha="right",
+        va="top",
+    )
 
 
 def plot(S: pd.DataFrame, gaps: dict, out_pdf: Path) -> None:
-    from matplotlib.lines import Line2D
-
     fig = sp.figure(FIG_W, FIG_H)
     x = np.arange(len(BIN_LABELS))
     titles = {"Z": "Z-score", "G": "G-score"}
@@ -173,7 +216,7 @@ def plot(S: pd.DataFrame, gaps: dict, out_pdf: Path) -> None:
         left, top, w, h = BOX[unit]
         ax = fig.add_axes([left / FIG_W, 1 - (top + h) / FIG_H, w / FIG_W, h / FIG_H])
         score, gap = f"d{unit}", gaps[unit]
-        ax.axhline(0, color="0.75", lw=0.5, zorder=0)
+        ax.axhline(0, color=sp.CAT["light"], lw=0.5, zorder=0)
         for state, st in STYLES.items():
             s = S[S.state == state].set_index("dk_bin").loc[BIN_LABELS]
             ax.errorbar(
@@ -188,7 +231,7 @@ def plot(S: pd.DataFrame, gaps: dict, out_pdf: Path) -> None:
                 mfc=st["mfc"],
                 mec=st["color"],
                 mew=0.8,
-                ms=3.6,
+                ms=MS,
                 lw=1.0,
                 elinewidth=0.7,
                 capsize=1.6,
@@ -197,37 +240,26 @@ def plot(S: pd.DataFrame, gaps: dict, out_pdf: Path) -> None:
             )
         ax.set_ylim(LO_FRAC * gap, HI_FRAC * gap)
         ax.set_xlim(-0.5, len(BIN_LABELS) - 0.5)
-        ax.set_yticks(YTICKS[unit], [f"{t:g}" for t in YTICKS[unit]])
+        ax.set_yticks(
+            YTICKS[unit], [f"{t:g}".replace("-", "\u2212") for t in YTICKS[unit]]
+        )
         ax.set_xticks(x, BIN_LABELS)
         ax.set_title(titles[unit], loc="left", fontsize=sp.FS_BODY, pad=3)
         if unit == "Z":
-            ax.set_ylabel(
-                "Score difference\n(more \u2212 fewer shifts)", linespacing=1.1
-            )
-            handles = [
-                Line2D(
-                    [],
-                    [],
-                    color=st["color"],
-                    marker=st["marker"],
-                    mfc=st["mfc"],
-                    mec=st["color"],
-                    mew=0.8,
-                    ms=3.6,
-                    lw=1.0,
-                    label=f"{state.capitalize()} residues",
-                )
-                for state, st in STYLES.items()
-            ]
-            ax.legend(
-                handles=handles,
-                loc="upper left",
-                frameon=False,
-                handlelength=1.8,
-                borderaxespad=0.2,
-                fontsize=sp.FS_TICK,
-            )
-    # one x label for both axes, centred under the pair
+            _label_series(ax, S, x, gap)
+    # one y title for both axes, at a fixed distance from the left edge (two lines, so it
+    # stays shorter than the axes); one x title, centred under the pair
+    fig.text(
+        YLABEL_X_MM / FIG_W,
+        1 - (AX_TOP + AX_H / 2) / FIG_H,
+        "Score difference\n(more \u2212 fewer shifts)",
+        rotation=90,
+        ha="left",
+        va="center",
+        ma="center",
+        linespacing=1.15,
+        fontsize=sp.FS_BODY,
+    )
     xc = (BOX["Z"][0] + BOX["G"][0] + BOX["G"][2]) / 2 / FIG_W
     fig.text(
         xc,
@@ -247,7 +279,7 @@ def main() -> None:
     ap.add_argument(
         "--replot",
         action="store_true",
-        help="redraw from source_data/fig2b_kpaired.csv without recomputing the pairs",
+        help="redraw from source_data/fig3b_kpaired.csv without recomputing the pairs",
     )
     args = sp.parse_args(ap)
     if args.replot:

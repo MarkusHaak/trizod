@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
-"""Fig. 3a -- stricter tiers agree better with replicate measurements.
+"""Fig. 4c -- quality tiers trade size for agreement between replicates.
 
-A dot plot with one row per CUMULATIVE tier (a chain belongs to every tier at which it
-is scored) and two measures side by side, both with 95 % intervals from 1,000
-bootstrap resamples of sequences. Only non-bound chains are used, and every chain
-carries its own tier's labels (``scores/<tier>/scores.json``). Definitions are in
-``fig3_replicates.py``:
+Fig. 4c (``fig4c.pdf``, :func:`draw_plane`; the right half of Fig. 3a until 12 Nov 2026): one
+point per CUMULATIVE tier (a chain belongs to every tier at which it is scored) on a size x
+agreement plane. x, the chains scored at the tier (the bundle's per-tier ``scores.json``,
+log axis); y, the residue-level Pearson r of G between two non-bound chains of identical
+sequence from different entries, pooled over residues, with its 95 % interval from 1,000
+bootstrap resamples of sequences. Only non-bound chains are used, every chain carries its own
+tier's labels (``scores/<tier>/scores.json``), <= 20 seeded pairs per sequence and tier, and a
+pair needs >= 10 co-scored residues. Definitions are in ``fig3_replicates.py``.
 
-* left -- leave-one-entry-out deviation. For each non-bound chain whose sequence has
-  non-bound chains in >= 3 BMRB entries: mean |G - consensus| over residues, where the
-  consensus is the per-residue median of the replicates from the OTHER entries; the
-  median over chains is plotted.
-* right -- residue-level Pearson r of G between two non-bound chains of identical
-  sequence from different entries, pooled over residues; <= 20 seeded pairs per
-  sequence and tier.
-
-The x scales are shared with Fig. 3b (``fig3b_conditions.py``: ``XLIM_DEV``,
-``XLIM_R``), so the tier effect and the condition effect can be compared by eye. The
-statistics the panel no longer draws (the k strata, the share of chains deviating by
-> 0.1, the flip rate, r re-weighted to the unfiltered G distribution, the training
-set sizes) are still written to ``fig3_data`` and ``fig3a_numbers.json``; Supplementary
-Fig. S7 shows the k strata.
+The leave-one-entry-out deviation (the left half of the old Fig. 3a) moves to Supplementary
+Fig. 7a; :func:`draw` (the old two-measure dot plot) is kept for reuse and is no longer
+written. The statistics the panel does not draw (the deviation and its k strata, the share of
+chains deviating by > 0.1, the flip rate, r re-weighted to the unfiltered G distribution, the
+training set sizes) are still written to ``fig3_data`` and ``fig3a_numbers.json``.
+``supp_s7_replicates.py`` imports ``XLABEL_DEV`` and ``XLABEL_R`` from this module.
 
 Run (code worktree root):
-    uv run --extra figures --with pyarrow python scripts/figures/paper/fig3a_reliability.py \
+    uv run --extra figures --with pyarrow python scripts/figures/paper/fig3a_reliability.py \\
         --out-dir <draft>/Figures/paper
-Outputs: <out-dir>/fig3a.pdf; <out-dir>/fig3_data/fig3a_*.csv and fig3a_numbers.json.
+Outputs: <out-dir>/fig4c.pdf (78 x 55 mm, placed at 1:1); <out-dir>/source_data/fig4c.csv;
+<out-dir>/fig3_data/fig3a_*.csv and fig3a_numbers.json.
 """
 
 from __future__ import annotations
@@ -34,6 +30,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -138,8 +135,69 @@ def draw(S: pd.DataFrame, R: pd.DataFrame):
     return fig
 
 
+# --- Fig. 4c: size x agreement plane ------------------------------------------------
+W_C, H_C = sp.W_SINGLE, 55.0  # mm, one cell of the 2 x 2 Fig. 4 grid
+AX_C = (13.0, 9.5, 61.0, 41.5)  # x0, y0, w, h (mm); y0 shared with Fig. 4a, d
+XLIM_C = (3000, 25000)
+XT_C = [5000, 10000, 20000]
+YLIM_C, YT_C = (0.6, 1.0), [0.6, 0.7, 0.8, 0.9, 1.0]
+MS_C = 5.5
+# direct labels: (dx_mm, dy_mm, ha, va) per tier, beside the point, clear of the CI bar
+LABEL_AT = {
+    "unfiltered": (-1.6, -1.2, "right", "top"),
+    "tolerant": (1.4, 0.0, "left", "center"),
+    "moderate": (-2.0, 0.0, "right", "center"),
+    "strict": (1.4, 0.0, "left", "center"),
+}
+
+
+def tier_sizes(D) -> dict:
+    """Chains scored at each cumulative tier (the bundle's per-tier scores.json)."""
+    return {t: len(D.tier_ids[t]) for t in sp.TIERS}
+
+
+def draw_plane(R: pd.DataFrame, sizes: dict):
+    """Fig. 4c: chains per tier (log x) against replicate r with its 95 % CI (y)."""
+    from matplotlib import ticker as mticker
+
+    fig = sp.figure(W_C, H_C)
+    x0, y0, w, h = AX_C
+    ax = fig.add_axes([x0 / W_C, y0 / H_C, w / W_C, h / H_C])
+    R = R.set_index("tier").loc[sp.TIERS]
+    xs = np.array([sizes[t] for t in sp.TIERS], float)
+    ax.plot(xs, R["r"].to_numpy(), color=sp.CAT["light"], lw=0.8, zorder=1)
+    for t, x in zip(sp.TIERS, xs):
+        r = R.loc[t]
+        ax.plot([x, x], [r.r_lo, r.r_hi], color=CI_COLOR, lw=0.8, solid_capstyle="butt", zorder=2)  # fmt: skip
+        ax.plot(x, r.r, ls="", marker=sp.TIER_MARKERS[t], ms=MS_C, mfc=sp.TIER_COLORS[t],
+                mec=EDGE, mew=0.5, zorder=3)  # fmt: skip
+        dx, dy, ha, va = LABEL_AT[t]
+        sp.direct_label(ax, x, r.r, t, dx_mm=dx, dy_mm=dy, ha=ha, va=va)  # lower case
+    ax.set_xscale("log")
+    ax.set_xlim(*XLIM_C)
+    ax.xaxis.set_major_locator(mticker.FixedLocator(XT_C))
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+    ax.xaxis.set_minor_locator(mticker.NullLocator())
+    ax.set_ylim(*YLIM_C)
+    ax.set_yticks(YT_C)
+    ax.set_yticklabels([f"{v:g}" for v in YT_C])
+    # no grid: the dots carry their own CIs (figure review item 15)
+    ax.set_xlabel("Chains in the tier (log scale)")
+    ax.set_ylabel("Agreement between replicates, $\\mathit{r}$")
+    sp.fig_label(fig, "c", 0.0, 0.0)
+    return fig
+
+
 def main(argv=None) -> None:
     sp.parse_args(sp.cli(__doc__), argv)
+    # italic r in the text face (set here, not at import: supp_s7_replicates imports this module)
+    sp.plt.rcParams.update(
+        {
+            "mathtext.fontset": "custom",
+            "mathtext.it": "Arial:italic",
+            "mathtext.rm": "Arial",
+        }
+    )
     reps = n_reps()
     D, L, S, P, R = compute()
     out = sp.out_dir("fig3_data")
@@ -148,8 +206,23 @@ def main(argv=None) -> None:
     S.to_csv(out / "fig3a1_loo_summary.csv", index=False)
     P.drop(columns=["hist"]).to_csv(out / "fig3a2_pairs.csv", index=False)
     R.to_csv(out / "fig3a2_r_summary.csv", index=False)
-    fig = draw(S, R.copy())
-    pdf = sp.save(fig, "fig3a")
+    sizes = tier_sizes(D)
+    src = sp.out_dir("source_data")
+    src.mkdir(parents=True, exist_ok=True)
+    R.assign(chains_in_tier=R["tier"].map(sizes), sqrt_r=np.sqrt(R["r"]))[
+        [
+            "tier",
+            "chains_in_tier",
+            "n_pairs",
+            "n_sequences",
+            "r",
+            "r_lo",
+            "r_hi",
+            "sqrt_r",
+            "r_gmatched",
+        ]
+    ].to_csv(src / "fig4c.csv", index=False, float_format="%.4f")
+    pdf = sp.save(draw_plane(R.copy(), sizes), "fig4c")
 
     s_all = S[S.kbin == "all"].set_index("tier")
     Ri = R.set_index("tier")
@@ -168,6 +241,7 @@ def main(argv=None) -> None:
             "the flip rate, r_gmatched and training_reps are data only",
         },
         "training_reps": reps,
+        "chains_in_tier": sizes,
         "tolerant_label_chains_differing_from_unfiltered": fr.label_differences(D)[
             "tolerant"
         ],

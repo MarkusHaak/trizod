@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Fig. 3c and 3d -- the held-out sets against training: similarity (c) and disorder (d).
+"""Fig. 5a and 5b -- the held-out sets against training: similarity (a) and disorder (b).
 
-c. For each held-out chain (TriZOD test + CheZOD117), its closest training
+(The file keeps its old name until the scripts are renumbered at layout freeze; it made
+Fig. 3c and 3d of the 11 Nov draft.)
+
+a. For each held-out chain (TriZOD test + CheZOD117), its closest training
 representative: identity against alignment coverage. The search is the build's own
 stage-2 leakage search (``trizod.dataset.mmseqs.leakage_search_options``: training
 chains as query, the held-out chains as target database, ``--alignment-mode 3
@@ -21,18 +24,22 @@ and the shaded region is what the rule removes from training: identity >= 30 % o
 test-chain coverage. Each held-out chain is drawn at one alignment: an in-region one if
 any exists (none should, for a build that passed its gate), otherwise the one with the
 largest identity x coverage. Chains without any reported alignment are not drawn; the
-key gives drawn and total chains per set. Counts by tier and rule are written to
-``fig3c_numbers.json``.
+key ("Shown:") gives drawn and total chains per set. Counts by tier and rule are written
+to ``fig5ab_numbers.json``.
 
-d. Share of chains by disorder class -- the share of a chain's scored residues with
+b. Share of chains by disorder class -- the share of a chain's scored residues with
 G > 0.65 is <= 10 %, 10-90 % or >= 90 % (the key gives the classes; "mostly disordered"
 is avoided because the text uses it for > 50 %) --
-for CheZOD117, the TriZOD test set and the training representatives of every tier, each
-with its own tier's labels (``scores/<tier>/scores.json``; the test sets use the
-unfiltered labels, as released).
+for the TriZOD test set, CheZOD117 and the training representatives of every tier, each
+with its own tier's labels (``scores/<tier>/scores.json``). The test sets use their
+released Parquet labels: the unfiltered labels, except for the CheZOD117 chains whose
+release label is the tolerant one (\nTolerantLabelDiffTestCheZOD); these are also the
+labels Fig. 5c evaluates.
 
-Colours: blue = TriZOD test, orange = CheZOD117 (Okabe-Ito roles of ``style_paper``);
-the excluded region and the disorder classes are neutral greys.
+Encodings (``style_paper`` entities): TriZOD test = blue circles, CheZOD117 = vermillion
+triangles (row markers in b too); training tiers = the tier ramp and tier markers (b and
+c); the excluded region = removed (light grey hatching, dashed bounds); the disorder
+classes are an ordinal grey ramp.
 
 ``MMSEQS_ARGS`` is the search of the earlier version of this panel (held-out chains as
 query against each tier's representatives); the panel no longer uses it, but
@@ -42,9 +49,9 @@ near-redundant-representative macros, so it stays unchanged.
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig3c_split.py \
         --out-dir <draft>/Figures/paper [--work-dir <scratch>/fig3]
-Outputs: <out-dir>/fig3c.pdf and fig3d.pdf (each W_SINGLE wide, set side by side in
-Fig. 3); <out-dir>/fig3_data/fig3c_points.csv, fig3d_disorder_classes.csv and
-fig3c_numbers.json. The mmseqs hits are cached in ``--work-dir``
+Outputs: <out-dir>/fig5a_split.pdf and fig5b_disorder.pdf (each W_SINGLE x 58 mm, set
+side by side at 1:1 in Fig. 5, sections/fig5.tex); <out-dir>/fig5_data/fig5a_points.csv,
+fig5b_disorder_classes.csv and fig5ab_numbers.json. The mmseqs hits are cached in ``--work-dir``
 (default ``fig3c_split`` in the cache directory), keyed by the inputs and options.
 """
 
@@ -60,6 +67,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import style_paper as sp  # noqa: E402
@@ -78,11 +86,15 @@ TEST_FASTAS = {
     "test_trizod": sp.BUNDLE / "test" / "TriZOD_test_set.fasta",
     "test_chezod117": sp.BUNDLE / "test" / "CheZOD117_test_set.fasta",
 }
+# marker areas 30 % smaller than on 11 Nov (figure review item 11: about 250 points
+# overplot at 30-45 % identity and 70-80 % coverage); drawn with alpha 0.8
 SET_STYLE = {  # label, colour, marker, marker area (pt^2)
-    "test_trizod": ("TriZOD test", sp.CAT["test"], "o", 9.0),
-    "test_chezod117": ("CheZOD117", sp.CAT["chezod"], "^", 11.0),
+    "test_trizod": ("TriZOD test", sp.CAT["test"], "o", 6.3),
+    "test_chezod117": ("CheZOD117", sp.CAT["chezod117"], "^", 7.7),
 }
-REGION_FILL = "#EBEBEB"
+SCATTER_ALPHA = 0.8
+# the excluded region is a removed item: light grey hatching (style_paper.ENTITY)
+REGION_FILL = sp.patch_kw("removed")
 REGION_LINE = "#7F7F7F"
 CLASS_COLORS = ["#DADADA", "#969696", "#3B3B3B"]  # ordered -> disordered
 # share of a chain's scored residues with G > G_DIS
@@ -210,9 +222,13 @@ def disorder_strip(test_ids: dict, reps: dict):
         a = a[np.isfinite(a)]
         return float(100 * (a > sp.G_DIS).mean())
 
-    sets = [
-        ("CheZOD117", [g_unf[i] for i in test_ids["test_chezod117"]], sp.CAT["chezod"]),
+    sets = [  # the order of the rows in Fig. 5b
         ("TriZOD test", [g_unf[i] for i in test_ids["test_trizod"]], sp.CAT["test"]),
+        (
+            "CheZOD117",
+            [g_unf[i] for i in test_ids["test_chezod117"]],
+            sp.CAT["chezod117"],
+        ),
     ]
     for t in sp.TIERS:
         sets.append(
@@ -239,105 +255,130 @@ def disorder_strip(test_ids: dict, reps: dict):
     return strip
 
 
-# c and d are half-width cells (W_SINGLE) set side by side in Fig. 3 at 1:1, below a and b
-H_CD = 50.0  # mm, height of both
-AX_Y0_CD, AX_H_CD = 9.5, 34.0  # bottom and height of both axes, mm
-Y_LIM_C = (17.5, 102.0)  # identity (%): no marker on an axis
-X_LIM_C = (-2.0, 102.0)  # coverage (%)
+# Fig. 5a and 5b are half-width cells (W_SINGLE) set side by side at 1:1, above Fig. 5c
+# (supp_s10_baselines.draw_main). Both share the axes' bottom and top, so they align.
+H_AB = 58.0  # mm, height of both
+AX_Y0_AB, AX_H_AB = 9.5, 40.5  # bottom and height of both axes, mm
+Y_LIM_A = (17.5, 102.0)  # identity (%): no marker on an axis
+X_LIM_A = (-2.0, 102.0)  # coverage (%)
+EDGE = "white"  # thin white edge separates overlapping markers
+MARK_X, LABEL_X = 1.8, 3.6  # Fig. 5b row labels: marker centre and text start, mm
 
 
-def draw_c(P: pd.DataFrame, rule: str):
-    """Fig. 3c: each held-out chain against its closest training representative."""
+def draw_a(P: pd.DataFrame, rule: str):
+    """Fig. 5a: each held-out chain against its closest training representative."""
     import matplotlib.patches as mpatches
-    from matplotlib.lines import Line2D
 
-    W, H = sp.W_SINGLE, H_CD
+    W, H = sp.W_SINGLE, H_AB
     fig = sp.figure(W, H)
-    ax = fig.add_axes([13.0 / W, AX_Y0_CD / H, 62.0 / W, AX_H_CD / H])
-    hi = Y_LIM_C[1]
+    ax = fig.add_axes([13.0 / W, AX_Y0_AB / H, 63.0 / W, AX_H_AB / H])
+    hi = Y_LIM_A[1]
     x0, y0 = 100 * COV_MIN, 100 * ID_MIN
-    ax.add_patch(mpatches.Rectangle((x0, y0), X_LIM_C[1] - x0, hi - y0,
-                                    facecolor=REGION_FILL, lw=0, zorder=0))  # fmt: skip
+    ax.add_patch(mpatches.Rectangle((x0, y0), X_LIM_A[1] - x0, hi - y0,
+                                    **REGION_FILL, zorder=0))  # fmt: skip
     ax.plot(
-        [x0, x0, X_LIM_C[1]], [hi, y0, y0], color=REGION_LINE, lw=0.7, ls="--", zorder=1
+        [x0, x0, X_LIM_A[1]], [hi, y0, y0], **sp.line_kw("removed", lw=0.7), zorder=1
     )
-    ax.text((x0 + X_LIM_C[1]) / 2, (y0 + hi) / 2 + 4, "Excluded", ha="center", va="center",
-            color=sp.CAT["neutral"], fontsize=sp.FS_TICK)  # fmt: skip
+    ax.text((x0 + X_LIM_A[1]) / 2, (y0 + hi) / 2, "Removed\nfrom\ntraining", ha="center",
+            va="center", color=sp.INK_SOFT, fontsize=sp.FS_BODY, linespacing=1.1,
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.6})  # fmt: skip
     pts = P[P.has_hit]
-    handles = []
     for s in ("test_trizod", "test_chezod117"):
         lab, col, marker, size = SET_STYLE[s]
         sub = pts[pts.set == s]
         ax.scatter(100 * sub.xcov, 100 * sub.ident, s=size, marker=marker, facecolor=col,
-                   edgecolor="white", linewidths=0.25, alpha=0.9, zorder=3)  # fmt: skip
-        n_all = int((P.set == s).sum())
-        handles.append(
-            Line2D([], [], ls="", marker=marker, ms=3.6, mfc=col, mec="white", mew=0.25,
-                   label=f"{lab} ({len(sub):,} of {n_all:,})")
-        )  # fmt: skip
-    ax.set_xlim(*X_LIM_C)
-    ax.set_ylim(*Y_LIM_C)
+                   edgecolor=EDGE, linewidths=0.3, alpha=SCATTER_ALPHA, zorder=3)  # fmt: skip
+    ax.set_xlim(*X_LIM_A)
+    ax.set_ylim(*Y_LIM_A)
     ax.set_xticks([0, 20, 40, 60, 80, 100])
     ax.set_yticks([20, 40, 60, 80, 100])
     ax.set_xlabel("Coverage of the better-covered chain (%)" if rule == "either"
                   else "Coverage of the held-out chain (%)")  # fmt: skip
-    ax.set_ylabel("Identity to closest\ntraining chain (%)")
-    fig.legend(handles=handles, loc="lower left", bbox_to_anchor=(13.0 / W, (AX_Y0_CD + AX_H_CD + 1.0) / H),
-               ncol=2, handletextpad=0.1, columnspacing=1.0, borderaxespad=0.0)  # fmt: skip
-    sp.fig_label(fig, "c", 0.0, 0.0)
+    ax.set_ylabel("Identity to the closest\ntraining representative (%)")
+    # key above the axes: marker, set, chains drawn of all chains
+    y_key = (AX_Y0_AB + AX_H_AB + 2.6) / H
+    t = fig.text(5.0 / W, y_key, "Shown:", ha="left", va="center", fontsize=sp.FS_BODY)
+    fig.canvas.draw()
+    xk = t.get_window_extent(fig.canvas.get_renderer()).x1 / fig.dpi / sp.MM + 1.6
+    for s in ("test_trizod", "test_chezod117"):
+        lab, col, marker, size = SET_STYLE[s]
+        n_all = int((P.set == s).sum())
+        n_drawn = int(((P.set == s) & P.has_hit).sum())
+        fig.add_artist(Line2D([(xk + 1.0) / W], [y_key], transform=fig.transFigure,
+                              **sp.marker_kw("test" if s == "test_trizod" else "chezod117",
+                                             ms=3.6)))  # fmt: skip
+        t = fig.text((xk + 2.4) / W, y_key, f"{lab} ({n_drawn} of {n_all})", ha="left",
+                     va="center", fontsize=sp.FS_BODY)  # fmt: skip
+        fig.canvas.draw()
+        bb = t.get_window_extent(fig.canvas.get_renderer())
+        xk = bb.x1 / fig.dpi / sp.MM + 3.5
+    sp.fig_label(fig, "a", 0.0, 0.0)
     return fig
 
 
-def draw_d(strip: list):
-    """Fig. 3d: chains of each set by their share of disordered residues."""
+def draw_b(strip: list):
+    """Fig. 5b: chains of each set by their share of disordered residues."""
     import matplotlib.patches as mpatches
-    from matplotlib.lines import Line2D
 
-    W, H = sp.W_SINGLE, H_CD
+    W, H = sp.W_SINGLE, H_AB
     fig = sp.figure(W, H)
-    ys = [0.0, 1.0, 2.4, 3.4, 4.4, 5.4]
-    ax = fig.add_axes([30.0 / W, AX_Y0_CD / H, 45.0 / W, AX_H_CD / H])
+    ys = [0.0, 1.0, 2.5, 3.5, 4.5, 5.5]
+    ax_x0, ax_w = 29.0, 46.0
+    ax = fig.add_axes([ax_x0 / W, AX_Y0_AB / H, ax_w / W, AX_H_AB / H])
     for y, s in zip(ys, strip):
         left = 0.0
         for c, (v, cc) in enumerate(zip(s["shares"], CLASS_COLORS)):
             ax.barh(y, v, left=left, color=cc, height=0.66, edgecolor="white", lw=0.5)
             if v >= 0.09:
                 ax.text(left + v / 2, y, f"{100 * v:.0f}", ha="center", va="center",
-                        fontsize=sp.FS_TICK, color="black" if c == 0 else "white")  # fmt: skip
+                        fontsize=sp.FS_BODY, color="black" if c == 0 else "white")  # fmt: skip
             left += v
-    labels = [f"{s['set'].replace('Training, ', '')} ({s['n']:,})" for s in strip]
     ax.set_yticks(ys)
-    ax.set_yticklabels(labels, fontsize=sp.FS_BODY)
+    ax.set_yticklabels([""] * len(ys))
     ax.set_ylim(ys[-1] + 0.55, -0.55)
     ax.set_xlim(0, 1)
-    ax.set_xticks([0, 0.5, 1.0])
-    ax.set_xticklabels(["0", "50", "100"])
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_xticklabels(["0", "25", "50", "75", "100"])
     ax.spines["left"].set_visible(False)
     ax.tick_params(axis="y", length=0)
     ax.set_xlabel("Chains (%)")
-    # group label for the four training rows, left of their tick labels
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    inv = fig.transFigure.inverted()
-    x_left = min(t.get_window_extent(renderer).x0 for t in ax.get_yticklabels()[2:])
-    x_fig = inv.transform((x_left, 0))[0] - 1.2 / W
-    f0, f1 = (inv.transform(ax.transData.transform((0, y)))[1]
-              for y in (ys[2] - 0.33, ys[-1] + 0.33))  # fmt: skip
-    fig.add_artist(Line2D([x_fig, x_fig], [f0, f1], color=sp.CAT["neutral"], lw=0.6))
-    fig.text(x_fig - 0.8 / W, (f0 + f1) / 2, "Training", rotation=90, ha="right",
+    # row labels: set marker (test sets) or tier marker (training), then the name and n
+    span = ys[-1] + 1.1
+    to_fig_y = lambda y: (AX_Y0_AB + AX_H_AB * (ys[-1] + 0.55 - y) / span) / H  # noqa: E731
+    keys = ["test", "chezod117"]
+    for k, (y, s) in enumerate(zip(ys, strip)):
+        fy = to_fig_y(y)
+        name = s["set"].replace("Training, ", "")
+        fig.text(LABEL_X / W, fy, f"{name} ({s['n']:,})", ha="left", va="center",
+                 fontsize=sp.FS_BODY)  # fmt: skip
+        if k < 2:
+            mk = sp.marker_kw(keys[k], ms=3.6)
+        else:
+            # tier rows: a square swatch in the tier colour, not the tier marker, so that in
+            # Fig. 5 circles and triangles mean only the two test sets (figure review item 5)
+            mk = {"ls": "", "marker": "s", "color": sp.TIER_COLORS[name],
+                  "mfc": sp.TIER_COLORS[name], "mec": sp.TIER_COLORS[name], "ms": 3.4}  # fmt: skip
+        fig.add_artist(Line2D([MARK_X / W], [fy], transform=fig.transFigure, **mk))
+    # header above the four training rows
+    fig.text(0.6 / W, to_fig_y((ys[1] + ys[2]) / 2 + 0.08), "Training tier", ha="left",
              va="center", fontsize=sp.FS_BODY)  # fmt: skip
-    # class key above the axes, right-aligned with it, preceded by its title
-    h_c = [mpatches.Patch(facecolor=c, edgecolor="none", label=lab)
-           for c, lab in zip(CLASS_COLORS, CLASS_LABELS)]  # fmt: skip
-    leg = fig.legend(handles=h_c, loc="lower right", bbox_to_anchor=(75.0 / W, (AX_Y0_CD + AX_H_CD + 1.0) / H),
-                     ncol=3, handlelength=1.0, handletextpad=0.35, columnspacing=0.9,
-                     borderaxespad=0.0)  # fmt: skip
+    # class key above the axes, one row, preceded by its title
+    y_key = (AX_Y0_AB + AX_H_AB + 2.6) / H
+    t = fig.text(5.0 / W, y_key, f"Residues with G > {sp.G_DIS}:", ha="left", va="center",
+                 fontsize=sp.FS_BODY)  # fmt: skip
     fig.canvas.draw()
-    x0 = inv.transform(leg.get_window_extent(renderer).p0)[0]
-    y_mid = inv.transform(leg.get_texts()[0].get_window_extent(renderer).p0)[1]
-    fig.text(x0 - 0.8 / W, y_mid, f"Residues with G > {sp.G_DIS}:", ha="right", va="bottom",
-             fontsize=sp.FS_TICK)  # fmt: skip
-    sp.fig_label(fig, "d", 0.0, 0.0)
+    rnd = fig.canvas.get_renderer()
+    xk = t.get_window_extent(rnd).x1 / fig.dpi / sp.MM + 2.0
+    for c, lab in zip(CLASS_COLORS, CLASS_LABELS):
+        fig.add_artist(mpatches.Rectangle((xk / W, y_key - 1.0 / H), 2.6 / W, 2.0 / H,
+                                          transform=fig.transFigure, facecolor=c,
+                                          edgecolor="none"))  # fmt: skip
+        t = fig.text(
+            (xk + 3.3) / W, y_key, lab, ha="left", va="center", fontsize=sp.FS_BODY
+        )
+        fig.canvas.draw()
+        xk = t.get_window_extent(rnd).x1 / fig.dpi / sp.MM + 2.4
+    sp.fig_label(fig, "b", 0.0, 0.0)
     return fig
 
 
@@ -371,8 +412,8 @@ def main(argv=None) -> None:
         )
     strip = disorder_strip(test_ids, reps)
 
-    pdf = sp.save(draw_c(P, rule), "fig3c")
-    pdf_d = sp.save(draw_d(strip), "fig3d")
+    pdf = sp.save(draw_a(P, rule), "fig5a_split")
+    pdf_d = sp.save(draw_b(strip), "fig5b_disorder")
 
     plotted = {
         s: {
@@ -412,7 +453,7 @@ def main(argv=None) -> None:
         "counts_by_tier": counts,
         "plotted_points": plotted,
         "median_identity_of_plotted_alignment": float(P[P.has_hit].ident.median()),
-        "d_disorder_class_pct": {
+        "b_disorder_class_pct": {
             s["set"]: {
                 "n": s["n"],
                 **dict(
@@ -427,20 +468,21 @@ def main(argv=None) -> None:
             for s in strip
         },
     }
-    data_dir = sp.out_dir("fig3_data")
+    data_dir = sp.out_dir("fig5_data")
     data_dir.mkdir(parents=True, exist_ok=True)
-    P.to_csv(data_dir / "fig3c_points.csv", index=False)
+    P.to_csv(data_dir / "fig5a_points.csv", index=False)
     pd.DataFrame(
         [
             {
                 "set": s["set"],
                 "n": s["n"],
                 **dict(zip(["le10", "10to90", "ge90"], s["shares"])),
+                "pct_residues_G_gt_065": s["pct_residues_G_gt_065"],
             }
             for s in strip
         ]
-    ).to_csv(data_dir / "fig3d_disorder_classes.csv", index=False)
-    (data_dir / "fig3c_numbers.json").write_text(json.dumps(out, indent=1))
+    ).to_csv(data_dir / "fig5b_disorder_classes.csv", index=False)
+    (data_dir / "fig5ab_numbers.json").write_text(json.dumps(out, indent=1))
     print(json.dumps(out, indent=1))
     print(f"wrote {pdf} and {pdf_d}", file=sys.stderr)
 

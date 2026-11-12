@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Supplementary Fig. S8 -- replicate groups beyond ubiquitin: case clusters and a seeded gallery.
+"""Supplementary Fig. S8 -- ubiquitin with its non-native chains, two case clusters and a seeded gallery.
 
-a-c  The case-study clusters of ubiquitin (seed chain 50330_1_1_1), the prion protein
-     (16616_1_1_1) and alpha-synuclein (6968_1_1_1). Members are the chains that the
+a    The ubiquitin chains of Fig. 3c (``fig1a_ubiquitin.load_ubiquitin``: every non-bound
+     chain with the exact 76-residue sequence), now WITH the chains that Fig. 3c leaves
+     out (since 12 Nov 2026, story blueprint 6.4 and 6.7): native chains coloured by
+     their median k as in Fig. 3c, the perturbed ones (denaturant or alcohol, >= 400 bar,
+     non-native deposited state; ``fig1a_ubiquitin.NATIVE_RULE``, read from the raw
+     NMR-STAR files) light grey, with their condition written beside them. Until 12 Nov
+     2026 panel a was the ubiquitin case cluster (seed 50330_1_1_1, the ``\\nCaseUbq*``
+     macros); it is no longer drawn.
+b, c The case-study clusters of the prion protein (16616_1_1_1) and alpha-synuclein
+     (6968_1_1_1). Members are the chains that the
      seed's sequence finds with ``mmseqs easy-search`` (-s 7.5, --max-seqs 20000,
      -e 1e-3) at >= 80 % identity over >= 90 % of both sequences: the definition of the
      ``\\nCase*`` macros in ``numbers.tex`` (make_numbers.py ``sec_ubiquitin``). This
      script reruns the same search with alignment strings and maps every member residue
      onto the seed's residue numbering; residues in insertions relative to the seed are
      not drawn. Per-residue Z-scores (top) and G-scores (bottom) are drawn as in
-     Fig. 2a: bound chains are left out; chains measured as native proteins in aqueous
+     Fig. 3c: bound chains are left out; chains measured as native proteins in aqueous
      solution are coloured by their median shift count k (classes <= 6, 7-15, 16-21);
      chains measured in another sample type are light grey (``perturbed``: cosolvent
      evidence, a membrane mimetic, a solid-state sample, a non-native deposited physical
@@ -17,11 +25,11 @@ a-c  The case-study clusters of ubiquitin (seed chain 50330_1_1_1), the prion pr
 d    A gallery of ``N_GALLERY`` replicate groups drawn with ``GALLERY_SEED`` from all
      sequences whose non-bound chains come from at least ``MIN_ENTRIES`` entries
      (exact sequence identity; sequences sorted lexicographically before the draw), each
-     drawn as a-c. Titles name the protein (``GALLERY_NAMES``, from the BMRB entry titles,
+     drawn as b and c. Titles name the protein (``GALLERY_NAMES``, from the BMRB entry titles,
      where the deposited entity name is a lab code or generic).
 
 Labels are the release Parquet's (``gscores``, ``zscores``, ``k``, ``mask``). Unlike
-Fig. 2a, the grey class reads the Parquet's sample annotations (``cosolvent_evidence``,
+panel a (and Fig. 3c), the grey class of b-d reads the Parquet's sample annotations (``cosolvent_evidence``,
 ``membrane_mimetic``, ``sample_state_evidence``, ``physical_state``, ``pressure_bar``)
 and not the raw files. A few alpha-synuclein fibril and micelle samples (31068, 18243,
 16302) escape these annotations and stay coloured.
@@ -29,7 +37,8 @@ and not the raw files. A few alpha-synuclein fibril and micelle samples (31068, 
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s8_replicate_gallery.py \
         --out-dir <draft>/Figures/paper
-Outputs: ``<out-dir>/S8.pdf`` and ``<out-dir>/suppfigs_c_data/S8_*.csv``. The mmseqs case
+Outputs: ``<out-dir>/S8.pdf`` and ``<out-dir>/suppfigs_c_data/S8_*.csv``
+(``S8_ubiquitin_chains.csv`` for panel a). The mmseqs case
 search is cached in ``tmp/paper_figs/s8_cases`` (``--refresh`` reruns it).
 """
 
@@ -46,9 +55,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fig1a_ubiquitin as f1a  # noqa: E402  (panel a: Fig. 3c's chain set and rule)
 import style_paper as sp  # noqa: E402
 
-# italic k in the same sans-serif face as the text (as Fig. 2a; mathtext defaults to DejaVu)
+# italic k in the same sans-serif face as the text (as Fig. 3c; mathtext defaults to DejaVu)
 sp.plt.rcParams.update(
     {
         "mathtext.fontset": "custom",
@@ -57,13 +67,11 @@ sp.plt.rcParams.update(
     }
 )
 
-CASES = {  # panel -> (name, seed chain)
-    "a": ("Ubiquitin", "50330_1_1_1"),
+CASES = {  # panel -> (name, seed chain); panel a is the exact ubiquitin sequence of Fig. 3c
     "b": ("Prion protein", "16616_1_1_1"),
     "c": ("α-Synuclein", "6968_1_1_1"),
 }
 PLAN_COUNTS = {  # numbers.tex \nCase*Chains / \nCase*Entries, for the self-check
-    "50330_1_1_1": (118, 102),
     "16616_1_1_1": (36, 34),
     "6968_1_1_1": (108, 71),
 }
@@ -76,7 +84,7 @@ MIN_ENTRIES = 3
 # non-native deposited physical state, or a pressure of at least HIGH_PRESSURE_BAR.
 NON_NATIVE_STATES = {"denatured", "unfolded", "molten globule", "misfolded", "fibril",
                      "fibrils", "amyloid fibril"}  # fmt: skip
-HIGH_PRESSURE_BAR = 400.0  # as Fig. 2a
+HIGH_PRESSURE_BAR = 400.0  # as Fig. 3c
 OTHER_LABEL = "cosolvent, micelles, solid state, high pressure or non-native state"
 CACHE = sp.TMP / "paper_figs" / "s8_cases"
 DATA_SUBDIR = "suppfigs_c_data"  # under --out-dir
@@ -104,6 +112,8 @@ GALLERY_NAMES = {
     "4233": "ω-atracotoxin-Hv1a",  # entity "omega-atracotoxin-Hv1a"
     "52965": "Trpzip2",  # entity "entity_1" (tryptophan zipper 2)
     "50676": "Thrombin",  # entity "entity_1" (PPACK-thrombin)
+    "15047": "Ubiquitin",  # entity "denatured_ubiquitin", but most chains are native (a)
+    "5580": "Mersacidin",  # entity "Type B lantibiotics mersacidin" (a type B lantibiotic)
 }
 
 
@@ -238,14 +248,14 @@ def gallery(df: pd.DataFrame) -> tuple[list, int]:
 
 
 # --------------------------------------------------------------------------------
-# plot (drawn as Fig. 2a: native solution chains coloured by median k, the rest grey)
+# plot (drawn as Fig. 3c: native solution chains coloured by median k, the rest grey)
 # --------------------------------------------------------------------------------
-FIG_W, FIG_H = sp.W_DOUBLE, 173.0
+FIG_W, FIG_H = sp.W_DOUBLE, 162.0  # with its legend, the figure fits one A4 page
 LEFT = 14.0  # left edge of the first column of axes (room for the y labels)
-CASE_W, CASE_GAP, CASE_TOP, CASE_H = 45.0, 5.5, 12.5, 19.0
-GAL_COLS, GAL_GAP, GAL_TOP, GAL_H, GAL_ROW = 4, 5.0, 72.0, 11.5, 34.0
+CASE_W, CASE_GAP, CASE_TOP, CASE_H = 45.0, 5.5, 12.5, 18.0
+GAL_COLS, GAL_GAP, GAL_TOP, GAL_H, GAL_ROW = 4, 5.0, 69.0, 10.5, 31.0
 GAL_W = (FIG_W - LEFT - 1.0 - (GAL_COLS - 1) * GAL_GAP) / GAL_COLS
-GREY = "#D2D2D2"  # chains measured in another sample type (as Fig. 2a)
+GREY = "#D2D2D2"  # chains measured in another sample type (as Fig. 3c)
 
 
 def _ax(fig, left, top, w, h):
@@ -286,7 +296,7 @@ def _style(az, ag, n, show_xlabel, ylab=True, small=False):
 
 
 def _case_rows(P: pd.DataFrame) -> list:
-    """Non-bound case members, as Fig. 2a (a partner changes the measured state)."""
+    """Non-bound case members, as Fig. 3c (a partner changes the measured state)."""
     P = P[~P.is_bound.astype(bool)]
     return [{"z": r.z, "g": r.g, "k_class": r.k_class, "other": bool(r.perturbed)}
             for r in P.itertuples()]  # fmt: skip
@@ -315,27 +325,82 @@ def gallery_name(grp: pd.DataFrame) -> str:
     name = (
         name[0].upper() + name[1:] if name[:1].islower() and name[:2] != "ω-" else name
     )
-    return name if len(name) <= 26 else name[:25] + "…"
+    # never a clipped title (figure review item 16): a long name falls back to the entry
+    if len(name) > 26:
+        return f"BMRB {min(grp.entry_id.astype(str), key=int)}"
+    return name
+
+
+def ubiquitin_rows(U: pd.DataFrame) -> list:
+    """Panel a: the non-bound chains of the exact ubiquitin sequence (Fig. 3c's set), native
+    ones by median-k class, the perturbed ones (``fig1a_ubiquitin.NATIVE_RULE``) grey."""
+    return [{"z": np.asarray(r.zscores, float), "g": np.asarray(r.gscores, float),
+             "k_class": r.k_class, "other": not bool(r.native)}
+            for r in U.itertuples()]  # fmt: skip
+
+
+def condition_groups(U: pd.DataFrame) -> list:
+    """Direct labels of panel a: the perturbed chains grouped by what perturbs them (a
+    pressure of at least HIGH_PRESSURE_BAR first, else the first denaturant or alcohol
+    named in the sample, else the deposited state), with the median G of each group over
+    the folded core (residues 2-71), where the label is placed. The full condition of
+    every chain is in S8_ubiquitin_chains.csv."""
+    P = U[~U.native.astype(bool)]
+    groups: dict = {}
+    for r in P.itertuples():
+        if pd.notna(r.pressure_bar) and r.pressure_bar >= HIGH_PRESSURE_BAR:
+            key = f"{r.pressure_bar:,.0f} bar"
+        elif r.perturbants:  # (name, concentration, unit) of the first perturbant
+            name, conc, unit = r.perturbants[0]
+            unit = unit.strip()
+            key = f"{float(conc):g}{'' if unit == '%' else ' '}{unit} {name}".strip()
+        else:
+            key = f"{r.physical_state} state"
+        groups.setdefault(key, []).append(
+            np.nanmean(np.asarray(r.gscores, float)[1:71])
+        )
+    return [(k, float(np.median(v)), len(v)) for k, v in groups.items()]
 
 
 def plot(
-    cases: dict, gal: list, df_idx: pd.DataFrame, by_seq: dict, n_eligible: int
+    cases: dict,
+    gal: list,
+    df_idx: pd.DataFrame,
+    by_seq: dict,
+    n_eligible: int,
+    U: pd.DataFrame,
 ) -> None:
     from matplotlib.lines import Line2D
 
     fig = sp.figure(FIG_W, FIG_H)
-    # ---- a-c: case clusters ---------------------------------------------------
-    for j, (letter, (name, seed)) in enumerate(CASES.items()):
+    # ---- a: the ubiquitin chains of Fig. 3c with the perturbed ones ------------
+    n = len(f1a.UBQ)
+    az = _ax(fig, LEFT, CASE_TOP, CASE_W, CASE_H)
+    ag = _ax(fig, LEFT, CASE_TOP + CASE_H + 2.0, CASE_W, CASE_H)
+    _draw_group(az, ag, np.arange(1, n + 1), ubiquitin_rows(U), lw=0.55)
+    _style(az, ag, n, show_xlabel=True, ylab=True)
+    az.set_title("Ubiquitin (Fig. 3c), all unbound chains", fontsize=sp.FS_BODY, pad=2,
+                 loc="left")  # fmt: skip
+    # condition labels on the grey groups, at residue 38 (inside the folded core, where
+    # the native chains lie low), on a light box so the lines stay readable around them
+    for label, g_med, _ in condition_groups(U):
+        ag.text(38, g_med, label, fontsize=FS_SMALL, color=sp.INK_SOFT, ha="center",
+                va="center", zorder=4,
+                bbox={"boxstyle": "square,pad=0.15", "fc": "white", "ec": "none",
+                      "alpha": 0.85})  # fmt: skip
+    sp.fig_label(fig, "a", 0.0, 7.5)
+    # ---- b, c: case clusters --------------------------------------------------
+    for j, (letter, (name, seed)) in enumerate(CASES.items(), start=1):
         n = len(df_idx.loc[seed, "sequence"])
         left = LEFT + j * (CASE_W + CASE_GAP)
         az = _ax(fig, left, CASE_TOP, CASE_W, CASE_H)
         ag = _ax(fig, left, CASE_TOP + CASE_H + 2.0, CASE_W, CASE_H)
         _draw_group(az, ag, np.arange(1, n + 1), _case_rows(cases[seed]), lw=0.55)
-        _style(az, ag, n, show_xlabel=True, ylab=(j == 0))
+        _style(az, ag, n, show_xlabel=True, ylab=False)
         az.set_title(name, fontsize=sp.FS_BODY, pad=2, loc="left")
-        sp.fig_label(fig, letter, 0.0 if j == 0 else left - 4.5, 7.5)
+        sp.fig_label(fig, letter, left - 4.5, 7.5)
 
-    # one-row key above everything, as Fig. 2a
+    # one-row key above everything, as Fig. 3c
     handles = [Line2D([], [], color=sp.K_CLASS_COLORS[c], lw=1.4, label=c)
                for c in sp.K_CLASSES]  # fmt: skip
     handles.append(Line2D([], [], color=GREY, lw=1.4, label=OTHER_LABEL))
@@ -413,7 +478,14 @@ def main() -> None:
          "cases": {seed: {"chains": len(P), "entries": int(P.entry_id.nunique()),
                           "bound": int(P.is_bound.sum())} for seed, P in cases.items()}},
         indent=1))  # fmt: skip
-    plot(cases, gal, df_idx, by_seq, n_eligible)
+    U, ucounts = f1a.load_ubiquitin()
+    print(f"ubiquitin (panel a): {ucounts}; native {int(U.native.sum())}, "
+          f"perturbed {int((~U.native).sum())}; groups {condition_groups(U)}")  # fmt: skip
+    U.assign(condition=U["label"])[
+        ["id", "entry_id", "native", "condition", "pressure_bar", "median_k", "k_class",
+         "mean_g", "tier"]
+    ].to_csv(DATA_DIR / "S8_ubiquitin_chains.csv", index=False)  # fmt: skip
+    plot(cases, gal, df_idx, by_seq, n_eligible, U)
     print(f"wrote {sp.out_dir() / 'S8.pdf'}")
 
 

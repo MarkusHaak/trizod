@@ -63,12 +63,12 @@ SRC_LABEL = {
 }
 # Method colours as in Supplementary Fig. S6 (LACS sky blue, POTENCI/AIC dark grey); both
 # methods = sky blue hatched in dark grey, so no two corrected classes share a grey. No
-# correction: zero offset white (grey outline), raw only light grey. The Okabe-Ito blue,
-# orange, green and vermillion keep their fixed meanings (test set, CheZOD, training,
-# removed).
+# correction: zero offset white (grey outline), raw only light grey. The entity colours
+# (style_paper.ENTITY: blue test set, vermillion CheZOD117, green training, grey
+# CheZOD1325) are not used here.
 SRC_STYLE = {  # facecolor, edgecolor (also the hatch colour), hatch
-    "lacs_only": (sp.OKABE_ITO["skyblue"], "white", None),
-    "lacs+potenci": (sp.OKABE_ITO["skyblue"], sp.CAT["neutral"], "//////"),
+    "lacs_only": (sp.CAT["lacs"], "white", None),
+    "lacs+potenci": (sp.CAT["lacs"], sp.CAT["neutral"], "//////"),
     "potenci_only": (sp.CAT["neutral"], "white", None),
     "none": ("white", "#8C8C8C", None),
     "not_transferable": ("#C4C4C4", "white", None),
@@ -334,11 +334,16 @@ def main():
     ax.axhline(len(aas) - 0.5, color="white", lw=1.2)
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels, fontsize=sp.FS_TICK)
-    ax.xaxis.tick_top()
-    ax.set_xticks(range(len(TIERS)))
-    ax.set_xticklabels(
-        TIERS, fontsize=sp.FS_TICK, rotation=35, ha="left", rotation_mode="anchor"
-    )
+    # tier headers without rotation (figure review item 16): the 7-mm columns are too
+    # narrow for "unfiltered" or "moderate", so the headers alternate between two lines
+    from matplotlib.transforms import blended_transform_factory, offset_copy
+
+    ax.set_xticks([])
+    trh = blended_transform_factory(ax.transData, ax.transAxes)
+    for j, t in enumerate(TIERS):
+        up = 1.2 + (3.0 if j % 2 == 0 else 0.0)  # mm above the top edge
+        ax.text(j, 1.0, t, ha="center", va="bottom", fontsize=sp.FS_TICK,
+                transform=offset_copy(trh, fig=fig, y=up * sp.MM, units="inches"))  # fmt: skip
     ax.tick_params(length=0, pad=1.5)
     for s_ in ax.spines.values():
         s_.set_visible(False)

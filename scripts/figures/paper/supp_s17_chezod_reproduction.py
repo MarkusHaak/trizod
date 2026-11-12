@@ -163,9 +163,9 @@ def main():
     # Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1). The
     # outcome categories are regions of panel a and rows of panel b, so they are labelled
     # in place and need no colour. One key at the top names the two modes, in the paper's
-    # wording and with Fig. 2c's encoding: orange = TriZOD without LACS (CheZOD method;
-    # a, b), black = with LACS (released labels; b). In c and d, ink = TriZOD and orange =
-    # the published CheZOD Z-scores.
+    # wording and with Fig. 2c's encoding: grey = TriZOD without LACS (CheZOD method;
+    # a, b), black = with LACS (released labels; b). In c and d, ink = TriZOD and grey =
+    # the published CheZOD Z-scores (the CheZOD1325 entity of style_paper.ENTITY).
     fig_w, fig_h = sp.W_DOUBLE, 58.0
     ax_top, ax_h = 10.0, 40.5
     boxes = {  # left, width (mm)
@@ -185,14 +185,20 @@ def main():
     axa, axb, axc, axd = (_ax(k) for k in "abcd")
     ink, grey = "#333333", "#6E6E6E"
     modes = {
-        # same encoding as Fig. 2c: orange = without LACS (CheZOD method), black = released
-        "potenci-only": ("Without LACS (CheZOD method)", sp.CAT["chezod"]),
+        # same encoding as Fig. 2c: grey = without LACS (CheZOD method), black = released
+        "potenci-only": ("Without LACS (CheZOD method)", sp.CAT["chezod1325"]),
         "both": ("With LACS (released labels)", ink),
     }
 
     # a: r vs MAE scatter, without LACS
     axa.scatter(
-        d_po.mae, d_po.pearson, s=3, lw=0, color=sp.CAT["chezod"], alpha=0.7, zorder=2
+        d_po.mae,
+        d_po.pearson,
+        s=3,
+        lw=0,
+        color=sp.CAT["chezod1325"],
+        alpha=0.7,
+        zorder=2,
     )
     axa.set_xscale("log")
     axa.set_xlim(0.008, 8)
@@ -276,7 +282,7 @@ def main():
 
     # d: 15506 profile (TriZOD without LACS)
     pos, zc, zt = profile(chezod, po, "15506")
-    axd.plot(pos, zc, color=sp.CAT["chezod"], lw=0.9, label="CheZOD")
+    axd.plot(pos, zc, color=sp.CAT["chezod1325"], lw=0.9, label="CheZOD")
     axd.plot(pos, zt, color=ink, lw=0.9, label="TriZOD")
     axd.set_xlabel("Residue (BMRB 15506)")
     axd.set_ylabel("Z-score")
