@@ -20,6 +20,8 @@ All three must pass.
 - `trizod/cache.py` — POTENCI prediction cache (`load_potenci_cache()`/`save_potenci_cache()`, content-addressed by seq+T+pH+ion).
 - `trizod/io/` — I/O helpers: `fasta.py` (FASTA read/write) and `str_writer.py` (`write_rereferenced_str()`, re-referenced NMR-STAR emission).
 - `trizod/bmrb/bmrb.py` — BMRB NMR-STAR file parsing (Entity, Assembly, SampleConditions, ShiftTable, BmrbEntry)
+- `trizod/bmrb/xrefs.py` — per-chain UniProt/PDB cross-references with provenance (`exact`/`author`/`sifts`/`unspecified`/`blast`), read straight from the NMR-STAR files by `scripts/build_parquet_dataset.py --bmrb-dir`; kept out of `bmrb.py` so it does not change `bmrb_parser_version()` (cache key)
+- `trizod/bmrb/xref_sources.py` — dated external sources for the cross-references (BMRB–PDB match list, wwPDB SEQRES, SIFTS), SHA-256-verified against their `MANIFEST.json`; used via `build_parquet_dataset.py --xref-sources`
 - `trizod/potenci/potenci.py` — POTENCI random coil shift predictions (public API: `get_pred_shifts()`)
 - `trizod/scoring/scoring.py` — Z-score and G-score computation, offset correction (AIC-based global + 9-residue rolling window)
 - `trizod/lacs/lacs.py` — LACS re-referencing (detect/correct NMR referencing errors using Wishart random coil tables)
@@ -76,6 +78,7 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 
 ## Scripts
 - `scripts/build_dataset.sh` — run the full `trizod dataset` chain end-to-end
+- `scripts/fetch_xref_sources.py` — download the dated cross-reference sources into `data/external/xref_sources/<date>/` with a SHA-256 manifest (once per release; the build never downloads)
 - `scripts/precompute_potenci_cache.py` — precompute POTENCI predictions for faster pipeline runs
 - `scripts/filter_impact_report.py` — per-filter impact analysis across all BMRB entries, outputs markdown
 - `scripts/compare_lacs_bmrb.py` — validate LACS reimplementation against BMRB pre-computed LACS reports
@@ -94,6 +97,8 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `tests/test_fasta.py` — `trizod/io/fasta.py` helpers
 - `tests/test_figures_import.py` — figure modules import cleanly (matplotlib-optional guard)
 - `tests/test_str_writer.py` — re-referenced NMR-STAR emission
+- `tests/test_xrefs.py` — UniProt/PDB cross-reference parsing, normalisation and which accessions reach `uniprot_ids`
+- `tests/test_xref_sources.py` — dated external sources: manifest check, sequence matching, per-chain SIFTS assignment
 - `tests/test_chezod_equality.py` — CheZOD reproduction regression
 - `tests/test_full_dataset_regression.py` — full-dataset regression (requires data/)
 - Pipeline/regression tests require BMRB data in `data/raw/bmrb_entries/`
