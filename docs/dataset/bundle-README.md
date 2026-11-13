@@ -98,8 +98,8 @@ apart from homology hits by a `source` on every link:
 | column | type | meaning |
 |---|---|---|
 | `xrefs` | list of struct | every UniProt/PDB link: `db` (`UniProt`/`PDB`), `accession`, `source`, `identity` (`Seq_identity`, %), `coverage` (`Seq_query_to_submitted_percent`: share of *this* chain covered by the alignment, %), `loop` (the NMR-STAR loop it came from), `raw_db`, `raw_accession`, `details`. Ordered UniProt before PDB, then by `source` as above, then in deposited order |
-| `uniprot_best` | string | the first author-supplied UniProt accession; else the non-author one that is 100 % identical over 100 % of the chain, **when exactly one distinct accession qualifies**; else null |
-| `uniprot_best_source` | string | `source` of `uniprot_best` (null with it) |
+| `uniprot_ids` | list<string> | the chain's own UniProt accessions at the best evidence level it has: the author-supplied ones if there are any; else **every** non-author accession that is 100 % identical over 100 % of the chain; else empty. Join on any element |
+| `uniprot_source` | string | which tier `uniprot_ids` came from: `author`, `unspecified` or `blast` (the strongest source among them); null when `uniprot_ids` is empty |
 | `pdb_ids` | list<string> | distinct PDB IDs from `exact` and `author` links only; BLAST PDB hits stay in `xrefs` |
 
 - `accession` is normalised: UniProt base accession without isoform or
@@ -110,10 +110,12 @@ apart from homology hits by a `source` on every link:
 - `_Entity_db_link` links belong to the chain's entity. `_Related_entries` and
   `_Assembly_db_link` links are per **entry** and repeat on every chain of it,
   so the PDB structure of a complex is linked from each partner.
-- Several distinct UniProt accessions at 100 %/100 % (one sequence in several
-  species or strains, e.g. P68246 / P68247) leave `uniprot_best` null rather
-  than picking one arbitrarily; `xrefs` lists them all.
-- All four columns are **null** when the entry was not read, and an empty list
+- Several distinct UniProt accessions at 100 %/100 % are usually one sequence
+  in several species or strains (e.g. P68246 / P68247). `uniprot_ids` lists
+  them all, unranked, so a join on any of them hits; to pin the organism,
+  compare with the entry's source organism. A BLAST hit below 100 %/100 % is a
+  homolog or a fragment match and stays in `xrefs` only.
+- All four cross-reference columns are **null** when the entry was not read, and an empty list
   / null when it declares no link.
 - Not from the snapshot, and therefore not included: the BMRB API's
   UniProt-via-PDB mapping (`/mappings/bmrb/uniprot?match_type=pdb`, SIFTS of
@@ -123,8 +125,9 @@ apart from homology hits by a `source` on every link:
 
 Coverage on the 2026-11-11 snapshot build (17,403 chains): 75.7 % have at
 least one UniProt or PDB accession; 39.4 % at least one UniProt accession and
-6.6 % an author-supplied one; `uniprot_best` is set for 15.2 % (1,142 author,
-1,412 BLAST, 91 unspecified); 34.9 % have an `exact` PDB entry and 50.5 % a
+6.6 % an author-supplied one; `uniprot_ids` is non-empty for 20.4 % (1,142
+author, 2,275 BLAST, 129 unspecified; 927 chains list more than one
+accession); 34.9 % have an `exact` PDB entry and 50.5 % a
 non-empty `pdb_ids`.
 
 ## Chemical shifts (`trizod_shifts.parquet`)

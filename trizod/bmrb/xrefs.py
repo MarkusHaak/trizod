@@ -330,28 +330,30 @@ def load_xrefs(bmrb_dir: Path, entry_ids: Iterable[str]) -> dict[str, EntryXrefs
     return out
 
 
-def uniprot_best(links: Iterable[Xref]) -> tuple[str | None, str | None]:
-    """The single most trustworthy UniProt accession and its source.
+def _is_full_match(x: Xref) -> bool:
+    return (x.identity or 0) >= 100 and (x.coverage or 0) >= 100
 
-    The first author-supplied accession; else the non-author link
-    (``unspecified`` or ``blast``) that is 100 % identical over 100 % of the
-    chain, provided exactly ONE distinct accession qualifies; else
-    ``(None, None)``. A BLAST hit below that bar is a homolog, not the chain's
-    own sequence entry, and is never promoted. Several distinct accessions at
-    100 %/100 % (one sequence in several species or strains) are not ranked
-    either: picking the first would be arbitrary, and ``xrefs`` lists them all.
+
+def uniprot_ids(links: Iterable[Xref]) -> tuple[list[str], str | None]:
+    """The chain's own UniProt accessions at the best evidence level it has.
+
+    The author-supplied accessions, if there are any; else every non-author
+    accession (``unspecified`` or ``blast``) that is 100 % identical over 100 %
+    of the chain. Several such accessions are usually one sequence in several
+    species or strains: all are listed, unranked, so a join on any of them
+    hits. A hit below that bar is a homolog or a fragment match and is never
+    listed (``xrefs`` keeps it). Returns ``(accessions, source)`` with the
+    strongest source among them, or ``([], None)``.
     """
     ranked = sorted(
         (x for x in links if x.db == UNIPROT and x.accession is not None),
         key=_sort_key,
     )
-    for x in ranked:
-        if x.source in ("exact", "author"):
-            return x.accession, x.source
-    full = [x for x in ranked if (x.identity or 0) >= 100 and (x.coverage or 0) >= 100]
-    if len({x.accession for x in full}) == 1:
-        return full[0].accession, full[0].source
-    return None, None
+    tier = [x for x in ranked if x.source in ("exact", "author")]
+    if not tier:
+        tier = [x for x in ranked if _is_full_match(x)]
+    accessions = list(dict.fromkeys(x.accession for x in tier))
+    return accessions, (tier[0].source if tier else None)
 
 
 def confident_pdb_ids(links: Iterable[Xref]) -> list[str]:

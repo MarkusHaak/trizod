@@ -95,7 +95,7 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `tests/test_fasta.py` — `trizod/io/fasta.py` helpers
 - `tests/test_figures_import.py` — figure modules import cleanly (matplotlib-optional guard)
 - `tests/test_str_writer.py` — re-referenced NMR-STAR emission
-- `tests/test_xrefs.py` — UniProt/PDB cross-reference parsing, normalisation and `uniprot_best` ranking
+- `tests/test_xrefs.py` — UniProt/PDB cross-reference parsing, normalisation and which accessions reach `uniprot_ids`
 - `tests/test_chezod_equality.py` — CheZOD reproduction regression
 - `tests/test_full_dataset_regression.py` — full-dataset regression (requires data/)
 - Pipeline/regression tests require BMRB data in `data/raw/bmrb_entries/`

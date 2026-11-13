@@ -246,8 +246,8 @@ def test_label_tier_source_is_appended_after_pressure_bar():
 #: UniProt / PDB cross-references (2026-11-13), appended in this order.
 XREF_COLUMNS = [
     ("xrefs", "list<xref>"),
-    ("uniprot_best", "string"),
-    ("uniprot_best_source", "string"),
+    ("uniprot_ids", "list<string>"),
+    ("uniprot_source", "string"),
     ("pdb_ids", "list<string>"),
 ]
 
@@ -815,12 +815,13 @@ def test_xrefs_join_on_entry_and_entity(xref_bundle):
         ("PDB", "1ABC", "exact"),
     ]
     assert links[1]["identity"] == 100.0 and links[1]["coverage"] == 100.0
-    assert _one(cols, "uniprot_best", 0) == "P04156"
-    assert _one(cols, "uniprot_best_source", 0) == "author"
+    assert _one(cols, "uniprot_ids", 0) == ["P04156"]
+    assert _one(cols, "uniprot_source", 0) == "author"
     assert _one(cols, "pdb_ids", 0) == ["1ABC"]
     # entity 2 has no links of its own, only the entry's PDB entry
     assert [x["accession"] for x in _one(cols, "xrefs", 1)] == ["1ABC"]
-    assert _one(cols, "uniprot_best", 1) is None
+    assert _one(cols, "uniprot_ids", 1) == []
+    assert _one(cols, "uniprot_source", 1) is None
     assert _one(cols, "pdb_ids", 1) == ["1ABC"]
 
 
@@ -841,7 +842,7 @@ def test_xrefs_round_trip_through_parquet(xref_bundle, tmp_path):
     builder.build(bundle, out, None, xrefs=xrefs, xrefs_snapshot="2026-11-11")
     table = pq.read_table(out)
     (row,) = [r for r in table.to_pylist() if r["id"] == "12345_1_1_1"]
-    assert row["uniprot_best"] == "P04156"
+    assert row["uniprot_ids"] == ["P04156"]
     assert [x["source"] for x in row["xrefs"]] == ["author", "blast", "exact"]
     meta = table.schema.metadata
     assert b"blast" in meta[b"xrefs_semantics"]

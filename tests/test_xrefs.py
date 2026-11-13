@@ -11,7 +11,7 @@ The BMRB records three kinds of external link, with very different reliability:
   query coverage ``Seq_query_to_submitted_percent``.
 
 These tests pin that the three stay apart, that accessions are normalised only
-when they really are accessions, and the ``uniprot_best`` ranking.
+when they really are accessions, and which accessions reach ``uniprot_ids``.
 """
 
 import pynmrstar
@@ -280,38 +280,46 @@ def test_chain_links_are_ordered_uniprot_first_then_by_confidence(parsed):
 
 
 # --------------------------------------------------------------------------- #
-# convenience: uniprot_best and the high-confidence PDB IDs
+# convenience: uniprot_ids and the high-confidence PDB IDs
 # --------------------------------------------------------------------------- #
 
 
-def test_uniprot_best_prefers_the_author_accession(parsed):
-    assert xr.uniprot_best(parsed.for_entity("1")) == ("P04156", "author")
+def test_uniprot_ids_are_the_author_accessions_when_there_are_any(parsed):
+    # entity 1 also has P01308 as a 100 %/100 % BLAST hit, and an author entry
+    # NAME (B2MG_HUMAN, no accession): neither joins the author tier
+    assert xr.uniprot_ids(parsed.for_entity("1")) == (["P04156"], "author")
 
 
-def test_uniprot_best_falls_back_to_the_one_full_identity_full_coverage_hit(parsed):
-    # P69905 is 100 % identical but covers only 95 % of the chain, so P69907 is
-    # the only BLAST hit at 100 % identity over 100 % of the chain
+def test_every_author_accession_is_listed_in_deposited_order():
+    links = [
+        xr.Xref(xr.UNIPROT, acc, "author", None, None, "Entity_db_link", "UNP", acc)
+        for acc in ["Q9NZQ7", "P07463", "Q9NZQ7"]
+    ]
+    assert xr.uniprot_ids(links) == (["Q9NZQ7", "P07463"], "author")
+
+
+def test_without_an_author_link_every_full_identity_full_coverage_hit_is_listed(
+    parsed,
+):
+    """The same sequence in several species (P68246 / P68247 in the release)
+    is not ranked: every accession at 100 % identity over 100 % of the chain is
+    listed, so a join on any of them hits. P69905 is 100 % identical but covers
+    only 95 % of the chain, so it is a fragment match and left out."""
+    assert xr.uniprot_ids(parsed.for_entity("2")) == (
+        ["P69906", "P69907"],
+        "unspecified",
+    )
     only_blast = [x for x in parsed.for_entity("2") if x.source == "blast"]
-    assert xr.uniprot_best(only_blast) == ("P69907", "blast")
-    # the same rule for a link whose Author_supplied flag is empty
-    unspecified = [x for x in parsed.for_entity("2") if x.source == "unspecified"]
-    assert xr.uniprot_best(unspecified) == ("P69906", "unspecified")
-    # entity 1: P01308 is listed twice but is ONE accession, so not ambiguous
+    assert xr.uniprot_ids(only_blast) == (["P69907"], "blast")
+    # P01308 is deposited twice but is one accession
     no_author = [x for x in parsed.for_entity("1") if x.source != "author"]
-    assert xr.uniprot_best(no_author) == ("P01308", "blast")
+    assert xr.uniprot_ids(no_author) == (["P01308"], "blast")
 
 
-def test_uniprot_best_refuses_to_choose_between_identical_hits(parsed):
-    """Two distinct accessions at 100 %/100 % (e.g. the same sequence in two
-    species, P68246 vs P68247): picking the first would be arbitrary, so the
-    convenience column stays null and ``xrefs`` lists both."""
-    assert xr.uniprot_best(parsed.for_entity("2")) == (None, None)
-
-
-def test_uniprot_best_is_none_without_a_qualifying_link(parsed):
-    assert xr.uniprot_best(parsed.for_entity("3")) == (None, None)
+def test_uniprot_ids_are_empty_without_a_qualifying_link(parsed):
+    assert xr.uniprot_ids(parsed.for_entity("3")) == ([], None)
     homolog = [x for x in parsed.for_entity("1") if x.accession == "Q00001"]
-    assert xr.uniprot_best(homolog) == (None, None)
+    assert xr.uniprot_ids(homolog) == ([], None)
 
 
 def test_confident_pdb_ids_are_exact_and_author_only(parsed):

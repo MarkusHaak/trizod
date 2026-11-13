@@ -76,7 +76,7 @@ Four layers are shipped:
    (strict 1,895 · moderate 2,625 · tolerant 946 · unfiltered 337),
    `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
    assembly-composition annotation columns, and per-chain UniProt / PDB
-   cross-references (`xrefs`, `uniprot_best`, `uniprot_best_source`,
+   cross-references (`xrefs`, `uniprot_ids`, `uniprot_source`,
    `pdb_ids`) read from the same NMR-STAR snapshot, each link labelled
    `exact` (same deposition), `author` (depositor-supplied), `blast` (BMRB
    annotator BLAST hit, with identity and coverage) or `unspecified` — see

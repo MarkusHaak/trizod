@@ -394,10 +394,11 @@ XREFS_DOC = (
     "accession is the normalised accession (UniProt base accession without "
     "isoform/version, upper-case 4-character PDB ID) or null when the deposited "
     "value is not one (e.g. a UniProt entry name like B2MG_HUMAN; raw_accession "
-    "keeps it). uniprot_best: the first author-supplied UniProt accession, else "
-    "the non-author one with identity = 100 and coverage = 100 when exactly one "
-    "distinct accession qualifies (several = ambiguous, left null), else null; "
-    "uniprot_best_source names its source. pdb_ids: distinct PDB IDs from "
+    "keeps it). uniprot_ids: the chain's own UniProt accessions -- the "
+    "author-supplied ones if any, else every non-author accession with "
+    "identity = 100 and coverage = 100 (one sequence in several species is "
+    "listed unranked); uniprot_source names that tier (author / unspecified / "
+    "blast). pdb_ids: distinct PDB IDs from "
     "'exact' and 'author' links only (BLAST PDB hits stay in xrefs). All four "
     "columns are null when the entry was not read and empty/null when it "
     "declares no link."
@@ -499,14 +500,14 @@ COLUMNS: list[Column] = [
     # when it was and declares no link.
     Column("xrefs", "list<xref>", derive=lambda c: _xref_col(c, xr.xref_records)),
     Column(
-        "uniprot_best",
-        "string",
-        derive=lambda c: _xref_col(c, lambda x: xr.uniprot_best(x)[0]),
+        "uniprot_ids",
+        "list<string>",
+        derive=lambda c: _xref_col(c, lambda x: xr.uniprot_ids(x)[0]),
     ),
     Column(
-        "uniprot_best_source",
+        "uniprot_source",
         "string",
-        derive=lambda c: _xref_col(c, lambda x: xr.uniprot_best(x)[1]),
+        derive=lambda c: _xref_col(c, lambda x: xr.uniprot_ids(x)[1]),
     ),
     Column(
         "pdb_ids", "list<string>", derive=lambda c: _xref_col(c, xr.confident_pdb_ids)
@@ -770,9 +771,12 @@ def xref_coverage(cols: dict) -> dict:
         "chains_read": len(read),
         "uniprot_author": has(lambda x: uni(x) and x["source"] == "author"),
         "uniprot_any": has(uni),
-        "uniprot_best": sum(v is not None for v in cols["uniprot_best"]),
-        "uniprot_best_by_source": dict(
-            Counter(v for v in cols["uniprot_best_source"] if v is not None)
+        "uniprot_ids": sum(bool(v) for v in cols["uniprot_ids"] if v is not None),
+        "uniprot_ids_multiple": sum(
+            len(v) > 1 for v in cols["uniprot_ids"] if v is not None
+        ),
+        "uniprot_source": dict(
+            Counter(v for v in cols["uniprot_source"] if v is not None)
         ),
         "pdb_exact": has(lambda x: pdb(x) and x["source"] == "exact"),
         "pdb_exact_or_author": sum(bool(v) for v in cols["pdb_ids"] if v is not None),
@@ -788,7 +792,7 @@ def print_xref_coverage(cols: dict) -> None:
     for key, value in cov.items():
         if isinstance(value, int) and key not in ("chains", "chains_read"):
             print(f"  {key:22s} {value:6d}  ({100 * value / n:5.1f} %)")
-    print(f"  uniprot_best by source: {cov['uniprot_best_by_source']}")
+    print(f"  uniprot_ids by source: {cov['uniprot_source']}")
 
 
 def build(
