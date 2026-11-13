@@ -230,17 +230,33 @@ def test_pressure_bar_is_appended_to_the_contract():
     assert "pressure_bar" in builder.SCORES_JSON_SOURCES
 
 
-def test_label_tier_source_is_appended_last():
+def test_label_tier_source_is_appended_after_pressure_bar():
     """The tier whose scores.json record supplied the row's labels and offsets
     (audit I-01): a derived string, appended after every published column."""
-    last = builder.COLUMNS[-1]
-    assert (last.name, last.arrow, last.origin) == (
+    names = [c.name for c in builder.COLUMNS]
+    col = builder.COLUMNS[names.index("label_tier_source")]
+    assert (col.name, col.arrow, col.origin) == (
         "label_tier_source",
         "string",
         "derived",
     )
-    names = [c.name for c in builder.COLUMNS]
     assert names.index("label_tier_source") == names.index("pressure_bar") + 1
+
+
+#: UniProt / PDB cross-references (2026-11-13), appended in this order.
+XREF_COLUMNS = [
+    ("xrefs", "list<xref>"),
+    ("uniprot_best", "string"),
+    ("uniprot_best_source", "string"),
+    ("pdb_ids", "list<string>"),
+]
+
+
+def test_xref_columns_are_appended_last():
+    tail = [(c.name, c.arrow) for c in builder.COLUMNS[-len(XREF_COLUMNS) :]]
+    assert tail == XREF_COLUMNS
+    names = [c.name for c in builder.COLUMNS]
+    assert names.index("xrefs") == names.index("label_tier_source") + 1
 
 
 # --------------------------------------------------------------------------- #
@@ -720,3 +736,113 @@ def test_the_sort_order_is_declared_in_the_file(sorted_parquet):
 
 def test_the_release_row_group_size_is_david_s_500():
     assert builder.ROW_GROUP_SIZE == 500
+
+
+# --------------------------------------------------------------------------- #
+# UniProt / PDB cross-references, joined on (entry_id, entity_id)
+# --------------------------------------------------------------------------- #
+
+_XREF_ENTRY = """\
+data_12345
+
+save_entry_information
+   _Entry.Sf_category    entry_information
+   _Entry.Sf_framecode   entry_information
+   _Entry.ID             12345
+
+   loop_
+      _Related_entries.Database_name
+      _Related_entries.Database_accession_code
+      _Related_entries.Relationship
+      _Related_entries.Entry_ID
+
+      PDB   1abc   'BMRB Entry Tracking System'   12345
+   stop_
+save_
+
+save_entity_1
+   _Entity.Sf_category    entity
+   _Entity.Sf_framecode   entity_1
+   _Entity.ID             1
+
+   loop_
+      _Entity_db_link.Ordinal
+      _Entity_db_link.Author_supplied
+      _Entity_db_link.Database_code
+      _Entity_db_link.Accession_code
+      _Entity_db_link.Seq_query_to_submitted_percent
+      _Entity_db_link.Seq_identity
+      _Entity_db_link.Entity_ID
+
+      1   no    SP    P01308   100.00   100.00   1
+      2   yes   UNP   P04156   .        .        1
+   stop_
+save_
+
+save_entity_2
+   _Entity.Sf_category    entity
+   _Entity.Sf_framecode   entity_2
+   _Entity.ID             2
+save_
+"""
+
+
+@pytest.fixture
+def xref_bundle(tmp_path):
+    from trizod.bmrb import xrefs
+
+    bmrb = tmp_path / "bmrb"
+    (bmrb / "bmr12345").mkdir(parents=True)
+    (bmrb / "bmr12345" / "bmr12345_3.str").write_text(_XREF_ENTRY)
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _record("12345", "12345_1_1_1", entityID="1"),
+            _record("12345", "12345_1_2_2", entityID="2"),
+            _record("99999", "99999_1_1_1"),  # not in the snapshot
+        ],
+    )
+    return bundle, xrefs.load_xrefs(bmrb, ["12345", "99999"])
+
+
+def test_xrefs_join_on_entry_and_entity(xref_bundle):
+    bundle, xrefs = xref_bundle
+    cols = builder.collect_columns(bundle, None, xrefs=xrefs)
+    links = _one(cols, "xrefs", 0)
+    assert [(x["db"], x["accession"], x["source"]) for x in links] == [
+        ("UniProt", "P04156", "author"),
+        ("UniProt", "P01308", "blast"),
+        ("PDB", "1ABC", "exact"),
+    ]
+    assert links[1]["identity"] == 100.0 and links[1]["coverage"] == 100.0
+    assert _one(cols, "uniprot_best", 0) == "P04156"
+    assert _one(cols, "uniprot_best_source", 0) == "author"
+    assert _one(cols, "pdb_ids", 0) == ["1ABC"]
+    # entity 2 has no links of its own, only the entry's PDB entry
+    assert [x["accession"] for x in _one(cols, "xrefs", 1)] == ["1ABC"]
+    assert _one(cols, "uniprot_best", 1) is None
+    assert _one(cols, "pdb_ids", 1) == ["1ABC"]
+
+
+def test_xrefs_are_null_not_empty_when_the_entry_was_not_read(xref_bundle):
+    bundle, xrefs = xref_bundle
+    cols = builder.collect_columns(bundle, None, xrefs=xrefs)
+    for name, _ in XREF_COLUMNS:
+        assert _one(cols, name, 2) is None, name
+    skipped = builder.collect_columns(bundle, None)
+    for name, _ in XREF_COLUMNS:
+        assert all(v is None for v in skipped[name]), name
+
+
+def test_xrefs_round_trip_through_parquet(xref_bundle, tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    bundle, xrefs = xref_bundle
+    out = tmp_path / "x.parquet"
+    builder.build(bundle, out, None, xrefs=xrefs, xrefs_snapshot="2026-11-11")
+    table = pq.read_table(out)
+    (row,) = [r for r in table.to_pylist() if r["id"] == "12345_1_1_1"]
+    assert row["uniprot_best"] == "P04156"
+    assert [x["source"] for x in row["xrefs"]] == ["author", "blast", "exact"]
+    meta = table.schema.metadata
+    assert b"blast" in meta[b"xrefs_semantics"]
+    assert meta[b"xrefs_snapshot"] == b"2026-11-11"
