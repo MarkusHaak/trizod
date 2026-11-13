@@ -102,7 +102,7 @@ every link, listed here from most to least trustworthy:
 |---|---|---|
 | `exact` | the PDB entry deposited together with this BMRB entry: a `_Related_entries` row with relationship *BMRB Entry Tracking System*, or a row of BMRB's match file for BMRB IDs above 15000 (one ADIT-NMR session, per BMRB's README) | the same deposition |
 | `author` | depositor-supplied: `_Entity_db_link` / `_Assembly_db_link` with `Author_supplied = yes`, and every other `_Related_entries` PDB row (`details` keeps the relationship text, e.g. "Crystal structure") | the depositor's statement; a related PDB entry may be another construct or a complex |
-| `sifts` | the UniProt accession SIFTS gives for a chain of the entry's own structure (`exact`, or BMRB-matched) whose SEQRES sequence covers ≥ 90 % of this chain at ≥ 95 % identity; `identity` / `coverage` are that match and `details` names the PDB chain | the structure solved from this sample, mapped to UniProt by SIFTS; per chain, so the partner of a complex does not lend its accession |
+| `sifts` | the UniProt accession SIFTS gives for a chain of a high-confidence structure — the entry's own (`exact`, or BMRB-matched) or one the depositor names (`author`), never a BLAST PDB hit — whose SEQRES sequence covers ≥ 90 % of this chain at ≥ 95 % identity; `identity` / `coverage` are that match and `details` names the PDB chain | the structure solved from this sample, mapped to UniProt by SIFTS; per chain, so the partner of a complex does not lend its accession |
 | `unspecified` | a db-link row with no `Author_supplied` value (legacy entries), or a BMRB match-file row for BMRB IDs up to 15000 (supplied by the author or a BMRB annotator) | not guessed either way |
 | `blast` | `_Entity_db_link` with `Author_supplied = no`: BMRB annotators' BLAST hits | **includes homologs** — check `identity` and `coverage` |
 
@@ -128,16 +128,19 @@ every link, listed here from most to least trustworthy:
   any of them hits. A BLAST hit below 100 %/100 % is a homolog or a fragment
   match and stays in `xrefs` only.
 - SIFTS maps to the current UniProt release, whereas depositor accessions are
-  as deposited; on the 30 chains where the two differ, `uniprot_ids` keeps the
-  depositor's.
+  as deposited. Where both exist they agree on 424 chains and differ on 65 —
+  mostly identical sequences under another accession (renamed strains, merged
+  entries; only 11 differ at < 100 % sequence identity); `uniprot_ids` keeps
+  the depositor's. Against 100 %/100 % BLAST hits SIFTS agrees on 1,222 chains
+  and differs on 98.
 - All four cross-reference columns are **null** when the entry was not read,
   and an empty list / null when it declares no link.
 
 Coverage on the 2026-11-11 snapshot build (17,403 chains; dated sources of
-2026-11-13): 77.7 % have at least one UniProt or PDB accession; `uniprot_ids`
-is non-empty for 55.9 % (1,142 author, 7,284 SIFTS, 1,260 BLAST,
-47 unspecified); 6.6 % have an author-supplied UniProt accession and 43.4 % a
-SIFTS one; 44.0 % have an `exact` PDB entry and 54.5 % a non-empty `pdb_ids`.
+2026-11-13): 77.7 % have at least one UniProt or PDB accession and 67.8 % at
+least one UniProt accession; `uniprot_ids` is non-empty for 60.2 % (1,142
+author, 8,221 SIFTS, 1,084 BLAST, 33 unspecified); 6.6 % have an
+author-supplied UniProt accession and 50.0 % a SIFTS one; 44.0 % have an `exact` PDB entry and 54.5 % a non-empty `pdb_ids`.
 
 ## Chemical shifts (`trizod_shifts.parquet`)
 

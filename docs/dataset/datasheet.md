@@ -80,7 +80,7 @@ Four layers are shipped:
    from the same NMR-STAR snapshot plus three dated public files (BMRB's
    BMRB–PDB match list, wwPDB SEQRES, SIFTS), each link labelled `exact`
    (same deposition), `author` (depositor-supplied), `sifts` (UniProt of the
-   sequence-matched chain of the entry's own structure), `unspecified` or
+   sequence-matched chain of the entry's own or a depositor-named structure), `unspecified` or
    `blast` (BMRB annotator BLAST hit, with identity and coverage) — see the
    bundle README. Rows are sorted by
    `(entry_id, id)` in string order and written in 500-row groups with min/max

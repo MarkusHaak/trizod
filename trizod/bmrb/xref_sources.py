@@ -14,8 +14,9 @@ public flat files fill both:
 ``pdb_chain_uniprot.tsv.gz`` (SIFTS, EBI)
     PDB chain -> UniProt accession(s).
 
-A chain's UniProt accession is taken from SIFTS only for a chain of the entry's
-own structure (``exact`` or BMRB-matched, never a BLAST PDB hit) whose sequence
+A chain's UniProt accession is taken from SIFTS only for a chain of a
+high-confidence structure -- the entry's own (``exact`` or BMRB-matched) or one
+the depositor names (``author``), never a BLAST PDB hit -- whose sequence
 matches the TriZOD chain (``MIN_COVERAGE`` / ``MIN_IDENTITY``). That is what
 makes the link per chain: in a complex, each partner gets its own accession.
 
@@ -160,7 +161,7 @@ class ExternalSources:
     ) -> ExternalSources:
         """Read the three files for ``entry_ids``, after checking each against
         ``MANIFEST.json``. ``extra_pdb_ids`` are further structures whose chains
-        are needed (the snapshot's own ``exact`` PDB entries)."""
+        are needed (the snapshot's own ``exact`` and ``author`` PDB entries)."""
         directory = Path(directory)
         manifest = json.loads((directory / MANIFEST).read_text())
         for name in (BMRB_PDB_MATCH, SEQRES, SIFTS):
@@ -201,6 +202,11 @@ class ExternalSources:
             for x in snapshot_links
             if x.db == xr.PDB and x.source == "exact" and x.accession
         }
+        author = {
+            x.accession
+            for x in snapshot_links
+            if x.db == xr.PDB and x.source == "author" and x.accession
+        }
         matched = self.bmrb_pdb.get(str(entry_id), set())
         source = "exact" if _is_after_adit_cutoff(str(entry_id)) else "unspecified"
         out = [
@@ -208,7 +214,7 @@ class ExternalSources:
             for p in sorted(matched - exact)
         ]
         hits = []
-        for pdb_id in sorted(matched | exact):
+        for pdb_id in sorted(matched | exact | author):
             for chain, subject in self.seqres.get(pdb_id, {}).items():
                 coverage, identity = sequence_match(sequence, subject)
                 if coverage < MIN_COVERAGE or identity < MIN_IDENTITY:

@@ -390,8 +390,8 @@ XREFS_DOC = (
     "BMRB Entry Tracking System, or the BMRB match file for BMRB IDs > 15000); "
     "'author' = depositor-supplied (_Entity_db_link / _Assembly_db_link "
     "Author_supplied=yes, other _Related_entries PDB rows); 'sifts' = UniProt "
-    "accession of a chain of the entry's own structure (exact or BMRB-matched "
-    "PDB entry) whose sequence matches this chain -- identity / coverage are "
+    "accession of a chain of a high-confidence structure (exact, BMRB-matched "
+    "or author PDB entry) whose sequence matches this chain -- identity / coverage are "
     "that sequence match; 'unspecified' = db link with no Author_supplied value "
     "(legacy entries), or a BMRB match-file row for BMRB IDs <= 15000 (author- "
     "or annotator-supplied); 'blast' = BMRB annotator BLAST hit "
@@ -1068,16 +1068,16 @@ def main() -> None:
             xrefs_snapshot = snapshot_label(args.bmrb_dir)
         external = None
         if xrefs is not None and args.xref_sources is not None:
-            exact_pdb = {
+            confident_pdb = {
                 x.accession
                 for e in xrefs.values()
                 for links in [e.entry, *e.entity.values()]
                 for x in links
-                if x.db == xr.PDB and x.source == "exact" and x.accession
+                if x.db == xr.PDB and x.source in ("exact", "author") and x.accession
             }
             print(f"reading dated cross-reference sources from {args.xref_sources}")
             external = xs.ExternalSources.load(
-                args.xref_sources, entry_ids, extra_pdb_ids=exact_pdb
+                args.xref_sources, entry_ids, extra_pdb_ids=confident_pdb
             )
         build(
             args.in_bundle,

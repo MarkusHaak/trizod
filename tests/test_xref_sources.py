@@ -195,6 +195,25 @@ def test_blast_pdb_hits_are_not_used_for_sifts(ext):
     assert ext.links("18000", UBQ, [blast]) == []
 
 
+def test_author_pdb_links_are_used_for_sifts_too(ext):
+    """A depositor-named structure (e.g. a "Crystal structure" related entry)
+    lends its accession under the same sequence check as the entry's own."""
+    author = xr.Xref(
+        xr.PDB, "5XYZ", "author", None, None, "Related_entries", "PDB", "5XYZ"
+    )
+    links = ext.links("18000", UBQ, [author])
+    assert [(x.accession, x.source) for x in links] == [("P62988", "sifts")]
+    # ... and only when the sequence matches
+    assert ext.links("18000", PARTNER, [author]) == []
+
+
+def test_unspecified_pdb_links_from_the_snapshot_are_not_used(ext):
+    legacy = xr.Xref(
+        xr.PDB, "5XYZ", "unspecified", None, None, "Entity_db_link", "PDB", "5XYZ"
+    )
+    assert ext.links("18000", UBQ, [legacy]) == []
+
+
 def test_a_structure_without_sequence_or_sifts_rows_adds_only_the_pdb_link(ext):
     links = ext.links("17000", UBQ, [])
     assert _keys(links) == {(xr.PDB, "9ZZZ", "exact", xs.ORIGIN_MATCH)}
