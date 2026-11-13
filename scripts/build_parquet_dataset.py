@@ -78,6 +78,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from trizod import paths
+from trizod.bmrb import xref_sources as xs
 from trizod.bmrb import xrefs as xr
 from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
@@ -380,28 +381,35 @@ def _xref_col(ctx: dict, fn: Callable):
 #: Table metadata explaining the cross-reference columns.
 XREFS_DOC = (
     "xrefs: list of UniProt/PDB links per chain, each a struct "
-    "(db, accession, source, identity, coverage, loop, raw_db, raw_accession, "
-    "details), read from the NMR-STAR snapshot. source: 'exact' = the PDB entry "
-    "deposited together with this BMRB entry (_Related_entries, BMRB Entry "
-    "Tracking System); 'author' = depositor-supplied (_Entity_db_link / "
-    "_Assembly_db_link Author_supplied=yes, other _Related_entries PDB rows); "
-    "'blast' = BMRB annotator BLAST hit (Author_supplied=no), which includes "
-    "homologs -- check identity (Seq_identity, %) and coverage "
-    "(Seq_query_to_submitted_percent, share of this chain aligned, %); "
-    "'unspecified' = db link with no Author_supplied value (legacy entries). "
-    "_Entity_db_link links are per entity; _Related_entries and "
-    "_Assembly_db_link links are per entry and repeated on every chain of it. "
-    "accession is the normalised accession (UniProt base accession without "
-    "isoform/version, upper-case 4-character PDB ID) or null when the deposited "
-    "value is not one (e.g. a UniProt entry name like B2MG_HUMAN; raw_accession "
-    "keeps it). uniprot_ids: the chain's own UniProt accessions -- the "
-    "author-supplied ones if any, else every non-author accession with "
-    "identity = 100 and coverage = 100 (one sequence in several species is "
-    "listed unranked); uniprot_source names that tier (author / unspecified / "
-    "blast). pdb_ids: distinct PDB IDs from "
-    "'exact' and 'author' links only (BLAST PDB hits stay in xrefs). All four "
-    "columns are null when the entry was not read and empty/null when it "
-    "declares no link."
+    "(db, accession, source, identity, coverage, origin, raw_db, raw_accession, "
+    "details). origin is where the link was read: an NMR-STAR loop of the "
+    "snapshot (Entity_db_link, Assembly_db_link, Related_entries) or a dated "
+    "external file (bmrb_pdb_match = BMRB's adit_nmr_matched_pdb_bmrb_entry_ids"
+    ".csv; sifts = SIFTS pdb_chain_uniprot, see xref_sources). source: 'exact' = "
+    "the PDB entry deposited together with this BMRB entry (_Related_entries "
+    "BMRB Entry Tracking System, or the BMRB match file for BMRB IDs > 15000); "
+    "'author' = depositor-supplied (_Entity_db_link / _Assembly_db_link "
+    "Author_supplied=yes, other _Related_entries PDB rows); 'sifts' = UniProt "
+    "accession of a chain of the entry's own structure (exact or BMRB-matched "
+    "PDB entry) whose sequence matches this chain -- identity / coverage are "
+    "that sequence match; 'unspecified' = db link with no Author_supplied value "
+    "(legacy entries), or a BMRB match-file row for BMRB IDs <= 15000 (author- "
+    "or annotator-supplied); 'blast' = BMRB annotator BLAST hit "
+    "(Author_supplied=no), which includes homologs -- check identity "
+    "(Seq_identity, %) and coverage (Seq_query_to_submitted_percent, share of "
+    "this chain aligned, %). _Entity_db_link and sifts links are per chain; "
+    "_Related_entries, _Assembly_db_link and bmrb_pdb_match links are per entry "
+    "and repeated on every chain of it. accession is the normalised accession "
+    "(UniProt base accession without isoform/version, upper-case 4-character "
+    "PDB ID) or null when the deposited value is not one (e.g. a UniProt entry "
+    "name like B2MG_HUMAN; raw_accession keeps it). uniprot_ids: the chain's "
+    "own UniProt accessions at the best evidence level it has -- the "
+    "author-supplied ones if any, else the sifts ones, else every remaining "
+    "accession with identity = 100 and coverage = 100 (one sequence in several "
+    "species is listed unranked); uniprot_source names that tier (author / "
+    "sifts / unspecified / blast). pdb_ids: distinct PDB IDs from 'exact' and "
+    "'author' links only (other PDB links stay in xrefs). All four columns are "
+    "null when the entry was not read and empty/null when it declares no link."
 )
 
 
@@ -628,6 +636,7 @@ def collect_columns(
     composition_csv: Path | None = None,
     labelled: dict[str, tuple[str, dict]] | None = None,
     xrefs: dict[str, xr.EntryXrefs] | None = None,
+    external: xs.ExternalSources | None = None,
 ) -> dict:
     """Assemble every ``COLUMNS`` entry into a name -> list-of-values dict.
 
@@ -635,7 +644,9 @@ def collect_columns(
     and pyarrow is an optional extra. ``labelled`` is
     ``label_records(in_bundle)``, when already loaded. ``xrefs`` maps a BMRB
     entry ID to its parsed links (``trizod.bmrb.xrefs.load_xrefs``); None
-    leaves every cross-reference column null.
+    leaves every cross-reference column null. ``external`` adds the links of
+    the dated sources (``trizod.bmrb.xref_sources``) to every chain whose
+    entry was read.
     """
     reps = read_train_reps(in_bundle)
     if labelled is None:
@@ -705,6 +716,13 @@ def collect_columns(
 
         entry_id = clean_str(rec.get("entryID"))
         entry_xrefs = (xrefs or {}).get(entry_id)
+        chain_links = None
+        if entry_xrefs is not None:
+            chain_links = entry_xrefs.for_entity(clean_str(rec.get("entityID")))
+            if external is not None:
+                chain_links = xr.rank_links(
+                    chain_links + external.links(entry_id, seq, chain_links)
+                )
         comp_row = composition.get(entry_id)
         n_comp_hits += comp_row is not None
         records = {
@@ -724,9 +742,7 @@ def collect_columns(
             "cluster_repr": best_repr_map.get(rid),
             "quality": quality_map.get(rid),
             "label_tier_source": source_tier,
-            "xrefs": None
-            if entry_xrefs is None
-            else entry_xrefs.for_entity(clean_str(rec.get("entityID"))),
+            "xrefs": chain_links,
         }
         for col in COLUMNS:
             if col.derive is not None:
@@ -770,6 +786,7 @@ def xref_coverage(cols: dict) -> dict:
         "chains": n,
         "chains_read": len(read),
         "uniprot_author": has(lambda x: uni(x) and x["source"] == "author"),
+        "uniprot_sifts": has(lambda x: uni(x) and x["source"] == "sifts"),
         "uniprot_any": has(uni),
         "uniprot_ids": sum(bool(v) for v in cols["uniprot_ids"] if v is not None),
         "uniprot_ids_multiple": sum(
@@ -803,8 +820,11 @@ def build(
     labelled: dict[str, tuple[str, dict]] | None = None,
     xrefs: dict[str, xr.EntryXrefs] | None = None,
     xrefs_snapshot: str | None = None,
+    external: xs.ExternalSources | None = None,
 ) -> None:
-    cols = collect_columns(in_bundle, composition_csv, labelled, xrefs=xrefs)
+    cols = collect_columns(
+        in_bundle, composition_csv, labelled, xrefs=xrefs, external=external
+    )
 
     pa, pq = import_pyarrow()
     schema = arrow_schema(pa)
@@ -830,6 +850,11 @@ def build(
         b"xrefs_semantics": XREFS_DOC.encode(),
         b"xrefs_snapshot": (
             (xrefs_snapshot or "unknown") if xrefs is not None else "not read"
+        ).encode(),
+        b"xref_sources": (
+            json.dumps(external.provenance(), sort_keys=True)
+            if external is not None
+            else "none: NMR-STAR snapshot only"
         ).encode(),
     }
     table = table.replace_schema_metadata(metadata)
@@ -982,6 +1007,17 @@ def main() -> None:
         help="write the cross-reference columns as all-null instead of reading them",
     )
     ap.add_argument(
+        "--xref-sources",
+        type=Path,
+        default=None,
+        help=(
+            "dated directory written by scripts/fetch_xref_sources.py (BMRB-PDB "
+            "match list, wwPDB SEQRES, SIFTS); adds same-deposition PDB entries "
+            "and per-chain SIFTS UniProt accessions. Without it the "
+            "cross-references come from the NMR-STAR snapshot only"
+        ),
+    )
+    ap.add_argument(
         "--shifts-out",
         type=Path,
         default=None,
@@ -1030,6 +1066,19 @@ def main() -> None:
             print(f"reading cross-references for {len(entry_ids)} entries ...")
             xrefs = xr.load_xrefs(args.bmrb_dir, entry_ids)
             xrefs_snapshot = snapshot_label(args.bmrb_dir)
+        external = None
+        if xrefs is not None and args.xref_sources is not None:
+            exact_pdb = {
+                x.accession
+                for e in xrefs.values()
+                for links in [e.entry, *e.entity.values()]
+                for x in links
+                if x.db == xr.PDB and x.source == "exact" and x.accession
+            }
+            print(f"reading dated cross-reference sources from {args.xref_sources}")
+            external = xs.ExternalSources.load(
+                args.xref_sources, entry_ids, extra_pdb_ids=exact_pdb
+            )
         build(
             args.in_bundle,
             args.out,
@@ -1037,6 +1086,7 @@ def main() -> None:
             labelled=labelled,
             xrefs=xrefs,
             xrefs_snapshot=xrefs_snapshot,
+            external=external,
         )
     if args.shifts_out:
         build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)

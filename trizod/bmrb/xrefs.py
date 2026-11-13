@@ -20,6 +20,9 @@ keeps only the UniProt and PDB links, and labels each with its provenance
     accessions -- so each carries ``identity`` (``Seq_identity``, %) and
     ``coverage`` (``Seq_query_to_submitted_percent``, the share of the BMRB
     chain covered by the alignment, %).
+``sifts``
+    Not read here: UniProt accession of the sequence-matched chain of the
+    entry's own PDB structure, from SIFTS (``trizod.bmrb.xref_sources``).
 ``unspecified``
     A db-link row whose ``Author_supplied`` tag is empty (legacy entries). Not
     guessed either way; many of them carry BLAST-style identity values.
@@ -52,7 +55,7 @@ PDB = "PDB"
 #: Databases a link is kept for, in output order.
 DATABASES = (UNIPROT, PDB)
 #: Provenance values, most to least trustworthy; also the per-chain sort order.
-SOURCES = ("exact", "author", "unspecified", "blast")
+SOURCES = ("exact", "author", "sifts", "unspecified", "blast")
 
 #: ``Database_code`` spellings, upper-cased with spaces, ``-`` and ``_``
 #: removed. Built from every code in the 2026-11-11 snapshot (18,058 entries).
@@ -98,7 +101,7 @@ XREF_FIELDS = [
     ("source", "string"),
     ("identity", "float32"),
     ("coverage", "float32"),
-    ("loop", "string"),
+    ("origin", "string"),
     ("raw_db", "string"),
     ("raw_accession", "string"),
     ("details", "string"),
@@ -112,7 +115,9 @@ class Xref:
     ``accession`` is the normalised accession (UniProt base accession without
     isoform/version; upper-case four-character PDB ID), or None when the
     deposited value is not one -- e.g. a UniProt entry *name* such as
-    ``B2MG_HUMAN``. ``raw_db`` / ``raw_accession`` are verbatim.
+    ``B2MG_HUMAN``. ``raw_db`` / ``raw_accession`` are verbatim. ``origin`` is
+    where the link was read: the NMR-STAR loop (``Entity_db_link``, ...) or
+    the external file (``trizod.bmrb.xref_sources``).
     """
 
     db: str
@@ -120,7 +125,7 @@ class Xref:
     source: str
     identity: float | None
     coverage: float | None
-    loop: str
+    origin: str
     raw_db: str
     raw_accession: str
     details: str | None = None
@@ -179,7 +184,7 @@ def normalize_pdb(raw) -> str | None:
 
 
 def _make(
-    db, raw_db, raw_acc, source, loop, identity=None, coverage=None, details=None
+    db, raw_db, raw_acc, source, origin, identity=None, coverage=None, details=None
 ):
     norm = normalize_uniprot if db == UNIPROT else normalize_pdb
     return Xref(
@@ -188,7 +193,7 @@ def _make(
         source=source,
         identity=identity,
         coverage=coverage,
-        loop=loop,
+        origin=origin,
         raw_db=raw_db,
         raw_accession=raw_acc,
         details=details,
@@ -252,7 +257,7 @@ def _dedup(links: Iterable[Xref]) -> list[Xref]:
     seen = set()
     out = []
     for x in links:
-        key = (x.db, x.accession or x.raw_accession, x.source, x.loop)
+        key = (x.db, x.accession or x.raw_accession, x.source, x.origin)
         if key not in seen:
             seen.add(key)
             out.append(x)
@@ -270,8 +275,13 @@ class EntryXrefs:
         """The chain's links: its entity's own plus the entry-level ones,
         de-duplicated, ordered UniProt before PDB, then by ``SOURCES``, then in
         deposited order (for BLAST hits, the BMRB's ``Ordinal``)."""
-        links = self.entity.get(str(entity_id), []) + self.entry
-        return sorted(_dedup(links), key=_sort_key)
+        return rank_links(self.entity.get(str(entity_id), []) + self.entry)
+
+
+def rank_links(links: Iterable[Xref]) -> list[Xref]:
+    """De-duplicate and order links: UniProt before PDB, then by ``SOURCES``,
+    then in the order given (stable)."""
+    return sorted(_dedup(links), key=_sort_key)
 
 
 def parse_xrefs(entry: pynmrstar.Entry) -> EntryXrefs:
@@ -337,9 +347,10 @@ def _is_full_match(x: Xref) -> bool:
 def uniprot_ids(links: Iterable[Xref]) -> tuple[list[str], str | None]:
     """The chain's own UniProt accessions at the best evidence level it has.
 
-    The author-supplied accessions, if there are any; else every non-author
-    accession (``unspecified`` or ``blast``) that is 100 % identical over 100 %
-    of the chain. Several such accessions are usually one sequence in several
+    The author-supplied accessions, if there are any; else the ``sifts``
+    accessions of the sequence-matched chain of the entry's own structure; else
+    every remaining accession (``unspecified`` or ``blast``) that is 100 %
+    identical over 100 % of the chain. Several such accessions are usually one sequence in several
     species or strains: all are listed, unranked, so a join on any of them
     hits. A hit below that bar is a homolog or a fragment match and is never
     listed (``xrefs`` keeps it). Returns ``(accessions, source)`` with the
@@ -350,6 +361,8 @@ def uniprot_ids(links: Iterable[Xref]) -> tuple[list[str], str | None]:
         key=_sort_key,
     )
     tier = [x for x in ranked if x.source in ("exact", "author")]
+    if not tier:
+        tier = [x for x in ranked if x.source == "sifts"]
     if not tier:
         tier = [x for x in ranked if _is_full_match(x)]
     accessions = list(dict.fromkeys(x.accession for x in tier))

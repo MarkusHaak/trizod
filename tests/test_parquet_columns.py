@@ -847,3 +847,77 @@ def test_xrefs_round_trip_through_parquet(xref_bundle, tmp_path):
     meta = table.schema.metadata
     assert b"blast" in meta[b"xrefs_semantics"]
     assert meta[b"xrefs_snapshot"] == b"2026-11-11"
+
+
+def _write_xref_sources(directory, *, match, seqres, sifts):
+    """A dated-source directory with a valid manifest (see test_xref_sources)."""
+    import gzip
+    import hashlib
+
+    from trizod.bmrb import xref_sources as xs
+
+    directory.mkdir()
+    (directory / xs.BMRB_PDB_MATCH).write_text(match)
+    with gzip.open(directory / xs.SEQRES, "wt") as fh:
+        fh.write(seqres)
+    with gzip.open(directory / xs.SIFTS, "wt") as fh:
+        fh.write(sifts)
+    files = {
+        name: {
+            "url": f"https://example.org/{name}",
+            "sha256": hashlib.sha256((directory / name).read_bytes()).hexdigest(),
+        }
+        for name in (xs.BMRB_PDB_MATCH, xs.SEQRES, xs.SIFTS)
+    }
+    (directory / xs.MANIFEST).write_text(json.dumps({"files": files}))
+    return directory
+
+
+@pytest.fixture
+def external(xref_bundle, tmp_path):
+    from trizod.bmrb import xref_sources as xs
+
+    sources = _write_xref_sources(
+        tmp_path / "xref_sources",
+        # 1ABC is already the snapshot's exact entry; 7XYZ only BMRB knows
+        match="12345,1ABC\n12345,7XYZ\n",
+        seqres=">1abc_A mol:protein length:4  X\nAAAA\n"
+        ">1abc_B mol:protein length:6  Y\nWWWWWW\n",
+        sifts="PDB\tCHAIN\tSP_PRIMARY\n1abc\tA\tP0CG48\n1abc\tB\tQ99999\n",
+    )
+    return xs.ExternalSources.load(sources, ["12345"], extra_pdb_ids=["1ABC"])
+
+
+def test_external_sources_add_sifts_uniprot_and_matched_pdb_entries(
+    xref_bundle, external
+):
+    bundle, xrefs = xref_bundle
+    cols = builder.collect_columns(bundle, None, xrefs=xrefs, external=external)
+    # entity 2 has no UniProt link of its own: SIFTS of the matched chain fills it
+    links = _one(cols, "xrefs", 1)
+    sifts = [x for x in links if x["source"] == "sifts"]
+    assert [(x["accession"], x["origin"]) for x in sifts] == [("P0CG48", "sifts")]
+    assert sifts[0]["details"] == "1ABC chain A"
+    assert _one(cols, "uniprot_ids", 1) == ["P0CG48"]
+    assert _one(cols, "uniprot_source", 1) == "sifts"
+    # BMRB IDs <= 15000: a match-file-only PDB entry is 'unspecified', and is
+    # not added a second time where the snapshot already says 'exact'
+    pdb = [(x["accession"], x["source"]) for x in links if x["db"] == "PDB"]
+    assert pdb == [("1ABC", "exact"), ("7XYZ", "unspecified")]
+    # the author accession still wins on entity 1
+    assert _one(cols, "uniprot_ids", 0) == ["P04156"]
+    # an entry that was not read stays null even with external sources
+    assert _one(cols, "xrefs", 2) is None
+
+
+def test_external_sources_are_recorded_in_the_file(xref_bundle, external, tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    bundle, xrefs = xref_bundle
+    out = tmp_path / "x.parquet"
+    builder.build(bundle, out, None, xrefs=xrefs, external=external)
+    meta = pq.read_schema(out).metadata
+    recorded = json.loads(meta[b"xref_sources"])
+    assert "adit_nmr_matched_pdb_bmrb_entry_ids.csv" in recorded["files"]
+    assert recorded["min_identity"] == 95.0
+    builder.build(bundle, out, None, xrefs=xrefs)
+    assert b"snapshot only" in pq.read_schema(out).metadata[b"xref_sources"]

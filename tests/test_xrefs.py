@@ -115,7 +115,7 @@ def parsed():
 
 
 def _key(x):
-    return (x.db, x.accession, x.source, x.loop)
+    return (x.db, x.accession, x.source, x.origin)
 
 
 # --------------------------------------------------------------------------- #
