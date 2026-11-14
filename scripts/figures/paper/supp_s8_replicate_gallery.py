@@ -236,10 +236,13 @@ def profiles_on_seed(
     return pd.DataFrame(rows)
 
 
-def gallery(df: pd.DataFrame) -> tuple[list, int]:
+def gallery(df: pd.DataFrame, shown: set[str] = frozenset()) -> tuple[list, int]:
+    """Seeded draw of replicate groups; sequences already drawn in panels a-c
+    (``shown``: ubiquitin and every member of the two case clusters) are not eligible,
+    so the gallery never repeats them (TS review, 14 Nov 2026)."""
     nb = df[~df.is_bound.astype(bool)]
     n_ent = nb.groupby("sequence").entry_id.nunique()
-    eligible = sorted(n_ent[n_ent >= MIN_ENTRIES].index)
+    eligible = sorted(s for s in n_ent[n_ent >= MIN_ENTRIES].index if s not in shown)
     rng = np.random.default_rng(GALLERY_SEED)
     pick = [
         eligible[i] for i in sorted(rng.choice(len(eligible), N_GALLERY, replace=False))
@@ -454,7 +457,13 @@ def main() -> None:
             rows.append({"seed": seed, "chain_id": r.id, "entry_id": r.entry_id, "fident": r.fident,
                          "is_bound": r.is_bound, "perturbed": r.perturbed, "k_class": r.k_class,
                          "split": r.split})  # fmt: skip
-    gal, n_eligible = gallery(df)
+    shown = {f1a.UBQ} | {
+        df_idx.loc[c, "sequence"]
+        for P in cases.values()
+        for c in P.id
+        if c in df_idx.index
+    }
+    gal, n_eligible = gallery(df, shown)
     nb = df[~df.is_bound.astype(bool)]
     by_seq = {s: nb[nb.sequence == s] for s in gal}
     print(

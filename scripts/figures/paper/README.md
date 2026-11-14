@@ -143,7 +143,7 @@ commit); the output names already follow the new numbering.
 | | b one chain record | `fig1b_record.py` (`fig1b.pdf`) |
 | | c scale against CheZOD1325 | `fig1c_scale.py` (`fig1c.pdf`) |
 | Table 1 | obstacle, remedy, columns | LaTeX only (`sections/table1.tex`) |
-| Fig. 2 | a pH x temperature, b annotations per tier, c shifts by nucleus, d repeated measurements | `fig2_composition.py` (`fig2_composition.pdf`) |
+| Fig. 2 | a pH x temperature, b annotations per tier, c shifts by atom type (scoring atoms vs other atoms), d repeated measurements | `fig2_composition.py` (`fig2_composition.pdf`) |
 | Fig. 3 | a CheZOD reproduction | `fig2c_chezod.py` (`fig3a_chezod.pdf`) |
 | | b same residue, different shift count | `fig2a_kpaired.py` (`fig3b_kpaired.pdf`) |
 | | c ubiquitin | `fig1a_ubiquitin.py` (`fig3c_ubiquitin.pdf`) |
@@ -160,8 +160,8 @@ Retired on 12 Nov 2026: Suppl. Fig. S19 (now Fig. 4d) and Suppl. Table T13 (now 
 | `scripts/manuscript/make_numbers.py` | `numbers.tex`, `numbers_index.md` (in `--out-dir`) | the whole build, CheZOD, PANAV, raw BMRB, the build's `tmp/bmrb_entries`, `sidechain-coverage.md`, `docs/filtering.md` | registry dump in `--work-dir` |
 | `fig1b_record.py` | Fig. 1b (`fig1b.pdf`), anatomy of one chain record: shift, side-chain, k and G tracks plus a key-value card; the chain is chosen by a fixed rule (`select_example`) | Parquet, shifts Parquet, raw-scan cache (optional check that the card's conditions were deposited) | `source_data/fig1b.csv`, `fig1b_rule.csv` |
 | `fig1c_scale.py` | Fig. 1c (`fig1c.pdf`), TriZOD vs CheZOD1325 in chains, residues and clusters | Parquet, CheZOD1325 + CheZOD117 sequences, MMseqs2 | `source_data/fig1c.csv` |
-| `fig2_composition.py` | Fig. 2a-d (`fig2_composition.pdf`): pH x temperature with tier windows, annotations per tier, shifts by nucleus, repeated measurements (`--refresh`) | Parquet, shifts Parquet, tiers, raw scan | `source_data/fig2{a,b,c,d}*.csv`, `fig2_summary.json` |
-| `fig2c_chezod.py` | Fig. 3a (`fig3a_chezod.pdf`), MAE vs CheZOD1325 without and with LACS (`--potenci-only PATH`) | CheZOD1325, `interim/chezod_verification/trizod_potenci_only.json`, unfiltered tier | `source_data/fig3a_chezod.csv` |
+| `fig2_composition.py` | Fig. 2a-d (`fig2_composition.pdf`): pH x temperature with tier windows, annotations per tier, shifts by atom type, repeated measurements (`--refresh` re-reads the raw condition rows; use it after a new snapshot, since a stale `$TRIZOD_CACHE_DIR` scan gives wrong ionic-strength counts) | Parquet, shifts Parquet, tiers, raw scan | `source_data/fig2{a,b,c,d}*.csv`, `fig2_summary.json` |
+| `fig2c_chezod.py` | Fig. 3a (`fig3a_chezod.pdf`), MAE vs CheZOD1325 without and with LACS (`--potenci-only PATH`) | CheZOD1325, a LACS-off run (`--potenci-only`; the paper uses `interim/chezod_verification_2026-11-12/trizod_potenci_only.json`, run on the release code), unfiltered tier | `source_data/fig3a_chezod.csv` |
 | `fig2a_kpaired.py` | Fig. 3b (`fig3b_kpaired.pdf`), within-residue shift-count test (`--replot` redraws from the CSV) | Parquet | `source_data/fig3b_kpaired.csv` |
 | `fig1a_ubiquitin.py` | Fig. 3c (`fig3c_ubiquitin.pdf`), ubiquitin Z/G profiles of the native-condition chains | Parquet, tiers, raw BMRB (ubiquitin entries) | `source_data/fig3c_ubiquitin*.csv` |
 | `fig3b_conditions.py` | Fig. 4a (`fig4a.pdf`), same vs different conditions; Fig. 4d (`fig4d.pdf`), annotations of the chains strict filtering removes | Parquet, tiers, raw scan | `source_data/fig4a.csv`, `fig4d.csv`; `fig3_data/fig3b*` |

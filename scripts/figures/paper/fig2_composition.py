@@ -11,18 +11,21 @@ Panels
      grey hexagon density (log colour scale, chains per hexagon), with the condition
      windows of the tolerant, moderate and strict tiers (``filter_defaults``; the
      unfiltered tier has none) as nested outlines. Chains without a deposited pH or
-     temperature hold a default in the release (pH 7.0, 298 K; not yet flagged); they are
-     drawn apart, in the row and column marked "none", never inside the density.
-  b  Share of each tier's chains with each annotation (dot plot, one row per annotation,
-     the tier ramp light -> dark, log axis with zero drawn at its own tick); the chain
-     count in the release is printed at the right.
-  c  The released shifts (``trizod_shifts.parquet``) by nucleus, backbone (the atom IDs
-     the scorer reads; filled) against side chain (open), counts in millions printed. No
-     offset shading: re-referencing is not this figure's message.
+     temperature hold a default in the release (pH 7.0, 298 K); they are drawn apart, in
+     the row and column marked "none", never inside the density.
+  b  Share of each tier's chains with each annotation, as a table: one row per
+     annotation, one column per tier (a strip of the tier colour above each column), the
+     share printed in every cell and shaded by it (grey, log scale); the chain count of
+     the release at the right. Since 13 Nov 2026 (TS: which marker belongs to which
+     annotation was hard to see in the dot plot).
+  c  The released shifts (``trizod_shifts.parquet``) per atom type: the seven scoring
+     atom types (``is_backbone`` rows: H, Hα (HA, HA2, HA3), Hβ (HB, HB1-3), Cα, Cβ, C′,
+     N; filled) and all other atoms of each nucleus (open), in millions. Since 13 Nov 2026
+     (TS: the caption named seven types, the old bars showed three nuclei).
   d  Repeated measurements: exact sequences by the number of BMRB entries that measured
      them (all chains, bound ones included; ``release_stats.repeat_histogram``), log-log
-     dots. The region of sequences measured in two or more entries is shaded and labelled
-     with both its uses.
+     dots, with the count of sequences measured in two or more entries and their two
+     uses written in the empty corner (no shading since 13 Nov 2026).
 
 "Deposited" follows the pipeline: the paper's one definition,
 ``paper_raw_scan.chain_deposited`` (the chain's own condition rows read with
@@ -35,7 +38,8 @@ same definition feeds Supplementary Fig. S4, the condition comparison of Fig. 4a
 
 Run:  uv run --extra figures --with pyarrow python scripts/figures/paper/fig2_composition.py \
           --out-dir <draft>/Figures/paper [--refresh]
-Outputs: <out-dir>/fig2_composition.pdf and <out-dir>/source_data/fig2{a,b,c,d}*.csv,
+Outputs: <out-dir>/fig2_composition.pdf and <out-dir>/source_data/fig2{a,b,c,d}*.csv
+(panel c: fig2c_atom_types.csv, plotted; fig2c_shifts.csv, totals per nucleus),
 fig2_summary.json.
 """
 
@@ -56,7 +60,6 @@ import supp_s4_conditions as s4  # noqa: E402
 from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib import patheffects as pe  # noqa: E402
 from matplotlib import ticker  # noqa: E402
-from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 
 TIERS = sp.TIERS
@@ -92,7 +95,6 @@ DENSITY_CMAP = mcolors.LinearSegmentedColormap.from_list(
 # layout (mm): two rows of 52 mm; in every panel the plot's bottom edge sits AX_BOTTOM
 # below the row top, so the x axes of a and b (and of c and d) line up
 ROW_H, ROW_GAP, AX_BOTTOM = 52.0, 2.0, 42.0
-SHADE = "#EFEFEF"  # background of the "measured in >= 2 entries" region (not an entity)
 HALO = [pe.withStroke(linewidth=1.8, foreground="white")]
 UBQ_LABEL = rst.LABELS[rst.UBQ]  # "ubiquitin"
 
@@ -221,9 +223,9 @@ def draw_a(fig, box, df, summ):
                 phi - plo,
                 fill=False,
                 ec=sp.TIER_COLORS[t],
-                lw=1.1,
+                lw=1.7,
                 zorder=4,
-                path_effects=[pe.withStroke(linewidth=2.0, foreground="white")],
+                path_effects=[pe.withStroke(linewidth=2.7, foreground="white")],
             )
         )
         txt = ax.text(
@@ -292,147 +294,177 @@ def draw_a(fig, box, df, summ):
     return ax
 
 
-def draw_b(fig, box, tab):
-    """Annotation shares per tier: dot plot on a log axis with a zero slot."""
+def _panel_mm_axes(fig, box):
+    """An invisible axes over the whole panel, in mm from its top-left corner."""
     x0, y0, W_, H_ = box
     FW, FH = fig.get_size_inches() / sp.MM
-    lab_w, n_w = 21.0, 9.0
-    h = 31.0
-    top = y0 + AX_BOTTOM - h
-    ax = fig.add_axes(
-        [(x0 + lab_w) / FW, 1 - (top + h) / FH, (W_ - lab_w - n_w) / FW, h / FH]
-    )
-    rows = ANNOT_ROWS + MISSING_ROWS
-    zero_x, lo, hi = 0.055, 0.042, 60.0
-    nrow = len(rows)
-    dy = 0.22  # tier dodge within a row: the four markers no longer overlap (review 12)
-    for i, (key, label) in enumerate(rows):
-        yc = nrow - 1 - i + (0.0 if i < len(ANNOT_ROWS) else -0.25)
-        sub = tab[tab.column == key].set_index("tier")
-        for j, t in enumerate(TIERS):
-            v = sub.loc[t, "share_pct"]
-            ax.plot(
-                zero_x if v == 0 else v,
-                yc + (1.5 - j) * dy,
-                ls="",
-                marker=sp.TIER_MARKERS[t],
-                color=sp.TIER_COLORS[t],
-                mec=sp.TIER_COLORS[t],
-                ms=3.0,
-                mew=0.6,
-                zorder=3,
-                clip_on=False,
-            )
-        ax.text(-0.03, yc, label, transform=ax.get_yaxis_transform(), ha="right",
-                va="center", fontsize=sp.FS_TICK)  # fmt: skip
-        n_rel = int(sub.loc["unfiltered", "chains"])
-        ax.text(1.0 + n_w / (W_ - lab_w - n_w), yc, f"{n_rel:,}",
-                transform=ax.get_yaxis_transform(), ha="right", va="center",
-                fontsize=sp.FS_TICK)  # fmt: skip
-        ax.axhline(yc, color="#EEEEEE", lw=0.4, zorder=0)
-    ysep = nrow - len(ANNOT_ROWS) - 0.5 - 0.12
-    ax.axhline(ysep, color=sp.CAT["light"], lw=0.5, zorder=0)
-    ax.set_xscale("log")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(-0.25 - 0.8, nrow - 0.45)
+    ax = fig.add_axes([x0 / FW, 1 - (y0 + H_) / FH, W_ / FW, H_ / FH])
+    ax.set_xlim(0, W_)
+    ax.set_ylim(H_, 0)
+    ax.set_xticks([])
     ax.set_yticks([])
-    ax.spines["left"].set_visible(False)
-    ax.xaxis.set_major_locator(ticker.FixedLocator([zero_x, 0.1, 1, 10]))
-    ax.xaxis.set_major_formatter(ticker.FixedFormatter(["0", "0.1", "1", "10"]))
-    ax.xaxis.set_minor_locator(
-        ticker.FixedLocator([v for d in (0.1, 1, 10) for v in d * np.arange(2, 10)])
-    )
-    ax.xaxis.set_minor_formatter(ticker.NullFormatter())
-    # axis break between the zero slot and 0.1
-    for xb in (0.068, 0.074):
-        ax.plot([xb / 1.03, xb * 1.03], [-0.035, 0.035], transform=ax.get_xaxis_transform(),
-                color=sp.INK, lw=0.6, clip_on=False)  # fmt: skip
-    ax.set_xlabel("Chains in the tier (%)")
-    # header of the count column
-    ax.text(1.0 + n_w / (W_ - lab_w - n_w), 1.0, "All chains", transform=ax.transAxes,
-            ha="right", va="bottom", fontsize=sp.FS_TICK)  # fmt: skip
-    # tier key (one entity, four ordered levels), above the plot
-    handles = [
-        Line2D(
-            [],
-            [],
-            ls="",
-            marker=sp.TIER_MARKERS[t],
-            color=sp.TIER_COLORS[t],
-            ms=3.0,
-            mew=0.6,
-            label=t,
-        )  # fmt: skip
-        for t in TIERS
-    ]
-    fig.legend(
-        handles=handles,
-        loc="upper left",
-        bbox_to_anchor=((x0 + 5.0) / FW, 1 - (y0 + 0.2) / FH),
-        ncol=4,
-        handletextpad=0.1,
-        columnspacing=0.9,
-        borderaxespad=0,
-        borderpad=0,
-        frameon=False,
-    )
+    ax.set_axis_off()
+    return ax
+
+
+def share_text(v: float) -> str:
+    """Cell text of panel b: the share in per cent, two significant digits at most."""
+    if v == 0:
+        return "0"
+    if v < 0.1:
+        return "<0.1"
+    return f"{v:.1f}" if v < 10 else f"{v:.0f}"
+
+
+def share_color(v: float) -> str:
+    """Cell fill of panel b: light to mid grey with the share (log, 0.1 to 50 %)."""
+    if v == 0:
+        return "white"
+    t = (np.log10(max(v, 0.1)) + 1) / (np.log10(50.0) + 1)
+    return mcolors.to_hex(sp.plt.get_cmap("Greys")(0.04 + 0.44 * min(t, 1.0)))
+
+
+def draw_b(fig, box, tab):
+    """Annotation shares per tier as a table: one row per annotation, one column per
+    tier (a strip of the tier colour above each column), the share printed in every cell
+    and shaded by it; the chain count of the release at the right."""
+    x0, y0, W_, H_ = box
+    ax = _panel_mm_axes(fig, box)
+    lab_x = 22.6  # right edge of the row labels
+    c0, cw, cg = 23.6, 11.3, 0.4  # first cell, cell width, gap
+    n_x = W_ - 0.3  # right edge of the count column
+    top, rh, sep = 11.4, 4.3, 1.6  # first row top, row height, gap before "missing"
+    cx = [c0 + j * (cw + cg) + cw / 2 for j in range(len(TIERS))]
+    # header: what the cells hold, then the tier names on a strip of their colour
+    ax.text((c0 + cx[-1] + cw / 2) / 2, 4.2, "Share of the tier's chains (%)",
+            ha="center", va="baseline", fontsize=sp.FS_BODY)  # fmt: skip
+    for j, t in enumerate(TIERS):
+        ax.text(cx[j], 8.2, t, ha="center", va="baseline", fontsize=sp.FS_BODY)
+        ax.add_patch(Rectangle((cx[j] - cw / 2, 9.2), cw, 1.2, color=sp.TIER_COLORS[t],
+                               lw=0))  # fmt: skip
+    ax.text(n_x, 8.2, "Chains", ha="right", va="baseline", fontsize=sp.FS_BODY)
+    rows = ANNOT_ROWS + MISSING_ROWS
+    for i, (key, label) in enumerate(rows):
+        y = top + i * rh + (sep if i >= len(ANNOT_ROWS) else 0.0)
+        yc = y + rh / 2
+        sub = tab[tab.column == key].set_index("tier")
+        ax.text(lab_x, yc, label, ha="right", va="center", fontsize=sp.FS_BODY)
+        for j, t in enumerate(TIERS):
+            v = float(sub.loc[t, "share_pct"])
+            ax.add_patch(Rectangle((cx[j] - cw / 2, y + 0.2), cw, rh - 0.4,
+                                   facecolor=share_color(v), edgecolor="#D9D9D9",
+                                   lw=0.4 if v == 0 else 0))  # fmt: skip
+            ax.text(cx[j], yc, share_text(v), ha="center", va="center",
+                    fontsize=sp.FS_BODY, color=sp.INK if v else sp.INK_SOFT)  # fmt: skip
+        n_rel = int(sub.loc["unfiltered", "chains"])
+        ax.text(n_x, yc, f"{n_rel:,}", ha="right", va="center", fontsize=sp.FS_BODY)
+    ysep = top + len(ANNOT_ROWS) * rh + sep / 2
+    ax.plot([1.0, n_x], [ysep, ysep], color=sp.CAT["light"], lw=0.5)
     sp.fig_label(fig, "b", x0, y0)
     return ax
 
 
-def _isotope_label(ax, y: float, nucleus: str) -> None:
-    """Row label of panel c: the element at 7 pt, its mass number raised at 6 pt."""
+# panel c: the seven scoring atom types (the shift table's is_backbone rows) and all
+# other atoms, grouped by nucleus; (row label, atom IDs or None for "all other atoms")
+ATOM_ROWS = {
+    "H": [("H", ("H",)), ("Hα", ("HA", "HA2", "HA3")),
+          ("Hβ", ("HB", "HB1", "HB2", "HB3")), ("other", None)],
+    "C": [("Cα", ("CA",)), ("Cβ", ("CB",)), ("C′", ("C",)), ("other", None)],
+    "N": [("N", ("N",)), ("other", None)],
+}  # fmt: skip
+
+
+def atom_type_table() -> pd.DataFrame:
+    """Panel c: released shifts per scoring atom type, and all other atoms per nucleus."""
+    import pyarrow.parquet as pq
+
+    sh = pq.read_table(
+        sp.PQ_SHIFTS, columns=["atom_id", "atom_type", "is_backbone"]
+    ).to_pandas()
+    bb = sh[sh.is_backbone.astype(bool)].atom_id.astype(str).value_counts()
+    other = sh[~sh.is_backbone.astype(bool)].atom_type.astype(str).value_counts()
+    rows = []
+    for nuc, items in ATOM_ROWS.items():
+        for label, atoms in items:
+            if atoms is None:
+                n, scoring = int(other.get(nuc, 0)), False
+            else:
+                n, scoring = int(sum(bb.get(a, 0) for a in atoms)), True
+            rows.append({"nucleus": nuc, "row": label, "scoring_atom_type": scoring,
+                         "atom_ids": "" if atoms is None else ";".join(atoms),
+                         "shifts": n})  # fmt: skip
+    out = pd.DataFrame(rows)
+    assert int(out.shifts.sum()) == len(sh), "atom IDs outside the seven types"
+    return out
+
+
+def _isotope_label(ax, y: float, nucleus: str, x: float = -0.02) -> None:
+    """Group label of panel c: the element at 7 pt, its mass number raised at 6 pt."""
     from matplotlib.transforms import offset_copy
 
     tr = ax.get_yaxis_transform()
-    t = ax.text(-0.02, y, nucleus, transform=tr, ha="right", va="center",
+    t = ax.text(x, y, nucleus, transform=tr, ha="right", va="center",
                 fontsize=sp.FS_TICK)  # fmt: skip
     fig = ax.figure
     fig.canvas.draw()
     w_mm = t.get_window_extent().width / fig.dpi / sp.MM
-    ax.text(-0.02, y, MASS_NUMBER[nucleus], ha="right", va="bottom", fontsize=sp.FS_SMALL,
+    ax.text(x, y, MASS_NUMBER[nucleus], ha="right", va="bottom", fontsize=sp.FS_SMALL,
             transform=offset_copy(tr, fig=fig, x=-(w_mm + 0.15) * sp.MM, y=0.25 * sp.MM,
                                   units="inches"))  # fmt: skip
 
 
-def draw_c(fig, box, st):
-    """Shifts by nucleus: backbone (filled) and side chain (open) stacked bars."""
+def draw_c(fig, box, at):
+    """Shifts per atom type: the seven scoring atom types filled, other atoms open."""
     x0, y0, W_, H_ = box
     FW, FH = fig.get_size_inches() / sp.MM
-    h = 34.0
-    left, top, w = x0 + 10.0, y0 + AX_BOTTOM - h, W_ - 10.0 - 3.0
+    h = 33.0
+    left, top, w = x0 + 17.0, y0 + AX_BOTTOM - h, W_ - 17.0 - 6.0
     ax = fig.add_axes([left / FW, 1 - (top + h) / FH, w / FW, h / FH])
-    ys = np.array([2, 1, 0])
-    bh = 0.62
-    fill = sp.INK_SOFT
-    for y, r in zip(ys, st.itertuples()):
-        b, s = r.backbone / 1e6, r.side_chain / 1e6
-        ax.barh(y, b, height=bh, color=fill, ec=fill, lw=0.6)
-        ax.barh(y, s, left=b, height=bh, color="white", ec=fill, lw=0.6)
-        ax.text(b / 2, y, f"{b:.2f}", ha="center", va="center", color="white",
-                fontsize=sp.FS_TICK)  # fmt: skip
-        if s > 0.6:
-            ax.text(b + s / 2, y, f"{s:.2f}", ha="center", va="center", color=sp.INK,
-                    fontsize=sp.FS_TICK)  # fmt: skip
-        else:
-            ax.text(b + s + 0.08, y, f"{s:.2f}", ha="left", va="center", color=sp.INK,
-                    fontsize=sp.FS_TICK)  # fmt: skip
-        _isotope_label(ax, y, r.nucleus)
-    # direct labels of the two classes, over the top bar
-    r0 = st.iloc[0]
-    # the seven atom types the G-score uses (backbone plus C-beta and H-beta) and all
-    # other atoms (review_burkhard 2.2: "backbone" misnamed C-beta and H-beta)
-    ax.text(r0.backbone / 2e6, 2 + bh / 2 + 0.08, "scoring atoms", ha="center",
-            va="bottom", fontsize=sp.FS_BODY)  # fmt: skip
-    ax.text(r0.backbone / 1e6 + r0.side_chain / 2e6, 2 + bh / 2 + 0.08, "other atoms",
-            ha="center", va="bottom", fontsize=sp.FS_BODY)  # fmt: skip
-    ax.set_yticks([])
+    fill, bh, ggap = sp.INK_SOFT, 0.68, 0.7
+    ys, y, groups = [], 0.0, {}
+    for nuc, items in ATOM_ROWS.items():
+        g = []
+        for _ in items:
+            ys.append(y)
+            g.append(y)
+            y += 1.0
+        groups[nuc] = float(np.mean(g))
+        y += ggap
+    for yy, r in zip(ys, at.itertuples()):
+        v = r.shifts / 1e6
+        kw = ({"color": fill, "ec": fill} if r.scoring_atom_type
+              else {"color": "white", "ec": fill})  # fmt: skip
+        ax.barh(yy, v, height=bh, lw=0.6, **kw)
+        ax.text(v + 0.05, yy, f"{v:.2f}", ha="left", va="center", fontsize=sp.FS_TICK)
+    ax.set_yticks(ys)
+    ax.set_yticklabels(at.row)
+    ax.tick_params(axis="y", length=0, pad=2)
+    for nuc, yc in groups.items():
+        _isotope_label(ax, yc, nuc, x=-0.17)
+    for nuc in list(groups)[1:]:  # thin rules between the nucleus groups
+        yb = (
+            min(yy for yy, r in zip(ys, at.itertuples()) if r.nucleus == nuc)
+            - 0.5
+            - ggap / 2
+        )
+        ax.plot([-0.25, 1.0], [yb, yb], transform=ax.get_yaxis_transform(),
+                color="#E6E6E6", lw=0.4, clip_on=False)  # fmt: skip
+    ax.set_ylim(ys[-1] + 0.6, ys[0] - 0.6)
     ax.spines["left"].set_visible(False)
-    ax.set_ylim(-0.5, 2.85)
-    xmax = float(np.ceil(st.total.max() / 1e6))
-    ax.set_xlim(0, xmax)
+    ax.set_xlim(0, 3.0)
     ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
     ax.set_xlabel("Shifts (millions)")
+    # key: filled = scoring atom types, open = other atoms (above the plot)
+    handles = [
+        Rectangle((0, 0), 1, 1, facecolor=fill, edgecolor=fill, lw=0.6,
+                  label="scoring atom types"),
+        Rectangle((0, 0), 1, 1, facecolor="white", edgecolor=fill, lw=0.6,
+                  label="other atoms"),
+    ]  # fmt: skip
+    fig.legend(handles=handles, loc="upper left",
+               bbox_to_anchor=((x0 + 5.0) / FW, 1 - (y0 + 0.2) / FH), ncol=2,
+               handlelength=1.2, handleheight=0.8, handletextpad=0.4, columnspacing=1.2,
+               borderaxespad=0, borderpad=0, frameon=False)  # fmt: skip
     sp.fig_label(fig, "c", x0, y0)
     return ax
 
@@ -446,7 +478,6 @@ def draw_d(fig, box, rh: rst.RepeatHistogram, stats: dict):
     ax = fig.add_axes([left / FW, 1 - (top + h) / FH, w / FW, h / FH])
     hist = rh.hist
     xlo, xhi = 0.75, 62
-    ax.axvspan(1.5, xhi, color=SHADE, lw=0, zorder=0)
     ax.plot(hist.n_entries, hist.n_sequences, **sp.marker_kw("release", ms=3.2),
             zorder=3, clip_on=False)  # fmt: skip
     ax.set_xscale("log")
@@ -461,13 +492,13 @@ def draw_d(fig, box, rh: rst.RepeatHistogram, stats: dict):
     ax.yaxis.set_minor_formatter(ticker.NullFormatter())
     ax.set_xlabel("BMRB entries that measured the sequence")
     ax.set_ylabel("Sequences")
-    # the region and its two uses, in the empty upper right
-    ax.text(0.985, 0.97,
-            f"Measured in ≥2 entries:\n{stats['n_seqs_multi_entry']:,} sequences, "
-            f"{stats['n_chains_multi_entry']:,} chains\n"
-            "→ leakage risk (Fig. 5)\n→ replicates (Figs. 3b, 4)",
-            transform=ax.transAxes, ha="right", va="top", fontsize=sp.FS_BODY,
-            linespacing=1.15)  # fmt: skip
+    # the repeated sequences: one bracket over every dot at 2 or more entries, with
+    # their count (the legend gives the chains and the uses; no prose in the panel)
+    yb = 3000.0
+    ax.plot([2, 2, 50, 50], [yb / 1.35, yb, yb, yb / 1.35], color=sp.INK_SOFT, lw=0.5,
+            zorder=2, clip_on=False)  # fmt: skip
+    ax.text(50, yb * 1.25, f"2 or more entries: {stats['n_seqs_multi_entry']:,}",
+            ha="right", va="bottom", fontsize=sp.FS_BODY)  # fmt: skip
     # the most-measured sequences, named (the two at the maximum, and ubiquitin)
     # (from repeat_stats, so the labels never depend on how many rows rh.top keeps);
     # common names in lower case ("Calmodulin" -> "calmodulin"), as in the text
@@ -483,6 +514,10 @@ def draw_d(fig, box, rh: rst.RepeatHistogram, stats: dict):
                 zorder=2)  # fmt: skip
         ax.text(n_e * 1.04, y_txt, text, ha="right", va="bottom", fontsize=sp.FS_BODY,
                 linespacing=1.05)  # fmt: skip
+    # "measured once": the single largest group, named at its point
+    y1 = int(hist.loc[hist.n_entries == 1, "n_sequences"].iloc[0])
+    ax.text(1.12, y1, f"measured once: {y1:,}", ha="left", va="center",
+            fontsize=sp.FS_BODY)  # fmt: skip
     sp.fig_label(fig, "d", x0, y0)
     return ax
 
@@ -506,6 +541,7 @@ def main():
         }
     tab = annotation_table(df)
     st = shift_table()
+    at = atom_type_table()
     rh = rst.repeat_histogram()
     stats = rst.repeat_stats()
     summ["repeat_stats"] = stats
@@ -517,7 +553,7 @@ def main():
     row2 = ROW_H + ROW_GAP
     draw_a(fig, (0.0, 0.0, sp.W_SINGLE, ROW_H), df, summ)
     draw_b(fig, (col2, 0.0, sp.W_SINGLE, ROW_H), tab)
-    draw_c(fig, (0.0, row2, sp.W_SINGLE, ROW_H), st)
+    draw_c(fig, (0.0, row2, sp.W_SINGLE, ROW_H), at)
     draw_d(fig, (col2, row2, sp.W_SINGLE, ROW_H), rh, stats)
     out = sp.save(fig, NAME)
     print("wrote", out)
@@ -529,6 +565,7 @@ def main():
                                                  index=False)  # fmt: skip
     tab.to_csv(data_out / "fig2b_annotations.csv", index=False)
     st.to_csv(data_out / "fig2c_shifts.csv", index=False)
+    at.to_csv(data_out / "fig2c_atom_types.csv", index=False)
     rh.hist.to_csv(data_out / "fig2d_repeats.csv", index=False)
     rh.top.to_csv(data_out / "fig2d_top_sequences.csv", index=False)
     (data_out / "fig2_summary.json").write_text(json.dumps(summ, indent=1, default=int))

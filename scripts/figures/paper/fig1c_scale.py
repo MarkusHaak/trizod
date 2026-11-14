@@ -35,7 +35,7 @@ Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig1c_scale.py \
         --out-dir <draft>/Figures/paper
 Outputs: ``<out-dir>/fig1c.pdf`` (vector, ``W_DOUBLE`` - 105 - 3 = 52 mm wide and
-66 mm high, placed at 1:1 in the second row of Fig. 1 beside the 105-mm record of panel b,
+73 mm high, placed at 1:1 in the second row of Fig. 1 beside the 105-mm record of panel b,
 ``fig1b.pdf`` from ``fig1b_record.py``, with a 3-mm gap, so the two fill the 160-mm text
 width) and ``<out-dir>/source_data/fig1c.csv``; prints the plotted numbers and compares
 them with the macros of the draft's ``numbers.tex`` (``<out-dir>/../../numbers.tex``)
@@ -231,10 +231,10 @@ def compute(work: Path) -> pd.DataFrame:
 # both placed at 1:1, so 105 + 3 + 52 mm fill the 160-mm text width.
 PANEL_B_W = 105.0  # width of fig1b.pdf (fig1b_record.FIG_W)
 GAP_W = 3.0  # \hfill gap between panels b and c in sections/fig1.tex
-FIG_W, FIG_H = sp.W_DOUBLE - PANEL_B_W - GAP_W, 66.0  # height as fig1b_record.FIG_H
+FIG_W, FIG_H = sp.W_DOUBLE - PANEL_B_W - GAP_W, 73.0  # height as fig1b_record.FIG_H
 # axes box (left, top, width, height in mm): the top and bottom match the first track
 # and the residue axis of panel b, so the two x axes sit on one line
-AX_BOX = (14.0, 3.4, 35.5, 55.7)  # bottom 59.1 mm = fig1b_record.AXIS_BOTTOM
+AX_BOX = (14.0, 3.4, 35.5, 61.6)  # bottom 65.0 mm = fig1b_record.AXIS_BOTTOM
 XLIM = (7e2, 3e6)
 ROWS = [  # (quantity, row label), top to bottom
     ("chains", "Chains"),

@@ -262,20 +262,27 @@ def card_rows(row: pd.Series) -> list[tuple]:
 # ----------------------------------------------------------------------------------
 # Fig. 1 layout (story blueprint 10.1): a 160-mm-wide flow (panel a, TikZ) above, and in
 # the second row this panel beside panel c (fig1c.pdf), 3 mm apart, both placed at 1:1.
-FIG_W, FIG_H = 105.0, 66.0
+FIG_W, FIG_H = 105.0, 73.0
 X0, X1 = 7.0, 61.0  # track area, mm from the left edge
 CARD_X0, CARD_X1 = 64.0, 105.0  # the card
 # tracks: (top, height) in mm from the top edge; each header's baseline sits 0.9 mm above
 # its track, so the first header shares the baseline of the panel letter (2.5 mm)
 TRACKS = {
-    "bb": (3.4, 17.6),
-    "sc": (25.5, 6.2),
-    "k": (36.2, 6.2),
-    "g": (46.9, 12.2),
+    "bb": (3.4, 19.6),
+    "sc": (28.0, 6.5),
+    "k": (39.5, 6.5),
+    "g": (51.0, 14.0),
 }
-# the residue axis, 59.1 mm from the top; panel c puts its count axis on the same line
+# the residue axis, 65.0 mm from the top; panel c puts its count axis on the same line
 AXIS_BOTTOM = TRACKS["g"][0] + TRACKS["g"][1]
 LETTER_BASELINE = 2.5  # mm from the top, as the letters of panels a and c
+# which release table each track comes from, right-aligned on its header line (grey)
+SOURCES = {
+    "bb": "shift table",
+    "sc": "shift table",
+    "k": "chain table",
+    "g": "chain table",
+}
 HEADERS = {
     "bb": "Scoring-atom shifts",  # the seven atom types the G-score uses (Cβ, Hβ too)
     "sc": "Side-chain shifts",
@@ -287,7 +294,7 @@ CELL_OFF = "#EFEFEF"  # the row background: no shift (a neutral, not an entity c
 BAR = sp.INK_SOFT
 # white with a light outline (a neutral), as the boxes of panel a (fig1a_overview.tex)
 CARD_FILL, CARD_LINE = "white", sp.CAT["light"]
-PITCH = 3.2  # mm between card lines (7 pt text, 1.3 x leading)
+PITCH = 3.4  # mm between card lines (7 pt text, 1.3 x leading)
 # G-score track: unscored residues get a cross in a strip below G = 0, between the zero
 # line and the residue axis, so a cross never reads as a value (figure review item 15)
 UNSCORED_STRIP = -0.17  # bottom of the G axes (G units); the y spine starts at 0
