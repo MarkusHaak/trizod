@@ -5,7 +5,8 @@ a    The ubiquitin chains of Fig. 3c (``fig1a_ubiquitin.load_ubiquitin``: every 
      chain with the exact 76-residue sequence), now WITH the chains that Fig. 3c leaves
      out (since 12 Nov 2026, story blueprint 6.4 and 6.7): native chains coloured by
      their median k as in Fig. 3c, the perturbed ones (denaturant or alcohol, >= 400 bar,
-     non-native deposited state; ``fig1a_ubiquitin.NATIVE_RULE``, read from the raw
+     non-native deposited state, solid state, membrane mimetic;
+     ``fig1a_ubiquitin.NATIVE_RULE``, cosolvent and pressure read from the raw
      NMR-STAR files) light grey, with their condition written beside them. Until 12 Nov
      2026 panel a was the ubiquitin case cluster (seed 50330_1_1_1, the ``\\nCaseUbq*``
      macros); it is no longer drawn.
@@ -21,7 +22,8 @@ b, c The case-study clusters of the prion protein (16616_1_1_1) and alpha-synucl
      solution are coloured by their median shift count k (classes <= 6, 7-15, 16-21);
      chains measured in another sample type are light grey (``perturbed``: cosolvent
      evidence, a membrane mimetic, a solid-state sample, a non-native deposited physical
-     state, or a pressure of at least 400 bar).
+     state, or a pressure of at least 400 bar; ``style_paper.is_perturbed``, the rule of
+     panel a and Fig. 3a).
 d    A gallery of ``N_GALLERY`` replicate groups drawn with ``GALLERY_SEED`` from all
      sequences whose non-bound chains come from at least ``MIN_ENTRIES`` entries
      (exact sequence identity; sequences sorted lexicographically before the draw), each
@@ -80,11 +82,7 @@ GALLERY_SEED = 2026
 N_GALLERY = 12
 MIN_ENTRIES = 3
 # A chain is drawn grey ("other sample") when its sample is not a native protein in aqueous
-# solution: a cosolvent (denaturant, alcohol, ...), a membrane mimetic, the solid state, a
-# non-native deposited physical state, or a pressure of at least HIGH_PRESSURE_BAR.
-NON_NATIVE_STATES = {"denatured", "unfolded", "molten globule", "misfolded", "fibril",
-                     "fibrils", "amyloid fibril"}  # fmt: skip
-HIGH_PRESSURE_BAR = 400.0  # as Fig. 3c
+# solution: style_paper.is_perturbed, the rule of Fig. 3a.
 OTHER_LABEL = "cosolvent, micelles, solid state, high pressure or non-native state"
 CACHE = sp.TMP / "paper_figs" / "s8_cases"
 DATA_SUBDIR = "suppfigs_c_data"  # under --out-dir
@@ -141,15 +139,8 @@ def load() -> pd.DataFrame:
         ]  # fmt: skip
     )
     df["entry_id"] = df.entry_id.astype(str)
-    state = df.physical_state.fillna("").str.lower()
     # "perturbed" = another sample type than a native protein in aqueous solution
-    df["perturbed"] = (
-        df.cosolvent_evidence.fillna(False).astype(bool)
-        | state.isin(NON_NATIVE_STATES)
-        | (df.sample_state_evidence.fillna("") == "solid")
-        | df.membrane_mimetic.notna()
-        | (df.pressure_bar.fillna(0) >= HIGH_PRESSURE_BAR)
-    )
+    df["perturbed"] = sp.is_perturbed(df)
     med_k = []
     for k, m in zip(df.k, df["mask"]):
         k, m = np.asarray(k, float), np.asarray(m, bool)
@@ -344,19 +335,24 @@ def ubiquitin_rows(U: pd.DataFrame) -> list:
 
 def condition_groups(U: pd.DataFrame) -> list:
     """Direct labels of panel a: the perturbed chains grouped by what perturbs them (a
-    pressure of at least HIGH_PRESSURE_BAR first, else the first denaturant or alcohol
-    named in the sample, else the deposited state), with the median G of each group over
+    pressure of at least sp.HIGH_PRESSURE_BAR first, else the first denaturant or alcohol
+    named in the sample, else a solid-state sample or a membrane mimetic, else the deposited
+    state), with the median G of each group over
     the folded core (residues 2-71), where the label is placed. The full condition of
     every chain is in S8_ubiquitin_chains.csv."""
     P = U[~U.native.astype(bool)]
     groups: dict = {}
     for r in P.itertuples():
-        if pd.notna(r.pressure_bar) and r.pressure_bar >= HIGH_PRESSURE_BAR:
+        if pd.notna(r.pressure_bar) and r.pressure_bar >= sp.HIGH_PRESSURE_BAR:
             key = f"{r.pressure_bar:,.0f} bar"
         elif r.perturbants:  # (name, concentration, unit) of the first perturbant
             name, conc, unit = r.perturbants[0]
             unit = unit.strip()
             key = f"{float(conc):g}{'' if unit == '%' else ' '}{unit} {name}".strip()
+        elif str(r.sample_state_evidence) == "solid":
+            key = "solid state"
+        elif pd.notna(r.membrane_mimetic):
+            key = "membrane mimetic"
         else:
             key = f"{r.physical_state} state"
         groups.setdefault(key, []).append(
@@ -382,7 +378,7 @@ def plot(
     ag = _ax(fig, LEFT, CASE_TOP + CASE_H + 2.0, CASE_W, CASE_H)
     _draw_group(az, ag, np.arange(1, n + 1), ubiquitin_rows(U), lw=0.55)
     _style(az, ag, n, show_xlabel=True, ylab=True)
-    az.set_title("Ubiquitin (Fig. 3c), all unbound chains", fontsize=sp.FS_BODY, pad=2,
+    az.set_title("Ubiquitin (Fig. 3a), all unbound chains", fontsize=sp.FS_BODY, pad=2,
                  loc="left")  # fmt: skip
     # condition labels on the grey groups, at residue 38 (inside the folded core, where
     # the native chains lie low), on a light box so the lines stay readable around them

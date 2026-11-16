@@ -60,6 +60,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paper_config as pc  # noqa: E402
 import style_paper as sp  # noqa: E402
 
 from trizod.offsets import lacs_off_ppm_col, total_off_ppm_col  # noqa: E402
@@ -105,9 +106,9 @@ def _loop_st_ids(entry_id: str) -> tuple[str, list | None]:
 def loop_to_st_map(pan: dict, workers: int) -> dict:
     """Cached ``{entry_id: [st_id per loop index]}`` for every entry PANAV fitted."""
     want = sorted(e for e, v in pan.items() if v)
-    cache = {}
-    if CACHE.exists():
-        cache = json.loads(CACHE.read_text())
+    # per-entry map, valid for one raw snapshot and this code (paper_config.read_keyed)
+    inputs = {"snapshot": pc.snapshot_digest(sp.RAW_BMRB), "code": pc.code_digest(_loop_st_ids)}  # fmt: skip
+    cache = pc.read_keyed(CACHE, inputs) or {}
     todo = [e for e in want if e not in cache]
     if todo:
         print(f"mapping PANAV loop indices to st_id for {len(todo):,} entries ...")
@@ -116,8 +117,7 @@ def loop_to_st_map(pan: dict, workers: int) -> dict:
                 cache[e] = m
                 if (i + 1) % 1000 == 0:
                     print(f"  {i + 1:,}/{len(todo):,}")
-        CACHE.parent.mkdir(parents=True, exist_ok=True)
-        CACHE.write_text(json.dumps(cache, sort_keys=True))
+        pc.write_keyed(CACHE, inputs, dict(sorted(cache.items())))
     return {e: cache[e] for e in want}
 
 

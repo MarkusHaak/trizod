@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """Generate the manuscript's numbers layer (``numbers.tex`` + ``numbers_index.md``).
 
-Every dataset number the TriZOD manuscript quotes is computed here from the frozen
-2026-10 build and written as one ``\\newcommand`` per number, so the draft never
-types a number into prose and a post-rebuild refresh is a single re-run (writing
-plan, item (j)).
+Every dataset number the TriZOD manuscript quotes is computed here from one finished build
+and written as one ``\\newcommand`` per number, so the draft never types a number into prose
+and a post-rebuild refresh is a single re-run (writing plan, item (j)).
 
-Inputs (all read-only; resolved under ``--root``, the checkout that holds ``data/``). The
-build-specific ones below are the 2026-10 defaults; ``TRIZOD_BUILD_DIR``,
-``TRIZOD_RELEASE_DIR``, ``TRIZOD_BUNDLE``, ``TRIZOD_REBUILD_LOG``, ``TRIZOD_PKL_DIR`` and
-``TRIZOD_SIDECHAIN_DOC`` select a later build (see :class:`Paths`):
+Inputs (all read-only). The build is selected by ``scripts/figures/paper/paper_config.py``,
+the code the figure generators use too: by default the build of record (``trizod-a481315``,
+the 2026-11-11 snapshot rebuild in ``data/interim/rebuild-2026-11-11/``); the ``TRIZOD_*``
+variables of ``scripts/figures/paper/README.md`` select another one, and ``--root`` sets the
+data root (see :class:`Paths`):
 
-* ``data/interim/build/parquet-2026-10-simplify/{trizod_dataset,trizod_shifts}.parquet``
-* ``data/interim/build/release_bundle/trizod-dataset-2026-10/`` (MANIFEST, per-tier
-  ``scores/<tier>/scores.json`` labels, ``train/<tier>/*``, ``test/*``)
-* ``data/interim/build/{final_dataset,testset,mmseqs}/`` and ``rebuild_2026-10.log``
-  (the ``print_filter_losses()`` blocks and the build-step summaries)
+* the release ``{trizod_dataset,trizod_shifts}.parquet``
+* the release bundle (MANIFEST, per-tier ``scores/<tier>/scores.json`` labels,
+  ``train/<tier>/*``, ``test/*``)
+* the build's ``{final_dataset,testset,mmseqs}/`` and its log (the ``print_filter_losses()``
+  blocks and the build-step summaries)
 * ``data/interim/chezod_verification/`` (CheZOD reproduction, pre-2026-10 code)
 * ``data/external/panav_offsets.json``, ``data/external/chezod/protein_nmr_1325/``
 * ``data/raw/bmrb_entries/`` (submission dates, sample pressure, organisms, alcohols)
-* ``docs/dataset/sidechain-coverage.md`` and ``docs/filtering.md`` (documented values)
+* ``sidechain-coverage.md`` and ``docs/filtering.md`` (documented values)
 
-Derived intermediates (raw-file scan, mmseqs searches/clusterings) are cached in
-``--work-dir`` (default ``tmp/manuscript_numbers`` in the code checkout) so re-runs are fast; pass
-``--refresh`` to recompute them. MMseqs2 must be on PATH for the leakage audit, the
-like-for-like cluster counts and the case-study clusters; without it those macros
+Derived intermediates (raw-file scans, mmseqs searches/clusterings) are cached in
+``--work-dir`` (default ``tmp/manuscript_numbers`` in the code checkout), keyed by their
+inputs (snapshot, build MANIFEST, code, mmseqs inputs and arguments), so re-runs are fast and
+a cache from another snapshot or build is never reused; pass ``--refresh`` to recompute them.
+Analyses that several sections share (replicate data, PANAV matching, ceilings, ubiquitin
+chains) are computed once per run (:func:`memo`). MMseqs2 must be on PATH for the leakage
+audit, the like-for-like cluster counts and the case-study clusters; without it those macros
 fall back to the writing plan's values and are marked UNREPRODUCED.
 
 Status codes (index column): STABLE (final for the build the script ran on), PENDING-REBUILD
@@ -45,6 +48,7 @@ the last registry dump in ``--work-dir`` without recomputing:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import math
@@ -71,7 +75,10 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from trizod import paths  # noqa: E402
+PAPER_DIR = REPO / "scripts" / "figures" / "paper"
+sys.path.insert(0, str(PAPER_DIR))
+import paper_config as cfg  # noqa: E402
+
 from trizod.offsets import (  # noqa: E402
     lacs_off_ppm_col,
     off_sigma_col,
@@ -85,6 +92,25 @@ RANK = {t: i for i, t in enumerate(TIERS)}
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 G_DIS = 0.65  # binary disorder cut used throughout the paper
 UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+# the deny list of trust_first/cases.py (flag "state"), deliberately broader than the
+# non-native states of the perturbed rule (style_paper.NON_NATIVE_STATES): this is an
+# exploratory port and keeps the source analysis's definition
+CASES_DENY_STATES = frozenset(
+    {
+        "denatured",
+        "unfolded",
+        "amyloid",
+        "amyloid fibril",
+        "fibril",
+        "fibrils",
+        "molten globule",
+        "misfolded",
+        "aggregated",
+        "non-native",
+        "intermediate",
+        "partially denatured",
+    }
+)
 
 STABLE, PENDING, PREVIEW, PROVISIONAL, UNREPRO = (
     "STABLE",
@@ -104,8 +130,8 @@ STABLE, PENDING, PREVIEW, PROVISIONAL, UNREPRO = (
 # reproduction (scored with pre-release code in data/interim/chezod_verification/; it needs a
 # scoring-pipeline run), documented values, and the exploratory ports that the figure
 # definitions (\rRepFig*, \condRatioFig*, \pctDeviantFig*) supersede.
-FROZEN_BUILD = "trizod-5b8147a"  # = RB_FROZEN_BUILD; the pre-fix 2026-10 split
-BUILD_OF_RECORD = "trizod-a481315"  # the 2026-11-11 snapshot build the paper reports
+FROZEN_BUILD = cfg.FROZEN_BUILD  # = RB_FROZEN_BUILD; the pre-fix 2026-10 split
+BUILD_OF_RECORD = cfg.BUILD_OF_RECORD  # the 2026-11-11 snapshot build the paper reports
 RELEASE_RERUN = [
     (r"(nKPairs|kpair|kbin|slope[ZG]PerShift)", "paired shift-count test (Fig. 3b; fig2a_kpaired.residue_pairs definition)"),
     (r"base(AaMean|Ridge)", "sequence-only baselines (supp_s10_baselines)"),
@@ -312,76 +338,47 @@ R = Registry()
 # ----------------------------------------------------------------------------------
 # paths and loaders
 # ----------------------------------------------------------------------------------
-def find_root(start: Path) -> Path:
-    for p in [start, *start.parents]:
-        if (p / "data" / "interim" / "build").is_dir():
-            return p
-    raise SystemExit("could not find a checkout with data/interim/build; pass --root")
-
-
-def env_path(name: str, default: Path) -> Path:
-    """``$name`` as a path when set and non-empty, else ``default``."""
-    v = os.environ.get(name)
-    return Path(v).expanduser().resolve() if v else default
-
-
 class Paths:
-    """Input locations. The defaults are the frozen 2026-10 build under ``--root``; a later
-    build is selected with the same environment variables as ``style_paper.py``
-    (``scripts/figures/paper/README.md``, "Selecting the build"):
+    """Input locations of the build ``make_numbers`` reports on.
 
-    * ``TRIZOD_BUILD_DIR``: build directory (``final_dataset/``, ``testset/``, ``mmseqs/``);
-    * ``TRIZOD_RELEASE_DIR``: ``trizod_dataset.parquet`` + ``trizod_shifts.parquet`` (and the
-      deploy FASTA and ``sidechain-coverage.md`` of the post-build steps);
-    * ``TRIZOD_BUNDLE``: the release bundle (MANIFEST, ``scores/``, ``train/``, ``test/``);
-    * ``TRIZOD_REBUILD_LOG``: the build log (``print_filter_losses()`` blocks, step summaries);
-    * ``TRIZOD_PKL_DIR``: the build's BmrbEntry pickle cache (default ``<root>/tmp/bmrb_entries``);
-    * ``TRIZOD_DRAW_DIR``: the 2026-08-11 test-set draw (``_tmp/``, ``TriZOD_test_set_clu.tsv``),
-      which a rebuild does not redo (default: the build's ``testset/`` when it holds ``_tmp/``,
-      else ``<root>/data/interim/build/testset``);
+    The build is chosen by ``scripts/figures/paper/paper_config.py`` (:func:`cfg.resolve`),
+    the same code ``style_paper.py`` uses, so the prose and the artwork always describe one
+    build. The default is the build of record (``cfg.BUILD_OF_RECORD``, the 2026-11-11
+    snapshot rebuild in ``data/interim/rebuild-2026-11-11/``); the ``TRIZOD_*`` variables of
+    ``scripts/figures/paper/README.md`` ("Selecting the build") override it, and ``--root``
+    overrides ``$TRIZOD_DATA_ROOT``. Specific to this script:
+
     * ``TRIZOD_SIDECHAIN_DOC``: the side-chain coverage report (default: the release
-      directory's ``sidechain-coverage.md`` when ``TRIZOD_RELEASE_DIR`` holds one, else
-      ``docs/dataset/sidechain-coverage.md``).
+      directory's ``sidechain-coverage.md`` when it holds one, else
+      ``docs/dataset/sidechain-coverage.md``)."""
 
-    Release, bundle and log default to fixed 2026-10 names inside the build directory, so
-    setting only ``TRIZOD_BUILD_DIR`` fails loudly instead of mixing two builds."""
-
-    def __init__(self, root: Path, work: Path):
-        self.root = root
-        L = paths.layout(root)
-        self.build = env_path("TRIZOD_BUILD_DIR", L.interim_build)
-        self.release = env_path(
-            "TRIZOD_RELEASE_DIR", self.build / "parquet-2026-10-simplify"
-        )
-        self.pq = self.release / "trizod_dataset.parquet"
-        self.shifts = self.release / "trizod_shifts.parquet"
-        self.bundle = env_path(
-            "TRIZOD_BUNDLE", self.build / "release_bundle" / "trizod-dataset-2026-10"
-        )
-        self.manifest = self.bundle / "MANIFEST.json"
+    def __init__(self, root: Path | None, work: Path):
+        b = cfg.resolve(root)
+        self.b = b
+        self.root = b.root.resolve()
+        L = b.layout
+        self.build = b.build
+        self.release = b.release
+        self.pq = b.pq_main
+        self.shifts = b.pq_shifts
+        self.bundle = b.bundle
+        self.manifest = b.manifest
         self.fds = self.build / "final_dataset" / "final_dataset_summary.json"
         self.testset = self.build / "testset"
-        # the 2026-08-11 test-set draw (testset/_tmp, testset/TriZOD_test_set_clu.tsv); a later
-        # build re-resolves the pinned set without redrawing it, so the draw intermediates stay
-        # in the build that drew it ($TRIZOD_DRAW_DIR, default: this build's testset/ when it
-        # holds them, else <root>/data/interim/build/testset)
-        self.draw = env_path(
-            "TRIZOD_DRAW_DIR",
-            self.testset
-            if (self.testset / "_tmp").is_dir()
-            else L.interim_build / "testset",
-        )
-        self.log = env_path("TRIZOD_REBUILD_LOG", self.build / "rebuild_2026-10.log")
-        self.pkl = env_path("TRIZOD_PKL_DIR", L.pkl_dir)
+        # the 2026-08-11 test-set draw: a later build re-resolves the pinned set without
+        # redrawing it, so the draw intermediates stay in the build that drew it
+        self.draw = b.draw
+        self.log = b.log
+        self.pkl = b.pkl
         self.chezod_ver = L.interim_chezod_verification
         self.panav = L.ext_panav
         self.cz1325 = L.ext_chezod_1325
         self.raw = L.raw_bmrb
         sc_release = self.release / "sidechain-coverage.md"
-        self.sidechain_doc = env_path(
+        self.sidechain_doc = cfg.env_path(
             "TRIZOD_SIDECHAIN_DOC",
             sc_release
-            if os.environ.get("TRIZOD_RELEASE_DIR") and sc_release.is_file()
+            if sc_release.is_file()
             else REPO / "docs" / "dataset" / "sidechain-coverage.md",
         )
         self.filtering_doc = REPO / "docs" / "filtering.md"
@@ -398,9 +395,6 @@ def rel(p: Path) -> str:
     return s
 
 
-PAPER_DIR = REPO / "scripts" / "figures" / "paper"
-
-
 def paper(mod: str):
     """Import an analysis module of the figure generators (``scripts/figures/paper/<mod>.py``).
 
@@ -409,8 +403,6 @@ def paper(mod: str):
     import importlib
 
     os.environ["TRIZOD_DATA_ROOT"] = str(PATHS.root)
-    if str(PAPER_DIR) not in sys.path:
-        sys.path.insert(0, str(PAPER_DIR))
     return importlib.import_module(mod)
 
 
@@ -485,15 +477,28 @@ def parse_filter_blocks(log_text: str) -> list[dict]:
 # ----------------------------------------------------------------------------------
 # cached heavy steps
 # ----------------------------------------------------------------------------------
-def cached_json(name: str, fn, refresh: bool):
-    p = PATHS.work / name
-    if p.exists() and not refresh:
-        return json.loads(p.read_text())
-    t = time.time()
-    out = fn()
-    p.write_text(json.dumps(out))
-    print(f"  computed {name} in {time.time() - t:.0f} s", file=sys.stderr)
-    return out
+def cached_json(name: str, fn, refresh: bool, inputs: dict):
+    """``fn()``, cached as ``--work-dir/name`` and reused only for the same ``inputs``
+    (``paper_config.keyed_json``: snapshot / build digests, code digest, arguments)."""
+    return cfg.keyed_json(PATHS.work / name, inputs, fn, refresh)
+
+
+def raw_inputs(*code) -> dict:
+    """Cache inputs of a scan of the raw snapshot by ``code``."""
+    return {"snapshot": cfg.snapshot_digest(PATHS.raw), "code": cfg.code_digest(*code)}
+
+
+def build_inputs(*code) -> dict:
+    """Cache inputs of a computation on the build by ``code``."""
+    return {"build": cfg.build_digest(PATHS.b), "code": cfg.code_digest(*code)}
+
+
+def records_digest(recs) -> str:
+    """Digest of FASTA records ``[(id, sequence), ...]`` (order matters, as for mmseqs)."""
+    h = hashlib.sha256()
+    for k, seq in recs:
+        h.update(f"{k}\t{seq}\n".encode())
+    return h.hexdigest()
 
 
 _PRESS = re.compile(r"^\s*pressure\s+(\S+)\s+(\S+)\s+(\S+)", re.I)
@@ -591,28 +596,16 @@ def write_fasta(path: Path, recs) -> None:
 
 def mmseqs_cluster_count(name: str, recs, refresh: bool) -> dict:
     """easy-cluster at 50 % id / 80 % cov with the build's COMMON block; returns counts."""
+    from trizod.dataset.mmseqs import COMMON
+
+    args = ["--min-seq-id", "0.5", "-c", "0.8", *COMMON, "--threads", "1"]
 
     def run():
-        from trizod.dataset.mmseqs import COMMON
-
         wd = PATHS.work / f"clu_{name}"
         wd.mkdir(parents=True, exist_ok=True)
         fa = wd / "in.fasta"
         write_fasta(fa, recs)
-        cmd = [
-            "mmseqs",
-            "easy-cluster",
-            str(fa),
-            str(wd / "res"),
-            str(wd / "tmp"),
-            "--min-seq-id",
-            "0.5",
-            "-c",
-            "0.8",
-            *COMMON,
-            "--threads",
-            "1",
-        ]
+        cmd = ["mmseqs", "easy-cluster", str(fa), str(wd / "res"), str(wd / "tmp"), *args]  # fmt: skip
         with open(wd / "mmseqs.log", "w") as h:
             subprocess.run(cmd, check=True, stdout=h, stderr=subprocess.STDOUT)
         reps = {
@@ -625,10 +618,11 @@ def mmseqs_cluster_count(name: str, recs, refresh: bool) -> dict:
             "n_seqs": len(recs),
             "n_clusters": len(reps),
             "mmseqs": ver,
-            "cmd": " ".join(cmd[1:2] + cmd[5:]),
+            "cmd": " ".join(["easy-cluster", *args]),
         }
 
-    return cached_json(f"clusters_{name}.json", run, refresh)
+    inputs = {"records": records_digest(recs), "args": ["easy-cluster", *args], "code": cfg.code_digest(run)}  # fmt: skip
+    return cached_json(f"clusters_{name}.json", run, refresh, inputs)
 
 
 def mmseqs_search(name: str, queries, targets, extra: list, refresh: bool) -> list:
@@ -661,7 +655,19 @@ def mmseqs_search(name: str, queries, targets, extra: list, refresh: bool) -> li
             )
         return rows
 
-    return cached_json(f"search_{name}.json", run, refresh)
+    inputs = {"queries": records_digest(queries), "targets": records_digest(targets),
+              "args": ["easy-search", *extra], "code": cfg.code_digest(run)}  # fmt: skip
+    SEARCHES[name] = cached_json(f"search_{name}.json", run, refresh, inputs)
+    return SEARCHES[name]
+
+
+SEARCHES: dict = {}  # name -> hit rows of the mmseqs searches run so far
+
+
+def search_rows(name: str):
+    """Hit rows of the mmseqs search ``name`` run earlier in this run (through its keyed
+    cache), else None: a section never reads a search another build or input produced."""
+    return SEARCHES.get(name)
 
 
 # ----------------------------------------------------------------------------------
@@ -674,12 +680,9 @@ class Ctx:
 def load_context(refresh: bool) -> Ctx:
     C = Ctx()
     t = time.time()
-    C.df = pq.read_table(PATHS.pq).to_pandas()
-    # pandas >= 3 maps strings to pyarrow-backed columns; element-wise Python access to those
-    # (map, iterrows, groupby lambdas) goes through arrow::Array::GetScalar and is ~100x slower.
-    for col in C.df.columns:
-        if pd.api.types.is_string_dtype(C.df[col]) and C.df[col].dtype != object:
-            C.df[col] = C.df[col].astype(object)
+    # the figures' loader (object strings, not arrow-backed); it keeps the Arrow table, so
+    # the figure modules' later load_main() calls reuse this read
+    C.df = paper("style_paper").load_main()
     C.pq_meta = {
         k.decode(): v.decode()
         for k, v in (pq.read_schema(PATHS.pq).metadata or {}).items()
@@ -729,13 +732,91 @@ def load_context(refresh: bool) -> Ctx:
     assert C.tier_ids["unfiltered"] == set(df["id"])
     print(f"  loaded parquet + bundle in {time.time() - t:.0f} s", file=sys.stderr)
     C.raw = (
-        cached_json("raw_scan.json", scan_raw, refresh) if PATHS.raw.is_dir() else None
+        cached_json(
+            "raw_scan.json",
+            scan_raw,
+            refresh,
+            raw_inputs(scan_raw, _to_bar, _PRESS, _SUB, _ALC, _ALC_EXCLUDE, _SC_LOOP),
+        )  # fmt: skip
+        if PATHS.raw.is_dir()
+        else None
     )
     return C
 
 
 def sel(C, ids) -> pd.Series:
     return C.df["id"].isin(ids)
+
+
+# ----------------------------------------------------------------------------------
+# analyses that several sections share: computed once per run and kept on the context
+# (all of them are deterministic; frames are handed out as copies)
+# ----------------------------------------------------------------------------------
+def memo(C, key: str, fn):
+    """``fn()`` once per run, kept on ``C``."""
+    store = C.__dict__.setdefault("_memo", {})
+    if key not in store:
+        t = time.time()
+        store[key] = fn()
+        print(f"  (shared {key}: {time.time() - t:.0f} s)", file=sys.stderr)
+    return store[key]
+
+
+def rep_data(C):
+    """``fig3_replicates.Data()``: the replicate analyses' Parquet subset and tier labels."""
+    return memo(C, "fig3_replicates.Data", lambda: paper("fig3_replicates").Data())
+
+
+def rep_loo_fig(C) -> pd.DataFrame:
+    """``fig3_replicates.loo_table`` (Fig. 3a1 definition)."""
+    fr = paper("fig3_replicates")
+    return memo(C, "loo_table", lambda: fr.loo_table(rep_data(C))).copy()
+
+
+def cond_pairs(C) -> pd.DataFrame:
+    """``fig3_replicates.condition_pairs`` (Fig. 4a pairs)."""
+    fr = paper("fig3_replicates")
+    return memo(C, "condition_pairs", lambda: fr.condition_pairs(rep_data(C))).copy()
+
+
+def ubq_chains(C) -> pd.DataFrame:
+    """``fig1a_ubiquitin.select_chains`` on the release (reads raw NMR-STAR files)."""
+    f1a = paper("fig1a_ubiquitin")
+    return memo(C, "ubiquitin", lambda: f1a.select_chains(C.df)).copy()
+
+
+def s10_frame(C) -> pd.DataFrame:
+    """The release columns of ``supp_s10_baselines`` (``COLUMNS``)."""
+    s10 = paper("supp_s10_baselines")
+    return memo(C, "s10_frame", lambda: s10.sp.load_main(s10.COLUMNS)).copy()
+
+
+def test_pairs(C) -> dict:
+    """``supp_s10_baselines.test_ceiling_pairs`` (seed 0, cap 20)."""
+    s10 = paper("supp_s10_baselines")
+    return memo(C, "test_ceiling_pairs", lambda: s10.test_ceiling_pairs(s10_frame(C)))
+
+
+def panav_matched(C):
+    """``(pan, M, stats)``: the PANAV offsets matched to scored chains by (entry, st_id),
+    exactly as Supplementary Fig. S18 (``fig2b_panav.match_st``)."""
+    f2b = paper("fig2b_panav")
+
+    def run():
+        pan = json.loads(PATHS.panav.read_text())
+        stmap = f2b.loop_to_st_map(pan, 6)
+        dfp = f2b.sp.load_main(
+            ["id", "entry_id", "st_id", "total_bbshifts"]
+            + [total_off_ppm_col(a) for a in f2b.ATOMS]
+            + [lacs_off_ppm_col(a) for a in ATOMS]
+        )
+        dfp["entry_id"] = dfp.entry_id.astype(str)
+        dfp["st_id"] = dfp.st_id.astype(str)
+        M, st = f2b.match_st(pan, stmap, dfp)
+        return pan, M, st
+
+    pan, M, st = memo(C, "panav_match", run)
+    return pan, M.copy(), dict(st)
 
 
 # ----------------------------------------------------------------------------------
@@ -3622,16 +3703,7 @@ def sec_panav(C):
     Replaces the earlier entry-level preview (entries with one PANAV list, first scored chain),
     which differed by at most 0.012 in r. Uses the figure's own matching code."""
     f2b = paper("fig2b_panav")
-    pan = json.loads(PATHS.panav.read_text())
-    stmap = f2b.loop_to_st_map(pan, 6)
-    dfp = f2b.sp.load_main(
-        ["id", "entry_id", "st_id", "total_bbshifts"]
-        + [total_off_ppm_col(a) for a in f2b.ATOMS]
-        + [lacs_off_ppm_col(a) for a in ATOMS]
-    )
-    dfp["entry_id"] = dfp.entry_id.astype(str)
-    dfp["st_id"] = dfp.st_id.astype(str)
-    M, st = f2b.match_st(pan, stmap, dfp)
+    pan, M, st = panav_matched(C)
     src = (
         rel(PATHS.panav)
         + " x Parquet total_off_*_ppm, matched by (entry_id, st_id) with fig2b_panav.match_st "
@@ -4986,20 +5058,7 @@ def sec_replicates(C):
     # ---- deviant-flag enrichment (trust_first/cases.py) on unfiltered-only replicate chains
     m = c.merge(df[["id", "physical_state", "cosolvent_evidence", "sample_state_evidence", "ph", "temperature",
                     off_sigma_col("CA"), off_sigma_col("N"), off_sigma_col("C"), off_sigma_col("CB"), off_sigma_col("H"), off_sigma_col("HA")]], on="id")  # fmt: skip
-    deny = {
-        "denatured",
-        "unfolded",
-        "amyloid",
-        "amyloid fibril",
-        "fibril",
-        "fibrils",
-        "molten globule",
-        "misfolded",
-        "aggregated",
-        "non-native",
-        "intermediate",
-        "partially denatured",
-    }
+    deny = CASES_DENY_STATES
 
     def flags(r):
         out = set()
@@ -5457,7 +5516,7 @@ def sec_ubiquitin(C):
     # (Until 11 Nov the macros used the writing plan's mean G < 0.5 selection, which kept the
     # three 2,500 bar chains.)
     f2a = paper("fig1a_ubiquitin")
-    ub = f2a.select_chains(df)
+    ub = ubq_chains(C)
     nat = ub[ub.native].reset_index(drop=True)
     src = (
         "Parquet + raw NMR-STAR sample components, pressure and physical state; "
@@ -5487,7 +5546,8 @@ def sec_ubiquitin(C):
         "nUbqTeaserChains",
         I(len(nat)),
         "native non-bound ubiquitin chains (no denaturant or alcohol, below 400 bar, native "
-        "physical state): the chains coloured in Fig. 2a and summarised in its core strip",
+        "physical state, not solid state, no membrane mimetic): the chains coloured in Fig. 2a "
+        "and summarised in its core strip",
         src,
         STABLE,
         "r2",
@@ -5605,7 +5665,8 @@ def sec_ubiquitin(C):
         "CytC": ("34", "32"),
         "ASyn": ("108", "71"),
     }
-    if have_mmseqs():
+    # a keyed cache serves without mmseqs; a missing or stale one needs mmseqs on PATH
+    if have_mmseqs() or (PATHS.work / "search_cases.json").exists():
         seqs = df.set_index("id").sequence
         hits = mmseqs_search(
             "cases",
@@ -5823,12 +5884,13 @@ def sec_cosolvents_pressure(C):
             "r4",
         )
         return
-    # pressure (port of rev2/press.py)
+    # pressure (port of rev2/press.py); the cut is style_paper.HIGH_PRESSURE_BAR
+    high_p = paper("style_paper").HIGH_PRESSURE_BAR
     ents = {e: r["press"] for e, r in C.raw.items() if r["press"]}
     hi = {
         e: max(x[2] for x in p if x[2] is not None)
         for e, p in ents.items()
-        if any(x[2] is not None and x[2] >= 400 for x in p)
+        if any(x[2] is not None and x[2] >= high_p for x in p)
     }
     src = "raw NMR-STAR 'pressure' sample-condition rows, units normalised to bar (port of rev2/press.py)"
     R.add(
@@ -7445,9 +7507,9 @@ def sec_params(C):
     s4 = paper("supp_s4_conditions")
     R.add(
         "pressureHighBar",
-        F(s4.HIGH_P, 0),
+        F(s4.sp.HIGH_PRESSURE_BAR, 0),
         "sample pressure (bar) at or above which a sample counts as high-pressure in the analyses (not a filter yet; fix e sets the ceiling)",
-        "writing plan Appendix A12; scripts/figures/paper/supp_s4_conditions.py HIGH_P",
+        "writing plan Appendix A12; scripts/figures/paper/style_paper.py HIGH_PRESSURE_BAR",
         STABLE,
         "par",
         "400",
@@ -7703,8 +7765,8 @@ def sec_fig3_replicates(C):
     pool bound and same-entry chains and stay for Supplementary Fig. S7, which shows both."""
     fr = paper("fig3_replicates")
     f3b = paper("fig3b_conditions")
-    D = fr.Data()
-    L = fr.loo_table(D)
+    D = rep_data(C)
+    L = rep_loo_fig(C)
     S_ = fr.summarise_loo(L)
     Pp = fr.pair_table(D)
     ref = Pp[Pp.tier == "unfiltered"]
@@ -7830,7 +7892,7 @@ def sec_conditions_chain(C):
     d4, n_unres = s4.load()
     src4 = "raw NMR-STAR condition list of each chain's shift table (scripts/figures/paper/supp_s4_conditions.py load; paper_raw_scan.py cache)"
     st_of = lambda t_: STABLE if t_ == "unfiltered" else PENDING  # noqa: E731
-    hp = d4[d4.pressure_bar >= s4.HIGH_P]
+    hp = d4[d4.pressure_bar >= s4.sp.HIGH_PRESSURE_BAR]
     for t_ in TIERS:
         T = TCAP[t_]
         R.add(f"nPressureHighChains{T}", I(hp[f"in_{t_}"].sum()), f"chains of the {t_} tier whose own condition list records >= 400 bar (chain level; 25704's '1013 bar' unit slip included)", src4, st_of(t_), "r4")  # fmt: skip
@@ -7992,7 +8054,8 @@ def main(argv=None):
         "--root",
         type=Path,
         default=None,
-        help="checkout that holds data/ (default: first parent with data/interim/build)",
+        help="data root holding data/raw, data/external and tmp/ (default: $TRIZOD_DATA_ROOT, "
+        "else the build of record's root; paper_config.resolve)",
     )
     ap.add_argument(
         "--out-dir",
@@ -8003,12 +8066,7 @@ def main(argv=None):
     ap.add_argument(
         "--work-dir",
         type=Path,
-        default=(
-            Path(os.environ["TRIZOD_CACHE_DIR"]).expanduser()
-            if os.environ.get("TRIZOD_CACHE_DIR")
-            else paths.TMP
-        )
-        / "manuscript_numbers",
+        default=cfg.cache_root() / "manuscript_numbers",
         help="cache for raw scan and mmseqs runs (default: %(default)s; "
         "$TRIZOD_CACHE_DIR/manuscript_numbers when that is set)",
     )
@@ -8026,10 +8084,9 @@ def main(argv=None):
         help="rewrite numbers.tex / numbers_index.md from the last registry dump in --work-dir",
     )
     a = ap.parse_args(argv)
-    root = (a.root or find_root(REPO)).resolve()
     work = a.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    PATHS = Paths(root, work)
+    PATHS = Paths(a.root, work)
     out_dir = a.out_dir.resolve()
     t0 = time.time()
     dump = work / "registry.json"
@@ -8121,7 +8178,8 @@ def candidate_record_counts(refresh: bool):
         )
         return {**json.loads(out.stdout.strip().splitlines()[-1]), "cache": str(cache)}
 
-    return cached_json("candidate_records.json", run, refresh)
+    inputs = {**build_inputs(_CANDIDATE_CODE), "pkl": str(cache)}
+    return cached_json("candidate_records.json", run, refresh, inputs)
 
 
 # Identical-data re-deposition rule (audit report, "Replicate depositions"): two replicate
@@ -8146,16 +8204,16 @@ def sec_front_revision(C):
     R.add("nCandidateRecordsApprox", I(int(round(n_cand, -3))), "candidate records rounded to the nearest thousand ('the archive holds shifts for about N protein chains', abstract)", "derived from \\nCandidateRecords (rebuild log pre-filter 'of N')", STABLE, "abs")  # fmt: skip
     fr = paper("fig3_replicates")
     sp_ = paper("style_paper")
-    D = fr.Data()
+    D = rep_data(C)
     nb = D.nb
     multi = nb.groupby("sequence")["entry_id"].transform("nunique") >= 2
     ids = set(nb.loc[multi, "id"])
     t = pq.read_table(
         PATHS.shifts,
         columns=["id", "seq_id", "atom_id", "val_ppm", "is_backbone"],
-        filters=[("is_backbone", "=", True)],
+        filters=[("is_backbone", "=", True), ("id", "in", sorted(ids))],
     ).to_pandas()
-    t = t[t["id"].isin(ids)].drop_duplicates(["id", "seq_id", "atom_id"])
+    t = t.drop_duplicates(["id", "seq_id", "atom_id"])
     SH = {
         i: pd.Series(
             g["val_ppm"].to_numpy(float),
@@ -8235,8 +8293,8 @@ def sec_discussion_revision(C):
     R.add("lacsMaxAbs", F(mx.max(), 2), "largest |LACS offset| over all chains and backbone atoms (ppm)", srcl, STABLE, "r6")  # fmt: skip
     CYTC_MIN_SCORED = 50
     R.add("thrCaseCytCMinScored", I(CYTC_MIN_SCORED), "cytochrome-c cluster chains enter the per-chain mean-G range only with more than this many scored residues (the shorter chains carry 7-11)", "analysis setting (make_numbers.py sec_discussion_revision)", STABLE, "r6")  # fmt: skip
-    p = PATHS.work / "search_cases.json"
-    if not p.exists():
+    case_rows = search_rows("cases")
+    if case_rows is None:
         for nm, d in (("gCaseCytCOrderedMin", "lowest per-chain mean G, non-denatured long cytochrome-c chains"),
                       ("gCaseCytCOrderedMax", "highest per-chain mean G, non-denatured long cytochrome-c chains"),
                       ("gCaseCytCDenatured", "per-chain mean G of the denatured cytochrome-c chain")):  # fmt: skip
@@ -8244,7 +8302,7 @@ def sec_discussion_revision(C):
                 nm, "?", d, "case search cache missing (mmseqs not on PATH)", "r6"
             )
         return
-    H = pd.DataFrame(json.loads(p.read_text()), columns=["q", "t", "fid", "qcov", "tcov", "e", "aln", "ql", "tl"])  # fmt: skip
+    H = pd.DataFrame(case_rows, columns=["q", "t", "fid", "qcov", "tcov", "e", "aln", "ql", "tl"])  # fmt: skip
     H = H[(H.q == "CytC") & (H.fid >= 0.8) & (H.qcov >= 0.9) & (H.tcov >= 0.9)]
     mem = df[df.id.isin(set(H.t))]
     srcc = "Parquet gscores (unfiltered labels; per-chain nanmean), n_scored, physical_state x the CytC case cluster (search_cases.json, >= 80 % id, >= 90 % query and target coverage to 25640_1_1_1)"
@@ -8316,7 +8374,7 @@ def sec_review_supp_text(C):
     df = C.df
     # --- N4: 95 % intervals of the cumulative Fig. 3a1 deviation per chain-median-k stratum ---
     fr = paper("fig3_replicates")
-    S_ = fr.summarise_loo(fr.loo_table(fr.Data()))
+    S_ = fr.summarise_loo(rep_loo_fig(C))
     src_a = "scripts/figures/paper/fig3_replicates.py loo_table + summarise_loo (Fig. 3a1 definition; sequence bootstrap)"
     for t_ in TIERS:
         st_ = STABLE if t_ == "unfiltered" else PENDING
@@ -8326,7 +8384,7 @@ def sec_review_supp_text(C):
             R.add(f"repDevFig{TCAP[t_]}{tag}Hi", F(rk.median_dev_hi, 3), f"upper 95 % sequence-bootstrap bound of the median leave-one-entry-out deviation, cumulative {t_} tier, chain median k stratum {kb}", src_a, st_, "r4")  # fmt: skip
     # --- N2 rule 5: replicate ceiling in the protocol's primary metrics (Spearman rho, AUC) ---
     s10 = paper("supp_s10_baselines")
-    Cc = s10.tier_ceilings(s10.sp.load_main(s10.COLUMNS)).set_index("tier")
+    Cc = s10.tier_ceilings(s10_frame(C)).set_index("tier")
     src_c = "scripts/figures/paper/supp_s10_baselines.py tier_ceilings (pairs of identical-sequence non-bound chains from different entries, <= 20 per sequence, seed 0, the residue-level-r sample of \\rRepResidue*; each chain's G predicts the other's label, both directions; cumulative tiers)"
     for t_ in ("unfiltered", "strict"):
         T = TCAP[t_]
@@ -8404,7 +8462,7 @@ def sec_review_supp_text(C):
                 out[eid] = [has_ph, has_alt]
             return out
 
-        ph = cached_json("raw_ph_rows.json", scan_ph, C.refresh)
+        ph = cached_json("raw_ph_rows.json", scan_ph, C.refresh, {**raw_inputs(scan_ph), "build": cfg.build_digest(PATHS.b)})  # fmt: skip
         only = {e for e, (a, b) in ph.items() if b and not a}
         src_p = "raw NMR-STAR _Sample_condition_variable.Type of scored entries (trizod/bmrb/bmrb.py reads Type == 'pH' only)"
         R.add("nEntriesPhStarOnly", I(len(only)), "scored entries that record the pH only as pH* or pD, so pH 7 is imputed (unfiltered to moderate) or the entry fails strict", src_p, STABLE, "r6", "167")  # fmt: skip
@@ -8677,16 +8735,7 @@ def sec_rev_results_a(C):
 
     # ---- PANAV by disorder class and median differences (matched exactly as Fig. 2b)
     f2b = paper("fig2b_panav")
-    pan = json.loads(PATHS.panav.read_text())
-    stmap = f2b.loop_to_st_map(pan, 6)
-    dfp = f2b.sp.load_main(
-        ["id", "entry_id", "st_id", "total_bbshifts"]
-        + [total_off_ppm_col(a) for a in f2b.ATOMS]
-        + [lacs_off_ppm_col(a) for a in ATOMS]
-    )
-    dfp["entry_id"] = dfp.entry_id.astype(str)
-    dfp["st_id"] = dfp.st_id.astype(str)
-    M, _st = f2b.match_st(pan, stmap, dfp)
+    pan, M, _st = panav_matched(C)
     M = M.merge(
         df[["id", "meanG"]].rename(columns={"id": "chain"}), on="chain", how="left"
     )
@@ -8854,8 +8903,8 @@ def sec_results_b_revision(C):
     )
 
     fr = paper("fig3_replicates")
-    D = fr.Data()
-    Cp = fr.condition_pairs(D)
+    D = rep_data(C)
+    Cp = cond_pairs(C)
     nb = D.nb.set_index("id")
     cor = nb["cosolvent_evidence"].fillna(False).astype(bool)
     memb = df.set_index("id")["membrane_mimetic"].reindex(nb.index).notna()
@@ -8901,9 +8950,7 @@ def sec_results_b_revision(C):
 
     # (5) replicate agreement of the test chains themselves (Supplementary Fig. S10 diamonds)
     s10 = paper("supp_s10_baselines")
-    import style_paper as _sp
-
-    TC = s10.test_ceilings(_sp.load_main(s10.COLUMNS)).set_index("test_set")
+    TC = s10.test_ceilings(s10_frame(C), pairs=test_pairs(C)).set_index("test_set")
     src10 = "scripts/figures/paper/supp_s10_baselines.py test_ceilings (test chain vs non-bound identical-sequence chains of other entries outside the test sets, <= 20 per test chain, seed 0)"
     for name, T in (("TriZOD test", "TriZOD"), ("CheZOD117", "CheZOD")):
         r_ = TC.loc[name]
@@ -8966,7 +9013,7 @@ def sec_results_b_revision(C):
     slip = d4.pressure_bar.between(
         1000.0, 1030.0
     )  # 1 atm written in mbar but labelled bar
-    hp = d4[(d4.pressure_bar >= s4.HIGH_P) & ~slip]
+    hp = d4[(d4.pressure_bar >= s4.sp.HIGH_PRESSURE_BAR) & ~slip]
     src4 = "raw NMR-STAR condition list of each chain's shift table (supp_s4_conditions.py load); values of 1,000-1,030 'bar' (25704: 1013) read as 1 atm in mbar"
     for t_ in TIERS:
         R.add(f"nPressureHighChainsNoSlip{TCAP[t_]}", I(hp[f"in_{t_}"].sum()), f"chains of the {t_} tier whose own condition list records >= 400 bar, unit slips excluded", src4, STABLE if t_ == "unfiltered" else PENDING, "r4")  # fmt: skip
@@ -8986,9 +9033,8 @@ def sec_fig1_revision(C):
     the writing plan's mean G < 0.5 selection (PREVIEW); it now uses the figure's own native
     chain set, so Methods' "all \\nUbqClassKLow chains are diubiquitin subunits" is checked
     on one chain set (\\checkUbqKLowAllDiUb)."""
-    df = C.df
     f2a = paper("fig1a_ubiquitin")
-    ub = f2a.select_chains(df)
+    ub = ubq_chains(C)
     low = ub[ub.native & (ub.k_class == list(f2a.sp.K_CLASSES)[0])]
     sh = pq.read_table(
         PATHS.shifts,
@@ -9133,6 +9179,7 @@ def sec_methods_a_revision(C):
             "temp_units_scan.json",
             _scan_temperature_units,
             getattr(C, "refresh", False),
+            raw_inputs(_scan_temperature_units, paper("paper_raw_scan")),
         )
         rs = paper("paper_raw_scan")
         st = rs.scan_raw()
@@ -9230,9 +9277,8 @@ def sec_methods_a_revision(C):
         R.add("idRevContainTest", S(ex), "example test chain that contained shorter training representatives verbatim (FROZEN 2026-10 split)", src_p, STABLE, "r5")  # fmt: skip
         R.add("lenRevContainTest", "371", "its length (aa)", src_p, STABLE, "r5")  # fmt: skip
         R.add("idRevContainReps", "51674\\_1\\_1\\_1, 51675\\_1\\_1\\_1 and 51676\\_1\\_1\\_1", "the training representatives it contained (FROZEN 2026-10 split)", src_p, STABLE, "r5")  # fmt: skip
-    p_ = PATHS.work / "search_leak_common_unfiltered.json"
-    if p_.exists():
-        rows = json.loads(p_.read_text())
+    rows = search_rows("leak_common_unfiltered")
+    if rows is not None:
         bid = [
             r
             for r in rows
@@ -9349,7 +9395,7 @@ def sec_story_blueprint(C):
 
     # (4) single-study one-factor pairs
     fr = paper("fig3_replicates")
-    D = fr.Data()
+    D = rep_data(C)
     out_csv = C.out_dir / "Figures" / "paper" / "fig3_data" / fr.ONE_FACTOR_CSV
     Pp = fr.one_factor_pairs(D, out_csv=out_csv)
     P0 = fr.one_factor_pairs(D, deposited_only=False)
@@ -9417,8 +9463,8 @@ def sec_review_science(C):
         same seed and draws)."""
     fr = paper("fig3_replicates")
     f3b = paper("fig3b_conditions")
-    D = fr.Data()
-    Cp = fr.condition_pairs(D)
+    D = rep_data(C)
+    Cp = cond_pairs(C)
     Sp = fr.study_condition_pairs(D, Cp)
     out_csv = C.out_dir / "Figures" / "paper" / "fig3_data" / fr.STUDY_CSV
     out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -9535,11 +9581,9 @@ def sec_review_science(C):
 
     # (4) Fig. 5c like-for-like check of the replicate ceiling
     s10 = paper("supp_s10_baselines")
-    import style_paper as _sp
-
-    df10 = _sp.load_main(s10.COLUMNS)
+    df10 = s10_frame(C)
     preds = s10.predictions(df10)
-    pairs = s10.test_ceiling_pairs(df10)
+    pairs = test_pairs(C)
     src4 = ("scripts/figures/paper/supp_s10_baselines.py predictions + test_ceiling_pairs; ridge rho on the residue pairs behind the ceiling "
             "(ridge_on_replicate_chains, unrounded); 95 % CI: test chains resampled with all their pairs (boot_rho, the ceiling's seed and draws)")  # fmt: skip
     for name, T in (("TriZOD test", "TriZOD"), ("CheZOD117", "CheZOD")):

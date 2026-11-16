@@ -196,7 +196,7 @@ COSOLVENT_GROUPS = [
     ("Dioxane", ["dioxane"]),
 ]
 GROUP_CACHE = sp.TMP / "paper_figures" / f"S3_cosolvent_groups_{sp.PIPELINE}.json"
-PKL_DIR = sp._env_path("TRIZOD_PKL_DIR", sp._L.pkl_dir)
+PKL_DIR = sp.PKL_DIR
 
 # Runs in a fresh interpreter of the project environment (no pyarrow, no figures extra):
 # rebuilds each tier's pre-filter frame exactly as trizod.trizod.run_scoring_pipeline does

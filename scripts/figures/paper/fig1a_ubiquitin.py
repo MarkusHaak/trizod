@@ -12,11 +12,14 @@ cut-offs of each score (Z = 8, the CheZOD convention; G = 0.65), for orientation
 Chain selection by annotation (``select_chains``, rule in ``NATIVE_RULE``): a
 chain is *native* unless its sample is perturbed, i.e. the samples behind its
 shift list contain a denaturant or alcohol cosolvent (``PERTURBANTS``), the
-condition list of its shift list records a pressure of at least 400 bar, or its
-deposited physical state is non-native. Native chains are coloured by their
+condition list of its shift list records a pressure of at least 400 bar, its
+deposited physical state is non-native, it is a solid-state sample or its sample holds a
+membrane mimetic (``style_paper.is_perturbed``, the one rule of the paper; cosolvent and
+pressure come from the raw file, the rest from the release columns). Native chains are coloured by their
 median per-residue shift count k (classes <= 6, 7-15, 16-21; sp.K_CMAP, as
 everywhere in the paper). Since the story-blueprint redesign (12 Nov 2026) the
-perturbed chains (denaturant, alcohol, high pressure, non-native state) are not
+perturbed chains (denaturant, alcohol, high pressure, non-native state, solid state,
+membrane mimetic) are not
 drawn in Fig. 3c; they move to Supplementary Fig. S8, and ``plot(...,
 draw_perturbed=True)`` still draws them thin and light grey behind (the
 Supplementary agent may import ``load_ubiquitin``, ``select_chains``,
@@ -73,12 +76,12 @@ UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRL
 CORE = slice(1, 71)  # residues 2-71 (0-based slice), the folded core
 TAIL_FIRST, TAIL_LAST = 73, 76  # shaded C-terminal tail (1-based, inclusive)
 TEASER_MEAN_G_MAX = 0.5  # writing plan's earlier selection (sensitivity check only)
-HIGH_PRESSURE_BAR = 400.0  # same threshold as the writing plan's pressure scan (A12)
 # The selection rule in one sentence (Results / caption wording; make_numbers source string).
 NATIVE_RULE = (
     "non-bound chains with the exact ubiquitin sequence whose sample contains no denaturant "
     "or alcohol (urea, guanidinium, methanol, ethanol, TFE, HFIP, DMSO), was measured below "
-    "400 bar and is deposited in a native physical state"
+    "400 bar, is deposited in a native physical state, is not a solid-state sample and "
+    "contains no membrane mimetic"
 )
 PERTURBANTS = {  # lower-case component-name token -> display name
     "urea": "urea",
@@ -91,7 +94,6 @@ PERTURBANTS = {  # lower-case component-name token -> display name
     "dmso": "DMSO",
     "dimethyl sulfoxide": "DMSO",
 }
-NON_NATIVE_STATES = {"denatured", "unfolded", "molten globule", "misfolded"}
 T_NOTE_RANGE = (
     273.0,
     323.0,
@@ -236,6 +238,8 @@ COLUMNS = [  # release columns select_chains() and the Source Data need
     "mask",
     "is_bound",
     "physical_state",
+    "sample_state_evidence",
+    "membrane_mimetic",
     "temperature",
     "ph",
 ]
@@ -263,11 +267,10 @@ def select_chains(df: pd.DataFrame) -> pd.DataFrame:
     rec = [sample_record(str(e), str(s)) for e, s in zip(u.entry_id, u.st_id)]
     u["pressure_bar"] = [r["pressure_bar"] for r in rec]
     u["perturbants"] = [r["perturbants"] for r in rec]
-    state = u.physical_state.fillna("").astype(str).str.lower()
-    u["perturbed"] = (
-        u.perturbants.map(bool)
-        | (u.pressure_bar.fillna(0) >= HIGH_PRESSURE_BAR)
-        | state.isin(NON_NATIVE_STATES)
+    # the shared rule (style_paper.is_perturbed), with the cosolvent and pressure evidence
+    # of the chain's own shift list in the raw file
+    u["perturbed"] = sp.is_perturbed(
+        u, cosolvent=u.perturbants.map(bool), pressure_bar=u.pressure_bar
     )
     u["native"] = ~u.perturbed
     return u
@@ -299,12 +302,18 @@ def condition_label(r) -> str:
             parts.append(f"{float(conc):g} {unit} {name}")
         else:
             parts.append(name)
-    if r.pressure_bar is not None and r.pressure_bar >= HIGH_PRESSURE_BAR:
+    if r.pressure_bar is not None and r.pressure_bar >= sp.HIGH_PRESSURE_BAR:
         parts.append(f"{r.pressure_bar:,.0f} bar")
     if not (T_NOTE_RANGE[0] <= r.temperature <= T_NOTE_RANGE[1]):
         parts.append(f"{r.temperature:.0f} K")
-    if r.physical_state and not r.perturbants:
-        parts.append(f"{str(r.physical_state).lower()} state")
+    solid = str(getattr(r, "sample_state_evidence", "")) == "solid"
+    if solid:
+        parts.append("solid state")
+    if pd.notna(getattr(r, "membrane_mimetic", None)):
+        parts.append(f"{r.membrane_mimetic} (membrane mimetic)")
+    state = str(r.physical_state).lower() if pd.notna(r.physical_state) else ""
+    if state and not r.perturbants and not (solid and "solid" in state):
+        parts.append(state if state.endswith(" state") else f"{state} state")
     return ", ".join(parts)
 
 
@@ -360,9 +369,7 @@ def spearman_core(u: pd.DataFrame) -> tuple[float, float, int]:
 # Native chains are coloured by k class and enter the side summary. Fig. 3c draws only
 # them; plot(..., draw_perturbed=True) adds the perturbed chains thin and light grey behind
 # (select_chains, NATIVE_RULE), for Supplementary Fig. S8.
-OUT_NAME = (
-    "fig3a_ubiquitin"  # Fig. 3a (fig3c_ubiquitin.pdf on 16 Nov, fig2a_ubiquitin.pdf on 11 Nov, fig1a.pdf before)
-)
+OUT_NAME = "fig3a_ubiquitin"  # Fig. 3a (fig3c_ubiquitin.pdf on 16 Nov, fig2a_ubiquitin.pdf on 11 Nov, fig1a.pdf before)
 
 # Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1). The left
 # axes edge and the y titles match Fig. 3a (LEFT 12 mm, titles ending 4.6 mm from the
