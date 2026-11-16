@@ -40,10 +40,10 @@ release bundle (strictest tier, Source Data only), and ``data/raw/bmrb_entries/`
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig1a_ubiquitin.py \\
         --out-dir <draft>/Figures/paper
-Outputs: ``<out-dir>/fig3c_ubiquitin.pdf`` (W_DOUBLE = 160 mm wide, 55 mm tall,
-vector, placed at 1:1), ``<out-dir>/source_data/fig3c_ubiquitin.csv`` (one row per
+Outputs: ``<out-dir>/fig3a_ubiquitin.pdf`` (W_DOUBLE = 160 mm wide, 55 mm tall,
+vector, placed at 1:1), ``<out-dir>/source_data/fig3a_ubiquitin.csv`` (one row per
 chain and residue, all non-bound chains, with the ``native`` flag) and
-``fig3c_ubiquitin_core_summary.csv``; prints the plotted numbers.
+``fig3a_ubiquitin_core_summary.csv``; prints the plotted numbers.
 """
 
 from __future__ import annotations
@@ -361,7 +361,7 @@ def spearman_core(u: pd.DataFrame) -> tuple[float, float, int]:
 # them; plot(..., draw_perturbed=True) adds the perturbed chains thin and light grey behind
 # (select_chains, NATIVE_RULE), for Supplementary Fig. S8.
 OUT_NAME = (
-    "fig3c_ubiquitin"  # Fig. 3c (fig2a_ubiquitin.pdf on 11 Nov, fig1a.pdf before)
+    "fig3a_ubiquitin"  # Fig. 3a (fig3c_ubiquitin.pdf on 16 Nov, fig2a_ubiquitin.pdf on 11 Nov, fig1a.pdf before)
 )
 
 # Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1). The left
@@ -552,7 +552,7 @@ def plot(
     fig.text(
         xs, ys, "Core (residues 2–71)", fontsize=sp.FS_TICK, va="center", ha="center"
     )
-    sp.fig_label(fig, "c", 0.0, 0.0)
+    sp.fig_label(fig, "a", 0.0, 0.0)
     sp.save(fig, out_name)
 
 

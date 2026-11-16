@@ -44,8 +44,8 @@ so the last tick is 1 and the decade ticks keep apart at 7 pt.
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig2c_chezod.py \\
         --out-dir <draft>/Figures/paper [--potenci-only PATH]
-Outputs: <out-dir>/fig3a_chezod.pdf (52 x 52 mm, placed at 1:1 beside Fig. 3b; the row
-layout is imported from ``fig2a_kpaired.py``) and <out-dir>/source_data/fig3a_chezod.csv.
+Outputs: <out-dir>/fig3c_chezod.pdf (52 x 52 mm, placed at 1:1 beside Fig. 3b, below Fig. 3a; the row
+layout is imported from ``fig2a_kpaired.py``) and <out-dir>/source_data/fig3c_chezod.csv.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ BOTH = sp.BUNDLE / "scores" / "unfiltered" / "scores.json"  # 2026-10 release
 WITHIN = 0.1  # "within 0.1 Z at every residue"
 FLOOR = 1e-3  # errors below this are drawn at the floor (log axis)
 X_MAX = 6.0  # right end of the x axis (largest per-entry error: 4.7)
-OUT_NAME = "fig3a_chezod"  # Fig. 3a (fig2c_chezod.pdf on 11 Nov, fig2c.pdf before)
+OUT_NAME = "fig3c_chezod"  # Fig. 3c (fig3a_chezod.pdf on 16 Nov, fig2c_chezod.pdf on 11 Nov, fig2c.pdf before)
 # Offset columns as named by 2026-10 code; a pre-build scores.json has only
 # ``off_<atom>``/``lacs_off_<atom>``.
 CURRENT_SCHEMA_COLS = (off_sigma_col("CA"), total_off_ppm_col("CA"))
@@ -226,7 +226,7 @@ def plot(res: dict) -> None:
     )
     ax.set_ylabel("Cumulative fraction of entries")
     ax.yaxis.set_label_coords((YLABEL_X_MM - left) / w, 0.5)
-    sp.fig_label(fig, "a", 0.0, 0.0)
+    sp.fig_label(fig, "c", 0.0, 0.0)
     sp.save(fig, OUT_NAME)
 
 
