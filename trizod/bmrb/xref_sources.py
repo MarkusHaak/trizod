@@ -31,13 +31,15 @@ from __future__ import annotations
 import csv
 import difflib
 import gzip
-import hashlib
 import json
+import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from trizod.bmrb import xrefs as xr
+from trizod.io.atomic import atomic_write
+from trizod.provenance import file_sha256
 
 BMRB_PDB_MATCH = "adit_nmr_matched_pdb_bmrb_entry_ids.csv"
 SEQRES = "pdb_seqres.txt.gz"
@@ -69,11 +71,7 @@ MIN_IDENTITY = 95.0
 
 
 def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
+    return file_sha256(path)
 
 
 def sequence_match(query: str, subject: str) -> tuple[float, float]:
@@ -200,13 +198,9 @@ class ExternalSources:
         exact = {
             x.accession
             for x in snapshot_links
-            if x.db == xr.PDB and x.source == "exact" and x.accession
+            if xr.is_confident_pdb(x) and x.source == "exact"
         }
-        author = {
-            x.accession
-            for x in snapshot_links
-            if x.db == xr.PDB and x.source == "author" and x.accession
-        }
+        confident = set(xr.confident_pdb_ids(snapshot_links))
         matched = self.bmrb_pdb.get(str(entry_id), set())
         source = "exact" if _is_after_adit_cutoff(str(entry_id)) else "unspecified"
         out = [
@@ -214,21 +208,23 @@ class ExternalSources:
             for p in sorted(matched - exact)
         ]
         hits = []
-        for pdb_id in sorted(matched | exact | author):
+        for pdb_id in sorted(matched | confident):
             for chain, subject in self.seqres.get(pdb_id, {}).items():
                 coverage, identity = sequence_match(sequence, subject)
                 if coverage < MIN_COVERAGE or identity < MIN_IDENTITY:
                     continue
                 for acc in self.sifts.get(pdb_id, {}).get(chain, []):
-                    hits.append((-coverage, -identity, pdb_id, chain, acc))
-        for neg_cov, neg_idt, pdb_id, chain, acc in sorted(hits):
+                    hits.append((coverage, identity, pdb_id, chain, acc))
+        # best coverage, then identity first; ties in PDB ID, chain, accession order
+        hits.sort(key=lambda h: (-h[0], -h[1], h[2], h[3], h[4]))
+        for coverage, identity, pdb_id, chain, acc in hits:
             out.append(
                 xr.Xref(
                     xr.UNIPROT,
                     xr.normalize_uniprot(acc),
                     "sifts",
-                    -neg_idt,
-                    -neg_cov,
+                    identity,
+                    coverage,
                     ORIGIN_SIFTS,
                     "SIFTS",
                     acc,
@@ -251,9 +247,12 @@ def fetch(directory: Path, retrieved: str) -> dict:
     files = {}
     for name, url in URLS.items():
         request = urllib.request.Request(url, headers={"User-Agent": "trizod"})
-        with urllib.request.urlopen(request, timeout=600) as resp:
+        with (
+            urllib.request.urlopen(request, timeout=600) as resp,
+            atomic_write(directory / name, "wb") as fh,
+        ):
             last_modified = resp.headers.get("Last-Modified")
-            (directory / name).write_bytes(resp.read())
+            shutil.copyfileobj(resp, fh, 1 << 20)
         files[name] = {
             "url": url,
             "retrieved": retrieved,
@@ -262,5 +261,6 @@ def fetch(directory: Path, retrieved: str) -> dict:
             "sha256": sha256(directory / name),
         }
     manifest = {"retrieved": retrieved, "files": files}
-    (directory / MANIFEST).write_text(json.dumps(manifest, indent=1) + "\n")
+    with atomic_write(directory / MANIFEST, "w") as fh:
+        fh.write(json.dumps(manifest, indent=1) + "\n")
     return manifest

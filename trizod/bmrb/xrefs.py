@@ -167,20 +167,18 @@ def normalize_db(code) -> str | None:
     return None
 
 
-def normalize_uniprot(raw) -> str | None:
+def _normalize(regex: re.Pattern, raw) -> str | None:
     s = _clean(raw)
-    if s is None:
-        return None
-    m = _UNIPROT_RE.match(s.upper())
+    m = regex.match(s.upper()) if s is not None else None
     return m.group(1) if m else None
+
+
+def normalize_uniprot(raw) -> str | None:
+    return _normalize(_UNIPROT_RE, raw)
 
 
 def normalize_pdb(raw) -> str | None:
-    s = _clean(raw)
-    if s is None:
-        return None
-    m = _PDB_RE.match(s.upper())
-    return m.group(1) if m else None
+    return _normalize(_PDB_RE, raw)
 
 
 def _make(
@@ -216,13 +214,14 @@ def _rows(loop: pynmrstar.Loop) -> Iterable[dict]:
 
 
 def _db_link(row: dict, loop_name: str, details_tag: str | None) -> Xref | None:
-    db = normalize_db(row.get("database_code"))
+    raw_db = _clean(row.get("database_code"))
+    db = normalize_db(raw_db)
     raw_acc = _clean(row.get("accession_code"))
     if db is None or raw_acc is None:
         return None
     return _make(
         db,
-        _clean(row.get("database_code")),
+        raw_db,
         raw_acc,
         _author_source(row.get("author_supplied")),
         loop_name,
@@ -233,7 +232,8 @@ def _db_link(row: dict, loop_name: str, details_tag: str | None) -> Xref | None:
 
 
 def _related_entry(row: dict) -> Xref | None:
-    db = normalize_db(row.get("database_name"))
+    raw_db = _clean(row.get("database_name"))
+    db = normalize_db(raw_db)
     raw_acc = _clean(row.get("database_accession_code"))
     if db is None or raw_acc is None:
         return None
@@ -241,7 +241,7 @@ def _related_entry(row: dict) -> Xref | None:
     exact = db == PDB and relationship is not None and _TRACKING_RE.search(relationship)
     return _make(
         db,
-        _clean(row.get("database_name")),
+        raw_db,
         raw_acc,
         "exact" if exact else "author",
         "Related_entries",
@@ -360,7 +360,7 @@ def uniprot_ids(links: Iterable[Xref]) -> tuple[list[str], str | None]:
         (x for x in links if x.db == UNIPROT and x.accession is not None),
         key=_sort_key,
     )
-    tier = [x for x in ranked if x.source in ("exact", "author")]
+    tier = [x for x in ranked if x.source == "author"]  # UniProt is never "exact"
     if not tier:
         tier = [x for x in ranked if x.source == "sifts"]
     if not tier:
@@ -369,18 +369,22 @@ def uniprot_ids(links: Iterable[Xref]) -> tuple[list[str], str | None]:
     return accessions, (tier[0].source if tier else None)
 
 
+#: The sources whose PDB links name the chain's own structure: they go into
+#: ``pdb_ids`` and are the structures that may lend a SIFTS accession.
+CONFIDENT_PDB_SOURCES = ("exact", "author")
+
+
+def is_confident_pdb(x: Xref) -> bool:
+    return x.db == PDB and x.source in CONFIDENT_PDB_SOURCES and bool(x.accession)
+
+
 def confident_pdb_ids(links: Iterable[Xref]) -> list[str]:
     """Distinct PDB IDs from ``exact`` and ``author`` links, in rank order."""
-    out: list[str] = []
-    for x in sorted(links, key=_sort_key):
-        if (
-            x.db == PDB
-            and x.source in ("exact", "author")
-            and x.accession is not None
-            and x.accession not in out
-        ):
-            out.append(x.accession)
-    return out
+    return list(
+        dict.fromkeys(
+            x.accession for x in sorted(links, key=_sort_key) if is_confident_pdb(x)
+        )
+    )
 
 
 def xref_records(links: Iterable[Xref]) -> list[dict]:

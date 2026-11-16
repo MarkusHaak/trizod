@@ -777,10 +777,10 @@ def xref_coverage(cols: dict) -> dict:
         return sum(any(pred(link) for link in links) for links in read)
 
     def uni(link):
-        return link["db"] == "UniProt" and link["accession"] is not None
+        return link["db"] == xr.UNIPROT and link["accession"] is not None
 
     def pdb(link):
-        return link["db"] == "PDB" and link["accession"] is not None
+        return link["db"] == xr.PDB and link["accession"] is not None
 
     return {
         "chains": n,
@@ -1069,11 +1069,10 @@ def main() -> None:
         external = None
         if xrefs is not None and args.xref_sources is not None:
             confident_pdb = {
-                x.accession
+                p
                 for e in xrefs.values()
                 for links in [e.entry, *e.entity.values()]
-                for x in links
-                if x.db == xr.PDB and x.source in ("exact", "author") and x.accession
+                for p in xr.confident_pdb_ids(links)
             }
             print(f"reading dated cross-reference sources from {args.xref_sources}")
             external = xs.ExternalSources.load(
