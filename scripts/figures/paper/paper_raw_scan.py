@@ -36,7 +36,6 @@ import os
 import re
 import shlex
 import sys
-import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -161,22 +160,17 @@ def scan_file(path: str) -> tuple[str, dict]:
 
 def scan_raw(refresh: bool = False, workers: int | None = None) -> dict:
     """``{entry_id: {sub, cond: {list_id: {...}}, st: {st_id: list_id}, org: {entity: name}}}``."""
-    inputs = _scan_inputs()
-    if not refresh:
-        hit = pc.read_keyed(CACHE, inputs)
-        if hit is not None:
-            return hit
-    files = []
-    for d in sorted(os.listdir(sp.RAW_BMRB)):
-        fs = sorted((sp.RAW_BMRB / d).glob("*.str"))
-        if fs:
-            files.append(str(fs[0]))
-    t = time.time()
-    with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:
-        out = dict(ex.map(scan_file, files, chunksize=64))
-    print(f"  raw scan: {len(out)} files in {time.time() - t:.0f} s", file=sys.stderr)
-    pc.write_keyed(CACHE, inputs, out)
-    return out
+
+    def run():
+        files = []
+        for d in sorted(os.listdir(sp.RAW_BMRB)):
+            fs = sorted((sp.RAW_BMRB / d).glob("*.str"))
+            if fs:
+                files.append(str(fs[0]))
+        with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:  # fmt: skip
+            return dict(ex.map(scan_file, files, chunksize=64))
+
+    return pc.keyed_json(CACHE, _scan_inputs(), run, refresh)
 
 
 def _scan_inputs() -> dict:
@@ -276,21 +270,17 @@ def deposited_lists(
         "parser": _parser_version(),
         "code": pc.code_digest(_deposited_lists, _Saveframe, _loop_rows),
     }
-    if not refresh:
-        hit = pc.read_keyed(DEPOSITED_CACHE, inputs)
-        if hit is not None:
-            return hit
-    tasks = []
-    for eid, rec in raw.items():
-        fs = sorted((sp.RAW_BMRB / f"bmr{eid}").glob("*.str"))
-        if fs and any(v is not None for v in rec["st"].values()):
-            tasks.append((eid, str(fs[0])))
-    t = time.time()
-    with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:
-        out = dict(ex.map(_deposited_lists, tasks, chunksize=64))
-    print(f"  deposited conditions: {len(out)} files in {time.time() - t:.0f} s", file=sys.stderr)  # fmt: skip
-    pc.write_keyed(DEPOSITED_CACHE, inputs, out)
-    return out
+
+    def run():
+        tasks = []
+        for eid, rec in raw.items():
+            fs = sorted((sp.RAW_BMRB / f"bmr{eid}").glob("*.str"))
+            if fs and any(v is not None for v in rec["st"].values()):
+                tasks.append((eid, str(fs[0])))
+        with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:  # fmt: skip
+            return dict(ex.map(_deposited_lists, tasks, chunksize=64))
+
+    return pc.keyed_json(DEPOSITED_CACHE, inputs, run, refresh)
 
 
 def chain_deposited(entry_ids, st_ids, refresh: bool = False) -> list[dict]:

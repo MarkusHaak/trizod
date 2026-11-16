@@ -45,6 +45,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from trizod import paths
+from trizod.io.atomic import atomic_write
+from trizod.provenance import file_sha256
 
 REPO = paths.ROOT  # the code checkout: scripts/, docs/, trizod/
 
@@ -80,9 +82,9 @@ RECORD_DIR = CHECKOUT / "data" / "interim" / RECORD_NAME
 
 
 def env_path(name: str, default: Path) -> Path:
-    """``$name`` as a path when set and non-empty, else ``default``."""
+    """``$name`` as an absolute path when set and non-empty, else ``default``."""
     v = os.environ.get(name)
-    return Path(v).expanduser() if v else default
+    return Path(v).expanduser().resolve() if v else default
 
 
 def cache_root() -> Path:
@@ -137,7 +139,7 @@ def resolve(root: Path | None = None) -> Build:
         root = env_path(
             "TRIZOD_DATA_ROOT", record_root if record_root.is_dir() else CHECKOUT
         )
-    root = Path(root).expanduser()
+    root = Path(root).expanduser().resolve()
     L = paths.layout(root)
     build = env_path("TRIZOD_BUILD_DIR", L.interim_build)
     testset = build / "testset"
@@ -149,12 +151,18 @@ def resolve(root: Path | None = None) -> Build:
         log=env_path("TRIZOD_REBUILD_LOG", RECORD_DIR / RECORD_LOG),
         pkl=env_path("TRIZOD_PKL_DIR", L.pkl_dir),
         draw=env_path(
-            "TRIZOD_DRAW_DIR",
-            testset
-            if (testset / "_tmp").is_dir()
-            else CHECKOUT / "data" / "interim" / "build" / "testset",
+            "TRIZOD_DRAW_DIR", _draw_dir(testset, L.interim_build / "testset")
         ),
     )
+
+
+def _draw_dir(*candidates: Path) -> Path:
+    """The first test-set directory that holds the 2026-08-11 draw (``_tmp/``): the build's,
+    then the data root's, else the checkout's (where the draw was made)."""
+    for d in candidates:
+        if (d / "_tmp").is_dir():
+            return d
+    return CHECKOUT / "data" / "interim" / "build" / "testset"
 
 
 def read_manifest(b: Build) -> dict:
@@ -183,7 +191,7 @@ def snapshot_digest(raw_dir: Path) -> str:
     if k not in _DIGESTS:
         rec = raw_dir / "BMRB_SNAPSHOT.json"
         if rec.is_file():
-            _DIGESTS[k] = _sha(rec.read_bytes())
+            _DIGESTS[k] = file_sha256(rec)
         else:
             names = sorted(os.listdir(raw_dir)) if raw_dir.is_dir() else []
             _DIGESTS[k] = _sha("\n".join(names).encode())
@@ -195,12 +203,9 @@ def build_digest(b: Build) -> str:
     (which lists the checksums of the release files)."""
     k = ("build", str(b.manifest))
     if k not in _DIGESTS:
-        try:
-            data = b.manifest.read_bytes()
-        except OSError:
-            data = b""
+        sha = file_sha256(b.manifest) if b.manifest.is_file() else _sha(b"")
         pv = read_manifest(b).get("pipeline_version")
-        _DIGESTS[k] = f"{pv}:{_sha(data)}"
+        _DIGESTS[k] = f"{pv}:{sha}"
     return _DIGESTS[k]
 
 
@@ -242,13 +247,12 @@ def write_keyed(path: Path, inputs: dict, data) -> None:
     never sees half a file)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(
-        json.dumps(
-            {"_key": input_key(inputs), "_inputs": inputs, "data": data}, default=str
+    with atomic_write(path, "w") as fh:
+        json.dump(
+            {"_key": input_key(inputs), "_inputs": inputs, "data": data},
+            fh,
+            default=str,
         )
-    )
-    os.replace(tmp, path)
 
 
 def keyed_json(

@@ -48,6 +48,7 @@ the last registry dump in ``--work-dir`` without recomputing:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import math
@@ -91,6 +92,25 @@ RANK = {t: i for i, t in enumerate(TIERS)}
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 G_DIS = 0.65  # binary disorder cut used throughout the paper
 UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+# the deny list of trust_first/cases.py (flag "state"), deliberately broader than the
+# non-native states of the perturbed rule (style_paper.NON_NATIVE_STATES): this is an
+# exploratory port and keeps the source analysis's definition
+CASES_DENY_STATES = frozenset(
+    {
+        "denatured",
+        "unfolded",
+        "amyloid",
+        "amyloid fibril",
+        "fibril",
+        "fibrils",
+        "molten globule",
+        "misfolded",
+        "aggregated",
+        "non-native",
+        "intermediate",
+        "partially denatured",
+    }
+)
 
 STABLE, PENDING, PREVIEW, PROVISIONAL, UNREPRO = (
     "STABLE",
@@ -475,7 +495,10 @@ def build_inputs(*code) -> dict:
 
 def records_digest(recs) -> str:
     """Digest of FASTA records ``[(id, sequence), ...]`` (order matters, as for mmseqs)."""
-    return cfg.input_key({"recs": [list(r) for r in recs]})
+    h = hashlib.sha256()
+    for k, seq in recs:
+        h.update(f"{k}\t{seq}\n".encode())
+    return h.hexdigest()
 
 
 _PRESS = re.compile(r"^\s*pressure\s+(\S+)\s+(\S+)\s+(\S+)", re.I)
@@ -573,28 +596,16 @@ def write_fasta(path: Path, recs) -> None:
 
 def mmseqs_cluster_count(name: str, recs, refresh: bool) -> dict:
     """easy-cluster at 50 % id / 80 % cov with the build's COMMON block; returns counts."""
+    from trizod.dataset.mmseqs import COMMON
+
+    args = ["--min-seq-id", "0.5", "-c", "0.8", *COMMON, "--threads", "1"]
 
     def run():
-        from trizod.dataset.mmseqs import COMMON
-
         wd = PATHS.work / f"clu_{name}"
         wd.mkdir(parents=True, exist_ok=True)
         fa = wd / "in.fasta"
         write_fasta(fa, recs)
-        cmd = [
-            "mmseqs",
-            "easy-cluster",
-            str(fa),
-            str(wd / "res"),
-            str(wd / "tmp"),
-            "--min-seq-id",
-            "0.5",
-            "-c",
-            "0.8",
-            *COMMON,
-            "--threads",
-            "1",
-        ]
+        cmd = ["mmseqs", "easy-cluster", str(fa), str(wd / "res"), str(wd / "tmp"), *args]  # fmt: skip
         with open(wd / "mmseqs.log", "w") as h:
             subprocess.run(cmd, check=True, stdout=h, stderr=subprocess.STDOUT)
         reps = {
@@ -607,12 +618,10 @@ def mmseqs_cluster_count(name: str, recs, refresh: bool) -> dict:
             "n_seqs": len(recs),
             "n_clusters": len(reps),
             "mmseqs": ver,
-            "cmd": " ".join(cmd[1:2] + cmd[5:]),
+            "cmd": " ".join(["easy-cluster", *args]),
         }
 
-    from trizod.dataset.mmseqs import COMMON
-
-    inputs = {"records": records_digest(recs), "args": ["easy-cluster", "--min-seq-id", "0.5", "-c", "0.8", *COMMON, "--threads", "1"]}  # fmt: skip
+    inputs = {"records": records_digest(recs), "args": ["easy-cluster", *args], "code": cfg.code_digest(run)}  # fmt: skip
     return cached_json(f"clusters_{name}.json", run, refresh, inputs)
 
 
@@ -656,15 +665,9 @@ SEARCHES: dict = {}  # name -> hit rows of the mmseqs searches run so far
 
 
 def search_rows(name: str):
-    """Hit rows of the mmseqs search ``name`` from this run, else from its cache file
-    (whatever inputs it was keyed by; None without one)."""
-    if name in SEARCHES:
-        return SEARCHES[name]
-    p = PATHS.work / f"search_{name}.json"
-    if not p.exists():
-        return None
-    d = json.loads(p.read_text())
-    return d.get("data") if isinstance(d, dict) else d
+    """Hit rows of the mmseqs search ``name`` run earlier in this run (through its keyed
+    cache), else None: a section never reads a search another build or input produced."""
+    return SEARCHES.get(name)
 
 
 # ----------------------------------------------------------------------------------
@@ -5055,23 +5058,7 @@ def sec_replicates(C):
     # ---- deviant-flag enrichment (trust_first/cases.py) on unfiltered-only replicate chains
     m = c.merge(df[["id", "physical_state", "cosolvent_evidence", "sample_state_evidence", "ph", "temperature",
                     off_sigma_col("CA"), off_sigma_col("N"), off_sigma_col("C"), off_sigma_col("CB"), off_sigma_col("H"), off_sigma_col("HA")]], on="id")  # fmt: skip
-    # the deny list of trust_first/cases.py (flag "state"), deliberately broader than the
-    # non-native states of the perturbed rule (style_paper.NON_NATIVE_STATES): this is an
-    # exploratory port and keeps the source analysis's definition
-    deny = {
-        "denatured",
-        "unfolded",
-        "amyloid",
-        "amyloid fibril",
-        "fibril",
-        "fibrils",
-        "molten globule",
-        "misfolded",
-        "aggregated",
-        "non-native",
-        "intermediate",
-        "partially denatured",
-    }
+    deny = CASES_DENY_STATES
 
     def flags(r):
         out = set()
@@ -5678,7 +5665,8 @@ def sec_ubiquitin(C):
         "CytC": ("34", "32"),
         "ASyn": ("108", "71"),
     }
-    if have_mmseqs():
+    # a keyed cache serves without mmseqs; a missing or stale one needs mmseqs on PATH
+    if have_mmseqs() or (PATHS.work / "search_cases.json").exists():
         seqs = df.set_index("id").sequence
         hits = mmseqs_search(
             "cases",

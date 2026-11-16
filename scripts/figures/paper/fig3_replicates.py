@@ -767,13 +767,10 @@ def one_factor_pairs(
         ok = deposited_conditions(D).all(axis=1).reindex(nb["id"]).to_numpy()
     else:
         ok = np.ones(len(nb), bool)
-    cos = nb["cosolvent_evidence"].fillna(False).astype(bool).to_numpy()
-    memb = nb["membrane_mimetic"].notna().to_numpy()
-    solid = (nb["sample_state_evidence"].astype(str) == "solid").to_numpy()
-    with np.errstate(invalid="ignore"):
-        highp = nb["pressure_bar"].to_numpy(float) >= sp.HIGH_PRESSURE_BAR
+    # the perturbed rule without its state criterion: pairs must share the deposited state
+    clean = ~sp.is_perturbed(nb, states=False).to_numpy()
     nb["_title"] = nb["citation_title"].map(norm_title)
-    sel = nb[ok & ~cos & ~memb & ~solid & ~highp & nb["_title"].notna().to_numpy()]
+    sel = nb[ok & clean & nb["_title"].notna().to_numpy()]
     rows = []
     for (_seq, _t), g in sel.groupby(["sequence", "_title"], sort=True):
         if g["entry_id"].nunique() < 2:

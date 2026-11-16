@@ -123,7 +123,9 @@ export TRIZOD_REBUILD_LOG=$TRIZOD_BUILD_DIR/rebuild_2026-10.log
   are keyed by their inputs (`paper_config.keyed_json`): the snapshot's `BMRB_SNAPSHOT.json`,
   the build's `MANIFEST.json`, the code that computes them and the mmseqs inputs and
   arguments. A cache written for another snapshot, build or code is recomputed, never
-  reused. To force a recompute, pass `--refresh` (`make_numbers`, `fig2_composition`,
+  reused. The S6d recovery, the S8 case search, the S3 cosolvent groups, `fig1c_mmseqs/` and
+  `fig3c_split/` keep their own keys, so give a new build its own `$TRIZOD_CACHE_DIR` or
+  refresh them. To force a recompute, pass `--refresh` (`make_numbers`, `fig2_composition`,
   `fig3c`, `S8`) or `--recompute` (`S6`), or delete the cache.
 - **MMseqs2** must be on `PATH` when one of these caches is empty: `fig1c`, `fig3c`, `S8`,
   and the leakage and cluster numbers of `make_numbers`.

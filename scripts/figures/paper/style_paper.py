@@ -68,8 +68,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_config as pc  # noqa: E402
 
 REPO = pc.REPO  # the code checkout: scripts/, docs/, trizod/
-# git-ignored caches of the generators (raw scan, mmseqs, PANAV loops); every cache is keyed
-# by its inputs (paper_config.keyed_json), $TRIZOD_CACHE_DIR only moves them
+# git-ignored caches of the generators (raw scan, mmseqs, PANAV loops); the raw-file scans,
+# the PANAV loop map and the entry authors are keyed by their inputs (paper_config.keyed_json).
+# The S6d recovery, S8 case search, S3 groups, fig1c and fig3c keep their own keys, so give a
+# new build its own $TRIZOD_CACHE_DIR or pass their --refresh / --recompute
 TMP = pc.cache_root()
 B = pc.resolve()  # the build of record unless TRIZOD_* variables select another
 ROOT = B.root
@@ -158,21 +160,20 @@ BACKBONE_ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 # solid-state criterion covers them.
 NON_NATIVE_STATES = frozenset({"denatured", "unfolded", "molten globule", "misfolded"})
 HIGH_PRESSURE_BAR = 400.0  # bar; the writing plan's "high pressure" cut (Appendix A12)
-PERTURBED_RULE = (
-    "a denaturant or alcohol cosolvent, a pressure of at least 400 bar, a non-native "
-    "deposited physical state (denatured, unfolded, molten globule, misfolded), a solid-state "
-    "sample or a membrane mimetic"
-)
 
 
-def is_perturbed(df, cosolvent=None, pressure_bar=None):
-    """Boolean Series: the chain's sample is perturbed (:data:`PERTURBED_RULE`).
+def is_perturbed(df, cosolvent=None, pressure_bar=None, states: bool = True):
+    """Boolean Series: the chain's sample is perturbed, i.e. it holds a cosolvent, was
+    measured at >= :data:`HIGH_PRESSURE_BAR`, is deposited in one of
+    :data:`NON_NATIVE_STATES`, is a solid-state sample or holds a membrane mimetic.
 
     ``df`` holds the release columns ``physical_state``, ``sample_state_evidence`` and
     ``membrane_mimetic``, plus ``cosolvent_evidence`` and ``pressure_bar`` unless
     ``cosolvent`` / ``pressure_bar`` give that evidence from elsewhere (Fig. 3a reads both
     from the chain's own shift list in the raw NMR-STAR file). A missing value counts as
-    not perturbed (ambient pressure, no cosolvent, solution state)."""
+    not perturbed (ambient pressure, no cosolvent, solution state). ``states=False`` drops
+    the physical-state criterion, for analyses that match the state instead (the
+    single-study pairs of ``fig3_replicates.one_factor_pairs``)."""
     import pandas as pd
 
     def col(x, name):
@@ -182,13 +183,13 @@ def is_perturbed(df, cosolvent=None, pressure_bar=None):
     state = df["physical_state"].fillna("").astype(str).str.lower()
     cos = col(cosolvent, "cosolvent_evidence").fillna(False).astype(bool)
     press = pd.to_numeric(col(pressure_bar, "pressure_bar"), errors="coerce").fillna(0)
-    return (
+    out = (
         cos
         | (press >= HIGH_PRESSURE_BAR)
-        | state.isin(NON_NATIVE_STATES)
         | (df["sample_state_evidence"].fillna("").astype(str) == "solid")
         | df["membrane_mimetic"].notna()
     )
+    return out | state.isin(NON_NATIVE_STATES) if states else out
 
 
 # ----------------------------------------------------------------------------------

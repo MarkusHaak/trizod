@@ -378,7 +378,7 @@ def plot(
     ag = _ax(fig, LEFT, CASE_TOP + CASE_H + 2.0, CASE_W, CASE_H)
     _draw_group(az, ag, np.arange(1, n + 1), ubiquitin_rows(U), lw=0.55)
     _style(az, ag, n, show_xlabel=True, ylab=True)
-    az.set_title("Ubiquitin (Fig. 3c), all unbound chains", fontsize=sp.FS_BODY, pad=2,
+    az.set_title("Ubiquitin (Fig. 3a), all unbound chains", fontsize=sp.FS_BODY, pad=2,
                  loc="left")  # fmt: skip
     # condition labels on the grey groups, at residue 38 (inside the folded core, where
     # the native chains lie low), on a light box so the lines stay readable around them

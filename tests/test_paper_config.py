@@ -109,4 +109,6 @@ def test_is_perturbed_rule():
     # Fig. 3a passes the raw-file evidence for cosolvent and pressure
     raw = sp.is_perturbed(df, cosolvent=[False] * 7, pressure_bar=[1.0] * 7).tolist()
     assert raw == [False, True, False, True, True, False, False]
+    # states=False: the one-factor pairs match the state instead of excluding it
+    assert sp.is_perturbed(df, states=False).tolist()[1] is False
     assert sp.HIGH_PRESSURE_BAR == 400.0
