@@ -344,7 +344,7 @@ POST_ROWS = [
     ("bb shift positions", "Backbone shift positions"),
     ("bb shift fraction", "Backbone shift fraction"),
     ("error in computation", "Error in computation"),
-    ("rejected due to any offset", "Record dropped for an offset"),
+    ("rejected due to any offset", "Chain dropped for an offset"),
 ]
 
 
@@ -603,7 +603,7 @@ def main():
     ax.set_xlim(0, n_cand)
     ax.set_yticks([])
     ax.spines["left"].set_visible(False)
-    ax.set_xlabel(f"Candidate records (n = {n_cand:,})")
+    ax.set_xlabel(f"Candidate chains (n = {n_cand:,})")  # "chain" only (review 2.1)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}"))
     from matplotlib.patches import Patch
 
@@ -635,7 +635,7 @@ def main():
     y_b = top_a + h_a + gap_b
     draw_grid(fig, pre_rows, vals, 2, y_b, row_h, col_w, label_w, xmax_b)
     sp.fig_label(fig, "b", 1, y_b - 9.5)
-    axis_title(y_b + h_b + 5.0, "Records removed before scoring")
+    axis_title(y_b + h_b + 5.0, "Chains removed before scoring")
     # bar key on the panel-letter line, right-aligned, clear of the tier headers
     fig.legend(
         handles=[
@@ -659,7 +659,7 @@ def main():
     xmax_c = 1350
     draw_grid(fig, post_rows, vals, 2, y_c, row_h, col_w, label_w, xmax_c)
     sp.fig_label(fig, "c", 1, y_c - 6.5)
-    axis_title(y_c + h_c + 5.0, "Records affected after scoring (bars as in b)")
+    axis_title(y_c + h_c + 5.0, "Chains affected after scoring (bars as in b)")
 
     out = sp.save(fig, "S3")
     print("wrote", out, f"({W:.0f} x {H:.0f} mm)")

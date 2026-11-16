@@ -77,9 +77,9 @@ REC_DELTAS = [-4.0, -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
 REC_MODES = ["lacs", "potenci-only", "both"]
 REC_CACHE = sp.TMP / "paper_figs" / "s6_recovery.json"
 # Method colours, shared with Supplementary Fig. S15: LACS sky blue, the POTENCI/AIC stage
-# dark grey, both stages (the released mode) black. The Okabe-Ito blue, orange, green and
-# vermillion keep their fixed meanings (test set, CheZOD, training, removed).
-C_LACS = sp.OKABE_ITO["skyblue"]
+# dark grey, both stages (the released mode) black. The entity colours (style_paper.ENTITY:
+# blue test set, vermillion CheZOD117, green training, grey CheZOD1325) are not used here.
+C_LACS = sp.CAT["lacs"]
 C_POTENCI = sp.CAT["neutral"]
 C_BOTH = sp.OKABE_ITO["black"]
 MODE_STYLE = {

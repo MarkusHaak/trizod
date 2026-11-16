@@ -15,6 +15,18 @@ figures need, so they are read straight from ``data/raw/bmrb_entries/bmr*/bmr*_3
 The scan is a text parse (no pynmrstar) over ~3 GB, run in parallel and cached as JSON in
 ``<repo>/tmp/paper_figures/raw_scan.json`` (``tmp*/`` is git-ignored). Delete the cache or
 pass ``refresh=True`` to recompute. It never imports pyarrow.
+
+"Deposited" -- the paper's ONE definition (12 Nov 2026). :func:`chain_deposited` says
+whether a chain's own condition list deposits pH, temperature and ionic strength, read
+with the PIPELINE's parser: the condition rows go through
+``trizod.bmrb.bmrb.SampleConditions`` and its getters with ``return_default=False``, so a
+value counts as deposited exactly when the release holds the deposited value and not a
+default (pH 7.0, 298 K, 0.1 M). The scan's own numbers (``cond[...]["ph"/"temp"/"ionic"]``)
+read a value only when ``float()`` accepts it and miss values such as '298K', '293,15' or
+'298-303' (11 temperatures and one ionic strength of the 2026-11 release); they stay for
+pressure, but every "deposited" count of the paper (Fig. 2a/b, Supplementary Fig. S4, the
+condition comparison of Fig. 4a and the ``\\n*NotDeposited*`` macros) uses
+:func:`chain_deposited`.
 """
 
 from __future__ import annotations
@@ -176,6 +188,168 @@ def chain_conditions(raw: dict, entry_id: str, st_id: str) -> dict | None:
     if lid is None:
         return None
     return rec["cond"].get(lid)
+
+
+# ---------------------------------------------------------------- deposited (pipeline)
+DEPOSITED = ("ph", "temperature", "ionic_strength")
+DEPOSITED_CACHE = sp.TMP / "paper_figures" / "deposited_pipeline.json"
+DEPOSITED_VERSION = 1
+
+
+class _Saveframe:
+    """The one method of a pynmrstar saveframe that ``bmrb.get_tag_vals`` calls."""
+
+    def __init__(self, tags: dict):
+        self._tags = tags
+
+    def get_tag(self, tag):
+        return self._tags[tag]
+
+
+def _deposited_lists(task) -> tuple[str, dict]:
+    """``(entry id, {condition list id: {condition: deposited}})`` for one raw file, read
+    with the pipeline's ``SampleConditions`` (its row choice, unit handling and ranges)."""
+    import logging
+
+    import numpy as np
+
+    from trizod.bmrb import bmrb as bm
+
+    logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
+    eid, path = task
+    out = {}
+    for chunk in _FRAME_SPLIT.split(Path(path).read_text(errors="ignore")):
+        if "_Sample_condition_list.ID" not in chunk:
+            continue
+        m = _COND_ID.search(chunk)
+        if not m:
+            continue
+        rows = _loop_rows(chunk, "Sample_condition_variable")
+        sc = bm.SampleConditions(
+            _Saveframe(
+                {
+                    "_Sample_condition_list.ID": [m.group(1)],
+                    **{
+                        f"_Sample_condition_variable.{k}": [r.get(k, ".") for r in rows]
+                        for k in ("Type", "Val", "Val_units")
+                    },
+                }
+            )
+        )
+        vals = (
+            sc.get_pH(return_default=False),
+            sc.get_temperature(return_default=False),
+            sc.get_ionic_strength(return_default=False),
+        )
+        out[m.group(1)] = {
+            c: v is not None and bool(np.isfinite(v)) for c, v in zip(DEPOSITED, vals)
+        }
+    return eid, out
+
+
+def _parser_version() -> str:
+    try:
+        from trizod.provenance import bmrb_parser_version
+
+        return bmrb_parser_version()
+    except Exception:  # pragma: no cover - provenance is part of the package
+        return "unknown"
+
+
+def deposited_lists(
+    raw: dict | None = None, refresh: bool = False, workers: int | None = None
+) -> dict:
+    """``{entry id: {condition list id: {"ph", "temperature", "ionic_strength": bool}}}``
+    for every condition list that a shift table of the raw files points at, read with the
+    pipeline's parser (module docstring). Cached as JSON, keyed by the parser version."""
+    raw = scan_raw() if raw is None else raw
+    pv = _parser_version()
+    if DEPOSITED_CACHE.exists() and not refresh:
+        try:
+            d = json.loads(DEPOSITED_CACHE.read_text())
+        except ValueError:  # a cache another process is still writing
+            d = {}
+        if d.get("_version") == DEPOSITED_VERSION and d.get("_parser") == pv:
+            return d["entries"]
+    tasks = []
+    for eid, rec in raw.items():
+        fs = sorted((sp.RAW_BMRB / f"bmr{eid}").glob("*.str"))
+        if fs and any(v is not None for v in rec["st"].values()):
+            tasks.append((eid, str(fs[0])))
+    t = time.time()
+    with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:
+        out = dict(ex.map(_deposited_lists, tasks, chunksize=64))
+    print(f"  deposited conditions: {len(out)} files in {time.time() - t:.0f} s", file=sys.stderr)  # fmt: skip
+    DEPOSITED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DEPOSITED_CACHE.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(
+        json.dumps({"_version": DEPOSITED_VERSION, "_parser": pv, "entries": out})
+    )
+    # atomic: a concurrent reader never sees half a file
+    os.replace(tmp, DEPOSITED_CACHE)
+    return out
+
+
+def chain_deposited(entry_ids, st_ids, refresh: bool = False) -> list[dict]:
+    """Per chain (``entry_ids[i]``, ``st_ids[i]``): ``{"ph", "temperature",
+    "ionic_strength": bool}``, True when the chain's own condition list deposits a value the
+    pipeline reads (the release then holds it, not a default). A chain whose condition list
+    cannot be resolved counts as depositing nothing (none in the 2026-11 release)."""
+    raw = scan_raw()
+    dep = deposited_lists(raw, refresh=refresh)
+    none = dict.fromkeys(DEPOSITED, False)
+    out = []
+    for e, s in zip(entry_ids, st_ids):
+        lid = raw.get(str(e), {}).get("st", {}).get(str(s))
+        out.append(dep.get(str(e), {}).get(lid, none) if lid is not None else none)
+    return out
+
+
+# ---------------------------------------------------------------- entry authors
+AUTHORS_CACHE = sp.TMP / "paper_figures" / "entry_authors.json"
+
+
+def _entry_author_rows(task) -> tuple[str, list]:
+    """``(entry id, ["family|initial", ...])`` from the ``_Entry_author`` loop of one file:
+    family name case-folded, plus the first letter of the given name (so that two
+    depositors who only share a common family name are not one person)."""
+    eid, path = task
+    txt = Path(path).read_text(errors="ignore")
+    out = []
+    for row in _loop_rows(txt, "Entry_author"):
+        fam = " ".join(str(row.get("Family_name", "")).split()).casefold()
+        given = str(row.get("Given_name", "")).strip(". ")
+        if fam and fam not in (".", "?"):
+            out.append(f"{fam}|{given[:1].casefold() if given else ''}")
+    return eid, sorted(set(out))
+
+
+def entry_authors(entry_ids, workers: int | None = None) -> dict:
+    """``{entry id: frozenset of "family|initial"}`` of the entries' depositors
+    (``_Entry_author``), read from the raw files on demand and cached as JSON (entries are
+    added to the cache; a deposited author list does not change within a snapshot)."""
+    want = {str(e) for e in entry_ids}
+    cache = {}
+    if AUTHORS_CACHE.exists():
+        try:
+            cache = json.loads(AUTHORS_CACHE.read_text())
+        except ValueError:
+            cache = {}
+    todo = []
+    for e in sorted(want - set(cache)):
+        fs = sorted((sp.RAW_BMRB / f"bmr{e}").glob("*.str"))
+        if fs:
+            todo.append((e, str(fs[0])))
+        else:
+            cache[e] = []
+    if todo:
+        with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:  # fmt: skip
+            cache.update(dict(ex.map(_entry_author_rows, todo, chunksize=32)))
+        AUTHORS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = AUTHORS_CACHE.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(cache))
+        os.replace(tmp, AUTHORS_CACHE)
+    return {e: frozenset(cache.get(e, [])) for e in want}
 
 
 if __name__ == "__main__":

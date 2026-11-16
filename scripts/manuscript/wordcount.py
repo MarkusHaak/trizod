@@ -4,6 +4,12 @@ Usage: python scripts/manuscript/wordcount.py <manuscript-draft dir> <scratch ou
 Prints JSON per section; writes the expanded section files and counts.json to the output dir.
 Requires texcount (TeX Live) on PATH.
 
+Counted: Abstract, Introduction, Results, Discussion, Methods, end matter, and the legend
+(the ``\caption{}``) of every display item that ``Article.tex`` inputs -- ``sections/fig<n>.tex``
+and ``sections/table<n>.tex`` (Figs. 1-5 and Table 1 in the story-blueprint draft). The JSON
+ends with a ``Totals`` entry: the NCS main text (Introduction + Results + Discussion) with and
+without headings (texcount and whitespace split), and the summed legend words.
+
 texcount sees \nChainsScored{} as a macro and skips it; the rendered text has a number there.
 So each section is pre-processed: macros -> their values, draft markers resolved
 (\pending/\provisional/\ownerdraft -> their text; \authornote/\needsnumber/\placeholder -> removed
@@ -122,10 +128,19 @@ parts = {
     + strip_comments((sec / "results_b.tex").read_text()),
     "Discussion": strip_comments((sec / "discussion.tex").read_text()),
     "Methods (M1-M11, statistics, LLM statement)": "",
-    "Fig. 1 legend": strip_comments((sec / "fig1.tex").read_text()),
-    "Fig. 2 legend": strip_comments((sec / "fig2.tex").read_text()),
-    "Fig. 3 legend": strip_comments((sec / "fig3.tex").read_text()),
 }
+# every display item Article.tex inputs: figures, then tables, by number
+_inputs = re.findall(
+    r"\\input\{sections/((?:fig|table)\d+)(?:\.tex)?\}",
+    strip_comments((D / "Article.tex").read_text()),
+)
+_disp = sorted(
+    dict.fromkeys(_inputs),
+    key=lambda n: (n.startswith("table"), int(re.sub(r"\D", "", n))),
+)
+for _n in _disp:
+    _label = f"Fig. {_n[3:]}" if _n.startswith("fig") else f"Table {_n[5:]}"
+    parts[f"{_label} legend"] = strip_comments((sec / f"{_n}.tex").read_text())
 mb = strip_comments((sec / "methods_b.tex").read_text())
 cut = mb.index("\\section*{Data availability}")
 parts["Methods (M1-M11, statistics, LLM statement)"] = (
@@ -144,7 +159,7 @@ def caption_only(t):
 
 res = {}
 for name, t in parts.items():
-    if name.startswith("Fig."):
+    if name.endswith(" legend"):
         t = caption_only(t)
     removed = {"authornote": [], "needsnumber": [], "placeholder": []}
     pt = process(t, removed)
@@ -172,5 +187,19 @@ for name, t in parts.items():
     s = re.sub(r"[{}~\\]", " ", s)
     c["split_words"] = len([w for w in s.split() if re.search(r"[A-Za-z0-9]", w)])
     res[name] = c
+main = ("Introduction", "Results", "Discussion")
+leg = [k for k in res if k.endswith(" legend")]
+res["Totals"] = {
+    "main_text_texcount": sum(res[k]["text"] for k in main),
+    "main_text_headers": sum(res[k]["headers"] for k in main),
+    "main_text_texcount_with_headings": sum(
+        res[k]["text"] + res[k]["headers"] for k in main
+    ),
+    "main_text_split": sum(res[k]["split_words"] for k in main),
+    "legends_counted": leg,
+    # texcount puts a \caption{} body under "captions" (words outside text)
+    "legends_texcount": sum(res[k]["text"] + res[k]["captions"] for k in leg),
+    "legends_split": sum(res[k]["split_words"] for k in leg),
+}
 print(json.dumps(res, indent=1))
 (OUT / "counts.json").write_text(json.dumps(res, indent=1))

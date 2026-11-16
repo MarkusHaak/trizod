@@ -53,7 +53,7 @@ YEAR_COLORS = ["#F0F0F0", "#D4D4D4", "#ABABAB", "#828282", "#585858", "#2E2E2E"]
 SET_COLORS = {
     **sp.TIER_COLORS,
     "TriZOD test set": sp.CAT["test"],
-    "CheZOD117": sp.CAT["chezod"],
+    "CheZOD117": sp.CAT["chezod117"],
 }
 N_ORG = 10
 
@@ -176,14 +176,15 @@ def main():
     print(org_tab)
 
     # ---------------- figure ----------------------------------------------------------
-    W, H = sp.W_DOUBLE, 86.0
+    W, H = sp.W_DOUBLE, 104.0  # c transposed (organisms as rows) since 12 Nov 2026
     fig = sp.figure(W, H)
 
     def ax_mm(x, y_top, w, h):
         return fig.add_axes([x / W, 1 - (y_top + h) / H, w / W, h / H])
 
     # 160 mm grid: a (ECDF) and b (year bars, legend above in two rows) on top, the
-    # organism heat map c below with room on the right for its rotated last labels
+    # organism heat map c below: organisms as rows and the six sets as columns, so every
+    # label is horizontal (figure review item 16: no rotated tick labels)
     # a length ECDF
     ax = ax_mm(11, 9, 50, 34)
     handles = []
@@ -284,10 +285,12 @@ def main():
     )
     sp.fig_label(fig, "b", 65, 3)
 
-    # c organisms heatmap (rows = sets, columns = organism categories)
-    top_c = 58
-    ax = ax_mm(22, top_c, 124, 22)
-    share = org_tab.div(org_tab.sum(axis=0), axis=1).T.loc[names]  # sets x cols
+    # c organisms heatmap (rows = organism categories, columns = sets)
+    top_c = 52
+    n_org = len(cols)
+    row_h, col_w = 3.0, 17.0
+    ax = ax_mm(36, top_c + 9.5, col_w * len(names), row_h * n_org)
+    share = org_tab.div(org_tab.sum(axis=0), axis=1).loc[cols, names]  # cols x sets
     ax.imshow(share.to_numpy() * 100, aspect="auto", cmap="Greys", vmin=0, vmax=60)
     for i in range(share.shape[0]):
         for j in range(share.shape[1]):
@@ -301,46 +304,34 @@ def main():
                 fontsize=sp.FS_SMALL,
                 color="white" if v > 33 else "#222222",
             )
-    ax.set_yticks(range(len(names)))
-    ax.set_yticklabels(names, fontsize=sp.FS_TICK)
     plain = ("synthetic construct", "other named", "not recorded")
     short = {
         "synthetic construct": "synthetic",
         "other named": "other",
         "not recorded": "not recorded",
     }
-    xl = []
+    yl = []
     for c in cols:
         if c in plain:
-            xl.append(short[c])
+            yl.append(short[c])
         else:  # abbreviated genus
             g, _, rest = c.partition(" ")
-            xl.append(f"{g[0]}. {rest}" if rest else g)
-    ax.xaxis.tick_top()
-    ax.set_xticks(range(len(cols)))
-    ax.set_xticklabels(
-        [x.replace("\n", " ") for x in xl],
-        fontsize=sp.FS_TICK,
-        rotation=30,
-        ha="left",
-        rotation_mode="anchor",
-    )
-    for lab, c in zip(ax.get_xticklabels(), cols):
+            yl.append(f"{g[0]}. {rest}" if rest else g)
+    ax.set_yticks(range(n_org))
+    ax.set_yticklabels([y.replace("\n", " ") for y in yl], fontsize=sp.FS_TICK)
+    for lab, c in zip(ax.get_yticklabels(), cols):
         if c not in plain:
             lab.set_fontstyle("italic")
+    ax.xaxis.tick_top()
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels([n.replace("TriZOD test set", "TriZOD\ntest set") for n in names],
+                       fontsize=sp.FS_TICK, linespacing=1.05)  # fmt: skip
     ax.tick_params(axis="both", length=0, pad=1.5)
     for sp_ in ax.spines.values():
         sp_.set_visible(False)
-    ax.text(
-        0.5,
-        -0.06,
-        "Chains by source organism (% of the set)",
-        transform=ax.transAxes,
-        ha="center",
-        va="top",
-        fontsize=sp.FS_BODY,
-    )
-    sp.fig_label(fig, "c", 0.5, top_c - 9)
+    fig.text(4.5 / W, 1 - (top_c + 0.2) / H, "Chains by source organism (% of the set)",
+             ha="left", va="top", fontsize=sp.FS_BODY)  # fmt: skip
+    sp.fig_label(fig, "c", 0.5, top_c)
 
     out = sp.save(fig, "S5")
     print("wrote", out)

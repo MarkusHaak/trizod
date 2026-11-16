@@ -210,8 +210,9 @@ def main():
     # c: analytic map
     import matplotlib as mpl
 
+    # the paper's k scale (sp.K_CMAP), without its palest top so the lines stay visible
     cmap = mpl.colors.ListedColormap(
-        mpl.colormaps["viridis"](np.linspace(0.0, 0.82, 256))
+        mpl.colormaps[sp.K_CMAP](np.linspace(0.0, 0.85, 256))
     )
     norm = mpl.colors.Normalize(vmin=1, vmax=21)
     for k in KS_MAP:

@@ -225,7 +225,8 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
     sp.fig_label(fig, "b", 62, 3)
 
     # c ---------------------------------------------------------------
-    # training chain in bluish green, excluded chain in vermillion (fixed meanings)
+    # training chain in bluish green, excluded chain in dashed light grey (the removed
+    # entity of style_paper.ENTITY; vermillion is CheZOD117)
     axc = ax_mm(13, 84, 66, 44)
     myo = myo.copy()
     myo["meanG"] = [np.nanmean(np.asarray(g, float)) for g in myo.gscores]
@@ -239,7 +240,8 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
                      label=f"{r.entry_id}: {r.physical_state}, pH {r.ph:.1f} ({split_word.get(r.split, r.split)})")  # fmt: skip
         elif r.physical_state == "molten globule":
             col = sp.CAT["removed"] if r.split == "excluded" else sp.CAT["neutral"]
-            axc.plot(x, g, color=col, lw=0.9, zorder=2,
+            ls = sp.DASH_REMOVED if r.split == "excluded" else "-"
+            axc.plot(x, g, color=col, ls=ls, lw=0.9, zorder=2,
                      label=f"{r.entry_id}: molten globule, pH {r.ph:.1f} ({split_word.get(r.split, r.split)})")  # fmt: skip
         else:
             axc.plot(x, g, color=ink, lw=0, marker="|", ms=3, mew=0.6, zorder=1)
