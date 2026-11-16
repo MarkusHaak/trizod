@@ -61,7 +61,7 @@ All three must pass.
 - `REFINED_WEIGHTS` in `constants.py` are POTENCI RMSD on a 117-entry IDP reference set (Nielsen & Mulder, from CheZOD source code, not published)
 
 ## Conventions
-- Python >=3.9, ruff for linting/formatting
+- Python >=3.11, ruff for linting/formatting
 - Scientific variable names allowed (T, pH, Ion, N, etc.) — see ruff ignore rules
 - Always show staged files and proposed commit message, then wait for user approval before committing
 

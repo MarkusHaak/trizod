@@ -31,7 +31,7 @@ traceable:
 import hashlib
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -160,7 +160,7 @@ def write_baseline_provenance(baseline_dir, tiers: dict) -> Path:
     stamp = {
         "scoring_cache_version": scoring_cache_version(),
         "git_revision": git_revision(),
-        "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "tiers": dict(tiers),
     }
     path = baseline_dir / BASELINE_PROVENANCE_NAME

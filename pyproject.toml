@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Modern disorder scores for BMRB data"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 authors = [
     { name = "Markus Haak", email = "markus.haak@tum.de" },
     { name = "Tobias Senoner", email = "tobias.senoner@tum.de" },
@@ -51,13 +51,15 @@ markers = [
 addopts = "-m 'not slow'"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM"]
 ignore = [
     "N803",   # argument name should be lowercase (scientific convention: T, Ion, pH, etc.)
     "N806",   # variable name should be lowercase (scientific convention: N, I, E, etc.)
+    "B905",   # zip() without strict= (py310+): adding strict=True would change behaviour on length mismatch
+    "UP042",  # str+Enum -> StrEnum: changes str()/format() of the Typer CLI enums
     "N802",   # function name should be lowercase (POTENCI naming: predPentShift, etc.)
     "N816",   # mixed-case variable in global scope (AAstandard, CENTSHIFTS, etc.)
     "N818",   # exception name should end in Error (legacy naming: Found, etc.)
