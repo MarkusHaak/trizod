@@ -291,6 +291,8 @@ def parse_xrefs(entry: pynmrstar.Entry) -> EntryXrefs:
         if category == "entity":
             ids = sf.get_tag("_Entity.ID")
             entity_id = str(ids[0]) if ids else None
+            if entity_id is None:
+                log.warning("xrefs: entity saveframe %s has no _Entity.ID", sf.name)
             links = out.entity.setdefault(entity_id, [])
         for loop in sf.loops:
             if loop.category == "_Entity_db_link" and category == "entity":

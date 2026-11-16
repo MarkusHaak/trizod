@@ -247,12 +247,10 @@ def fetch(directory: Path, retrieved: str) -> dict:
     files = {}
     for name, url in URLS.items():
         request = urllib.request.Request(url, headers={"User-Agent": "trizod"})
-        with (
-            urllib.request.urlopen(request, timeout=600) as resp,
-            atomic_write(directory / name, "wb") as fh,
-        ):
+        with urllib.request.urlopen(request, timeout=600) as resp:
             last_modified = resp.headers.get("Last-Modified")
-            shutil.copyfileobj(resp, fh, 1 << 20)
+            with atomic_write(directory / name, "wb") as fh:
+                shutil.copyfileobj(resp, fh, 1 << 20)
         files[name] = {
             "url": url,
             "retrieved": retrieved,

@@ -510,12 +510,12 @@ COLUMNS: list[Column] = [
     Column(
         "uniprot_ids",
         "list<string>",
-        derive=lambda c: _xref_col(c, lambda x: xr.uniprot_ids(x)[0]),
+        derive=lambda c: None if c["uniprot"] is None else c["uniprot"][0],
     ),
     Column(
         "uniprot_source",
         "string",
-        derive=lambda c: _xref_col(c, lambda x: xr.uniprot_ids(x)[1]),
+        derive=lambda c: None if c["uniprot"] is None else c["uniprot"][1],
     ),
     Column(
         "pdb_ids", "list<string>", derive=lambda c: _xref_col(c, xr.confident_pdb_ids)
@@ -743,6 +743,7 @@ def collect_columns(
             "quality": quality_map.get(rid),
             "label_tier_source": source_tier,
             "xrefs": chain_links,
+            "uniprot": None if chain_links is None else xr.uniprot_ids(chain_links),
         }
         for col in COLUMNS:
             if col.derive is not None:
