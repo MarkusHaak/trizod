@@ -360,20 +360,6 @@ def patch_kw(key_or_style) -> dict:
     return {"facecolor": st["color"], "edgecolor": "none", "lw": 0}
 
 
-def entity_handle(key_or_style, label: str | None = None, kind: str = "marker", **kw):
-    """A legend handle (marker, line or patch) for an entity; prefer direct labels."""
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
-
-    st = _style(key_or_style)
-    label = st.get("label", "") if label is None else label
-    if kind == "patch":
-        return Patch(label=label, **patch_kw(st), **kw)
-    if kind == "line":
-        return Line2D([], [], label=label, **line_kw(st), **kw)
-    return Line2D([], [], label=label, **{"ms": 3.6, **marker_kw(st), **kw})
-
-
 TIER_COLORS = {
     "unfiltered": "#D7A9CB",
     "tolerant": "#B86AA6",

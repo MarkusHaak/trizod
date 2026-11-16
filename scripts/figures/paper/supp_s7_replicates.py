@@ -191,35 +191,12 @@ def stratum(L: pd.DataFrame, t: str, mode: str) -> pd.DataFrame:
 
 
 def boot_median(sub: pd.DataFrame, col="dev"):
-    if sub.empty:
-        return np.nan, np.nan, np.nan
-    groups = [v[col].to_numpy() for _, v in sub.groupby("sequence", sort=False)]
-    rng = np.random.default_rng(SEED)
-    meds = np.empty(N_BOOT)
-    for b in range(N_BOOT):
-        pick = rng.integers(0, len(groups), len(groups))
-        meds[b] = np.median(np.concatenate([groups[i] for i in pick]))
-    return (
-        float(sub[col].median()),
-        float(np.percentile(meds, 2.5)),
-        float(np.percentile(meds, 97.5)),
-    )
+    return fr.boot_median_by_seq(sub, col, n_boot=N_BOOT, seed=SEED)
 
 
 def boot_share(sub: pd.DataFrame, values: np.ndarray):
     """Mean of ``values`` (one per chain) with a sequence-bootstrap CI."""
-    if sub.empty:
-        return np.nan, np.nan, np.nan
-    s = pd.DataFrame({"seq": sub["sequence"].to_numpy(), "v": values})
-    agg = s.groupby("seq", sort=False)["v"].agg(["sum", "count"]).to_numpy()
-    rng = np.random.default_rng(SEED)
-    pick = rng.integers(0, len(agg), (N_BOOT, len(agg)))
-    bs = agg[pick, 0].sum(1) / agg[pick, 1].sum(1)
-    return (
-        float(values.mean()),
-        float(np.percentile(bs, 2.5)),
-        float(np.percentile(bs, 97.5)),
-    )
+    return fr.boot_mean_by_seq(sub.assign(_v=values), "_v", n_boot=N_BOOT, seed=SEED)
 
 
 def stratum_fig3(Lf: pd.DataFrame, t: str, mode: str) -> pd.DataFrame:

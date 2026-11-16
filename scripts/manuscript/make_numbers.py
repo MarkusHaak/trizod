@@ -515,6 +515,8 @@ def _to_bar(v: float, unit: str):
         "kpa": v / 100,
         "pa": v / 1e5,
         "mbar": v / 1000,
+        "mmhg": v * 0.00133322,
+        "torr": v * 0.00133322,
         "psi": v * 0.0689476,
     }.get(u)
 
@@ -4916,26 +4918,6 @@ def sec_replicates(C):
 
     same, diff = cond_pairs(df[~df.is_bound])
     srcE = "Parquet; non-bound replicate pairs, <= 50 pairs per sequence, seed 0; same: |dpH| <= 0.2 and |dT| <= 2 K; different: |dpH| >= 1 or |dT| >= 10 K (port of one_idea/teaser.py section E)"
-    R.add(
-        "nCondPairsSamePort",
-        I(len(same)),
-        "same-condition replicate pairs (non-bound; exploratory port, <= 50 pairs per sequence; "
-        "renamed from nCondPairsSame on 12 Nov 2026, which now holds the Fig. 4a count)",
-        srcE,
-        PREVIEW,
-        "r4",
-        "898",
-    )
-    R.add(
-        "nCondPairsDifferentPort",
-        I(len(diff)),
-        "different-condition replicate pairs (non-bound; exploratory port, <= 50 pairs per sequence; "
-        "renamed from nCondPairsDifferent on 12 Nov 2026)",
-        srcE,
-        PREVIEW,
-        "r4",
-        "1,088",
-    )
     R.add(
         "condMedianAbsDGSame",
         F(same.mad.median(), 3),

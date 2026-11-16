@@ -95,10 +95,9 @@ FLAG_WORDS = {  # the legend's words (deviate, agree) with the threshold that de
 # --- Fig. 4a ---------------------------------------------------------------------------
 W, H = sp.W_SINGLE, 55.0  # mm, one cell of the 2 x 2 Fig. 4 grid
 CI_COLOR = sp.INK_SOFT
-GRID = "#E6E6E6"  # light grid along the compared axis (as in fig3a_reliability.py)
+GRID = "#E6E6E6"  # light grid along the compared axis
 MS = 5.0  # marker size, pt
 AX_Y0 = 9.5  # bottom of the axes, mm: the x labels of all four panels sit on one line
-XLABEL_ABSDG = "Difference between replicates, |ΔG|"  # Supplementary figures
 # Fig. 4a: the dots are medians of per-pair |dG|
 XLABEL_MEDIAN = "Median difference between replicates, |ΔG|"
 # Same-condition pairs without a state difference: the "same" entity (black) with the

@@ -37,23 +37,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fig3_replicates as fr  # noqa: E402
 import style_paper as sp  # noqa: E402
 
-# --- layout shared with fig3b_conditions.py (keep the two in step) -------------------
-# a and b are half-width cells (W_SINGLE) set side by side in Fig. 3 at 1:1.
-W, H = sp.W_SINGLE, 38.0  # mm
-AX_X = (15.0, 48.5)  # left edge of the two axes, mm
-AX_W = 26.0  # width of each axes, mm
-AX_Y0, AX_H = 11.0, 22.5  # bottom and height of the axes, mm
-XLIM_DEV, XT_DEV = (0.0, 0.09), [0, 0.03, 0.06, 0.09]
-XLIM_R, XT_R = (0.4, 1.0), [0.4, 0.6, 0.8, 1.0]
+# --- shared labels and marker style ---------------------------------------------------
 # One x label per measure, identical in a and b (and in Supplementary Fig. S7a, e): in a
 # the difference is taken from the consensus of a chain's replicates, in b between the two
 # chains of a pair; the caption says which.
 XLABEL_DEV = "Difference from\nreplicates (|ΔG|)"
 XLABEL_R = "Replicate\ncorrelation ($\\mathit{r}$)"
-MS = 5.0  # marker size, pt
 EDGE = "#262626"  # dark marker edge keeps the pale unfiltered tier visible
 CI_COLOR = "#4D4D4D"
-GRID = "#E6E6E6"
 
 
 def n_reps() -> dict:
@@ -79,60 +70,6 @@ def compute():
         R.append(b)
     R = pd.DataFrame(R)
     return D, L, S, P, R
-
-
-def dot_axes(fig, n_rows: int, labels: list[str]):
-    """The two side-by-side dot-plot axes of Fig. 3a/3b: rows top to bottom, shared y."""
-    axes = []
-    for i, x0 in enumerate(AX_X):
-        ax = fig.add_axes(
-            [x0 / W, AX_Y0 / H, AX_W / W, AX_H / H], sharey=axes[0] if axes else None
-        )
-        ax.set_ylim(n_rows - 0.4, -0.6)
-        ax.spines["left"].set_visible(False)
-        ax.tick_params(axis="y", length=0)
-        ax.set_yticks(range(n_rows))
-        if i == 0:
-            ax.set_yticklabels(labels, fontsize=sp.FS_BODY)
-        else:
-            ax.tick_params(axis="y", labelleft=False)
-        ax.grid(axis="x", color=GRID, lw=0.4, zorder=0)
-        ax.set_axisbelow(True)
-        axes.append(ax)
-    axes[0].set_xlim(*XLIM_DEV)
-    axes[0].set_xticks(XT_DEV)
-    axes[0].set_xticklabels(["0", "0.03", "0.06", "0.09"])
-    axes[1].set_xlim(*XLIM_R)
-    axes[1].set_xticks(XT_R)
-    return axes
-
-
-def dot(ax, x, lo, hi, y, color, marker="o"):
-    """One estimate with its 95 % interval."""
-    ax.plot([lo, hi], [y, y], color=CI_COLOR, lw=0.8, solid_capstyle="butt", zorder=2)
-    ax.plot(x, y, ls="", marker=marker, ms=MS, mfc=color, mec=EDGE, mew=0.5, zorder=3)
-
-
-def draw(S: pd.DataFrame, R: pd.DataFrame):
-    fig = sp.figure(W, H)
-    ax_d, ax_r = dot_axes(fig, len(sp.TIERS), sp.TIERS)
-    s = S[S.kbin == "all"].set_index("tier").loc[sp.TIERS]
-    R = R.set_index("tier").loc[sp.TIERS]
-    for y, t in enumerate(sp.TIERS):
-        c = sp.TIER_COLORS[t]
-        dot(
-            ax_d,
-            s.loc[t, "median_dev"],
-            s.loc[t, "median_dev_lo"],
-            s.loc[t, "median_dev_hi"],
-            y,
-            c,
-        )
-        dot(ax_r, R.loc[t, "r"], R.loc[t, "r_lo"], R.loc[t, "r_hi"], y, c)  # fmt: skip
-    ax_d.set_xlabel(XLABEL_DEV)
-    ax_r.set_xlabel(XLABEL_R)
-    sp.fig_label(fig, "a", 0.0, 0.0)
-    return fig
 
 
 # --- Fig. 4c: size x agreement plane ------------------------------------------------
