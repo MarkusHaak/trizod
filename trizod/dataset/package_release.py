@@ -50,7 +50,6 @@ under ``leakage``.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import tempfile
@@ -73,7 +72,7 @@ from trizod.dataset.mmseqs import (
 )
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import count_fasta, read_fasta, write_fasta
-from trizod.provenance import pipeline_version
+from trizod.provenance import file_sha256, pipeline_version
 from trizod.shifts import SHIFTS_PARQUET_NAME
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
@@ -81,11 +80,7 @@ DEFAULT_VERSION = "2026-07"
 
 
 def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    return file_sha256(path)
 
 
 def count_jsonl(path: Path) -> int:

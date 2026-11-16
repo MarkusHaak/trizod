@@ -75,7 +75,14 @@ Four layers are shipped:
    redundant 2,298 · test_trizod 460 · test_chezod117 115), `train_tier`
    (strict 1,895 · moderate 2,625 · tolerant 946 · unfiltered 337),
    `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
-   assembly-composition annotation columns. Rows are sorted by
+   assembly-composition annotation columns, and per-chain UniProt / PDB
+   cross-references (`xrefs`, `uniprot_ids`, `uniprot_source`, `pdb_ids`)
+   from the same NMR-STAR snapshot plus three dated public files (BMRB's
+   BMRB–PDB match list, wwPDB SEQRES, SIFTS), each link labelled `exact`
+   (same deposition), `author` (depositor-supplied), `sifts` (UniProt of the
+   sequence-matched chain of the entry's own or a depositor-named structure), `unspecified` or
+   `blast` (BMRB annotator BLAST hit, with identity and coverage) — see the
+   bundle README. Rows are sorted by
    `(entry_id, id)` in string order and written in 500-row groups with min/max
    statistics, so a filter on `entry_id` reads one row group.
 4. **Chemical-shift companion** — `trizod_shifts.parquet`, **11,839,037**

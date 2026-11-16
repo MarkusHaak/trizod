@@ -47,6 +47,15 @@ _PKG_ROOT = Path(__file__).resolve().parent
 
 
 @lru_cache(maxsize=1)
+def file_sha256(path) -> str:
+    """SHA-256 of a file, read in 1 MiB blocks (release and source manifests)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def scoring_cache_version() -> str:
     """Return a short hash of the scoring-math source.
 

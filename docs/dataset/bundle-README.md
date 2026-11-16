@@ -81,6 +81,67 @@ describe the deposition; only `physical_state` participates in any filter.
 `metal_comp_ids`, `ligand_comp_ids`, `ligand_names`, `is_bound`, and the split
 columns `split` / `train_tier` / `pool_tier` / `cluster_repr` / `label_tier`.
 
+### Cross-references: UniProt and PDB (`trizod_dataset.parquet` only)
+
+Every chain carries its UniProt and PDB links, so you can join TriZOD to
+UniProt, AlphaFold DB, DisProt or the PDB. They come from the same NMR-STAR
+snapshot as the labels (`trizod/bmrb/xrefs.py`) plus three dated public files
+(`trizod/bmrb/xref_sources.py`, fetched by `scripts/fetch_xref_sources.py`
+and pinned by SHA-256 in the table metadata key `xref_sources`):
+
+| file | publisher | used for |
+|---|---|---|
+| `adit_nmr_matched_pdb_bmrb_entry_ids.csv` | BMRB | BMRB entry → PDB entry of the same deposition |
+| `pdb_seqres.txt.gz` | wwPDB | the sequence of every PDB chain |
+| `pdb_chain_uniprot.tsv.gz` | SIFTS (EBI) | PDB chain → UniProt accession |
+
+High-confidence links are kept apart from homology hits by a `source` on
+every link, listed here from most to least trustworthy:
+
+| `source` | where it comes from | how far to trust it |
+|---|---|---|
+| `exact` | the PDB entry deposited together with this BMRB entry: a `_Related_entries` row with relationship *BMRB Entry Tracking System*, or a row of BMRB's match file for BMRB IDs above 15000 (one ADIT-NMR session, per BMRB's README) | the same deposition |
+| `author` | depositor-supplied: `_Entity_db_link` / `_Assembly_db_link` with `Author_supplied = yes`, and every other `_Related_entries` PDB row (`details` keeps the relationship text, e.g. "Crystal structure") | the depositor's statement; a related PDB entry may be another construct or a complex |
+| `sifts` | the UniProt accession SIFTS gives for a chain of a high-confidence structure — the entry's own (`exact`, or BMRB-matched) or one the depositor names (`author`), never a BLAST PDB hit — whose SEQRES sequence covers ≥ 90 % of this chain at ≥ 95 % identity; `identity` / `coverage` are that match and `details` names the PDB chain | the structure solved from this sample, mapped to UniProt by SIFTS; per chain, so the partner of a complex does not lend its accession |
+| `unspecified` | a db-link row with no `Author_supplied` value (legacy entries), or a BMRB match-file row for BMRB IDs up to 15000 (supplied by the author or a BMRB annotator) | not guessed either way |
+| `blast` | `_Entity_db_link` with `Author_supplied = no`: BMRB annotators' BLAST hits | **includes homologs** — check `identity` and `coverage` |
+
+| column | type | meaning |
+|---|---|---|
+| `xrefs` | list of struct | every UniProt/PDB link: `db` (`UniProt`/`PDB`), `accession`, `source`, `identity` (%), `coverage` (share of *this* chain covered, %), `origin` (where it was read: the NMR-STAR loop `Entity_db_link` / `Assembly_db_link` / `Related_entries`, or the file `bmrb_pdb_match` / `sifts`), `raw_db`, `raw_accession`, `details`. For `blast` links `identity` is `Seq_identity` and `coverage` `Seq_query_to_submitted_percent`. Ordered UniProt before PDB, then by `source` as above, then in deposited order |
+| `uniprot_ids` | list<string> | the chain's own UniProt accessions at the best evidence level it has: the `author` ones if there are any; else the `sifts` ones; else **every** remaining accession that is 100 % identical over 100 % of the chain; else empty. Join on any element |
+| `uniprot_source` | string | which tier `uniprot_ids` came from: `author`, `sifts`, `unspecified` or `blast`; null when `uniprot_ids` is empty |
+| `pdb_ids` | list<string> | distinct PDB IDs from `exact` and `author` links only; other PDB links stay in `xrefs` |
+
+- `accession` is normalised: UniProt base accession without isoform or
+  version (`Q8BGM4-1` → `Q8BGM4`), upper-case four-character PDB ID
+  (`2FIF_E` → `2FIF`). It is **null** when the deposited value is not an
+  accession — e.g. a UniProt entry *name* such as `B2MG_HUMAN`;
+  `raw_accession` keeps it verbatim.
+- `_Entity_db_link` and `sifts` links belong to the chain. `_Related_entries`,
+  `_Assembly_db_link` and `bmrb_pdb_match` links are per **entry** and repeat
+  on every chain of it, so the PDB structure of a complex is linked from each
+  partner.
+- Several distinct UniProt accessions in one tier are usually one sequence in
+  several species or strains (BLAST tier, e.g. P68246 / P68247) or a fusion
+  construct (SIFTS tier). `uniprot_ids` lists them all, unranked, so a join on
+  any of them hits. A BLAST hit below 100 %/100 % is a homolog or a fragment
+  match and stays in `xrefs` only.
+- SIFTS maps to the current UniProt release, whereas depositor accessions are
+  as deposited. Where both exist they agree on 424 chains and differ on 65 —
+  mostly identical sequences under another accession (renamed strains, merged
+  entries; only 11 differ at < 100 % sequence identity); `uniprot_ids` keeps
+  the depositor's. Against 100 %/100 % BLAST hits SIFTS agrees on 1,222 chains
+  and differs on 98.
+- All four cross-reference columns are **null** when the entry was not read,
+  and an empty list / null when it declares no link.
+
+Coverage on the 2026-11-11 snapshot build (17,403 chains; dated sources of
+2026-11-13): 77.7 % have at least one UniProt or PDB accession and 67.8 % at
+least one UniProt accession; `uniprot_ids` is non-empty for 60.2 % (1,142
+author, 8,221 SIFTS, 1,084 BLAST, 33 unspecified); 6.6 % have an
+author-supplied UniProt accession and 50.0 % a SIFTS one; 44.0 % have an `exact` PDB entry and 54.5 % a non-empty `pdb_ids`.
+
 ## Chemical shifts (`trizod_shifts.parquet`)
 
 Every assigned chemical shift **on a canonical residue** — backbone *and* side
