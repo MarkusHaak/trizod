@@ -79,7 +79,6 @@ ONE_FACTOR = {
     "pH": {"dph_min": 1.0, "dT_max": 2.0},  # |dpH| >= 1, |dT| <= 2 K
 }
 ONE_FACTOR_MIN_RES = 50  # co-scored residues
-ONE_FACTOR_HIGH_P = 400.0  # bar; both chains must be measured below this
 IONIC_ATOL = 0.01  # M; "equal ionic strength" (deposited values agree within 0.01 M)
 # a crossing residue: G > CROSS_HI in one chain and G < CROSS_LO in the other
 CROSS_HI, CROSS_LO = 0.65, 0.35
@@ -741,7 +740,7 @@ def one_factor_pairs(
 
     1. Qualifying chains: non-bound; pH, temperature AND ionic strength deposited, not
        imputed (:func:`deposited_conditions`); no cosolvent evidence, no membrane mimetic, no
-       solid-sample evidence; not measured at >= ONE_FACTOR_HIGH_P bar (a missing pressure
+       solid-sample evidence; not measured at >= sp.HIGH_PRESSURE_BAR bar (a missing pressure
        counts as ambient).
     2. Qualifying pairs: identical sequence, one study (same normalised ``citation_title``,
        :func:`norm_title`), different entries, the same ``physical_state``, equal ionic
@@ -772,7 +771,7 @@ def one_factor_pairs(
     memb = nb["membrane_mimetic"].notna().to_numpy()
     solid = (nb["sample_state_evidence"].astype(str) == "solid").to_numpy()
     with np.errstate(invalid="ignore"):
-        highp = nb["pressure_bar"].to_numpy(float) >= ONE_FACTOR_HIGH_P
+        highp = nb["pressure_bar"].to_numpy(float) >= sp.HIGH_PRESSURE_BAR
     nb["_title"] = nb["citation_title"].map(norm_title)
     sel = nb[ok & ~cos & ~memb & ~solid & ~highp & nb["_title"].notna().to_numpy()]
     rows = []

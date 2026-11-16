@@ -16,9 +16,10 @@ retrieval date from `BMRB_SNAPSHOT.json` in the raw snapshot directory
 snapshot cannot prove; the file is written when the snapshot is downloaded.
 
 All of them **read one finished build** and **never run the scoring pipeline**. By default
-that is the frozen 2026-10 build in `data/interim/build/`: `parquet-2026-10-simplify/`,
-`release_bundle/trizod-dataset-2026-10/` and `rebuild_2026-10.log`. Environment variables
-select a later build (see [Selecting the build](#selecting-the-build)).
+that is the build of record, the 2026-11-11 snapshot rebuild at `trizod-a481315` in
+`data/interim/rebuild-2026-11-11/` of the checkout that holds `data/`. Environment variables
+select another build (see [Selecting the build](#selecting-the-build)); both the generators
+and `make_numbers.py` take the choice from `paper_config.py`.
 
 There is one exception, in Supplementary Fig. S6d. It re-scores 150 sampled chains with the
 released `get_offset_corrected_shifts()` in a pyarrow-free subprocess. That happens only
@@ -64,51 +65,47 @@ three caches that the figures reuse: the raw scan, the PANAV loop map and the S6
   location. PDFs go into it, and data tables go into its `source_data/`, `fig3_data/` and
   `suppfigs_{a,b,c}_data/` sub-folders. Point it at a scratch directory to check a change
   without touching the draft.
-- **Data root.** By default this is the checkout that holds `data/interim/build`, found
-  through `trizod.paths`: the code checkout, or the first parent that has it, so a git
-  worktree uses the main checkout's `data/`. To override it:
+- **Data root.** By default this is `data/interim/rebuild-2026-11-11/root` of the checkout
+  that holds `data/` (the code checkout, or the first parent that has `data/interim/build`,
+  so a git worktree uses the main checkout's `data/`). To override it:
   - generators: set `TRIZOD_DATA_ROOT`;
-  - `make_numbers.py`: pass `--root`.
+  - `make_numbers.py`: pass `--root` (or set `TRIZOD_DATA_ROOT`).
 - **Previews.** Set `TRIZOD_FIG_PREVIEW_DIR` to also write PNG previews there.
 
 ### Selecting the build
 
-Every variable is optional; unset, the frozen 2026-10 build is read. The generators
-(`style_paper.py`) and `make_numbers.py` read the same variables, so the artwork and the
-prose always describe one build.
+`paper_config.resolve()` decides the build for the generators (`style_paper.py`) and for
+`make_numbers.py`, so the artwork and the prose always describe one build. Every variable is
+optional; unset, the build of record is read (`RB` = `<checkout>/data/interim/rebuild-2026-11-11`).
 
 | Variable | What it points at | Default |
 |---|---|---|
-| `TRIZOD_DATA_ROOT` | checkout holding `data/raw`, `data/external` and `data/interim/chezod_verification` (`make_numbers.py`: `--root`) | first parent with `data/interim/build` |
+| `TRIZOD_DATA_ROOT` | root holding `data/raw`, `data/external`, `data/interim/chezod_verification` and `tmp/` (`make_numbers.py`: `--root`) | `$RB/root` |
 | `TRIZOD_BUILD_DIR` | build directory: `final_dataset/`, `testset/`, `mmseqs/` | `<root>/data/interim/build` |
-| `TRIZOD_RELEASE_DIR` | `trizod_dataset.parquet`, `trizod_shifts.parquet` (and the post-build `disorder_trizod.fasta`, `sidechain-coverage.md`) | `$TRIZOD_BUILD_DIR/parquet-2026-10-simplify` |
-| `TRIZOD_BUNDLE` | release bundle: `MANIFEST.json`, `scores/`, `train/`, `test/` | `$TRIZOD_BUILD_DIR/release_bundle/trizod-dataset-2026-10` |
-| `TRIZOD_REBUILD_LOG` | build log with the four `print_filter_losses()` reports | `$TRIZOD_BUILD_DIR/rebuild_2026-10.log` |
+| `TRIZOD_RELEASE_DIR` | `trizod_dataset.parquet`, `trizod_shifts.parquet` (and the post-build `disorder_trizod.fasta`, `sidechain-coverage.md`) | `$RB/release` |
+| `TRIZOD_BUNDLE` | release bundle: `MANIFEST.json`, `scores/`, `train/`, `test/` | `$TRIZOD_BUILD_DIR/release_bundle/trizod-dataset-2026-11` |
+| `TRIZOD_REBUILD_LOG` | build log with the four `print_filter_losses()` reports | `$RB/rebuild_2026-11-11.log` |
 | `TRIZOD_PKL_DIR` | the build's BmrbEntry pickle cache (`make_numbers.py` and `supp_s3_filter_losses.py`) | `<root>/tmp/bmrb_entries` |
-| `TRIZOD_SIDECHAIN_DOC` | side-chain coverage report (`make_numbers.py` only) | `$TRIZOD_RELEASE_DIR/sidechain-coverage.md` when the release directory is set and holds one, else `docs/dataset/sidechain-coverage.md` |
-| `TRIZOD_DRAW_DIR` | the 2026-08-11 test-set draw (`_tmp/`, `TriZOD_test_set_clu.tsv`; `make_numbers.py` only). A rebuild re-resolves the pinned set without redrawing it, so the draw stays in the build that drew it | `$TRIZOD_BUILD_DIR/testset` when it holds `_tmp/`, else `<root>/data/interim/build/testset` |
+| `TRIZOD_SIDECHAIN_DOC` | side-chain coverage report (`make_numbers.py` only) | `$TRIZOD_RELEASE_DIR/sidechain-coverage.md` when it exists, else `docs/dataset/sidechain-coverage.md` |
+| `TRIZOD_DRAW_DIR` | the 2026-08-11 test-set draw (`_tmp/`, `TriZOD_test_set_clu.tsv`; `make_numbers.py` only). A rebuild re-resolves the pinned set without redrawing it, so the draw stays in the build that drew it | `$TRIZOD_BUILD_DIR/testset` when it holds `_tmp/`, else `<checkout>/data/interim/build/testset` |
 | `TRIZOD_CACHE_DIR` | where the caches below go (and `make_numbers.py --work-dir`) | `tmp/` of the code checkout |
 
-Release, bundle and log default to the 2026-10 names *inside* `TRIZOD_BUILD_DIR`, so
-setting only that one fails loudly instead of mixing two builds. Give each build its own
-`TRIZOD_CACHE_DIR`: most caches are not keyed by build, and a cache from another build
-silently feeds stale searches into the numbers. Only the raw-file caches
-(`paper_figures/raw_scan.json`, `paper_figs/panav_loop_to_st_id.json`,
-`manuscript_numbers/raw_scan.json`) and the content-hashed `fig1c_mmseqs/` can be copied
-over. The release label and pipeline version come from the bundle's `MANIFEST.json`
-(`style_paper.RELEASE`, `style_paper.PIPELINE`); `style_paper.IS_FROZEN` is true only on the
-frozen 2026-10 build, whose split predates the rebuild fixes.
+The four build variables (`TRIZOD_BUILD_DIR`, `TRIZOD_RELEASE_DIR`, `TRIZOD_BUNDLE`,
+`TRIZOD_REBUILD_LOG`) go together: setting some but not all of them stops with an error, so
+a partial override never mixes two builds. The release label and pipeline version come
+from the bundle's `MANIFEST.json` (`style_paper.RELEASE`, `style_paper.PIPELINE`);
+`style_paper.IS_FROZEN` is true only on the frozen 2026-10 build, whose split predates the
+rebuild fixes.
 
-Example, the 2026-11 rebuild:
+Example, the frozen 2026-10 build of the first draft:
 
 ```bash
-RB=/path/to/trizod/data/interim/rebuild-2026-11
-export TRIZOD_BUILD_DIR=$RB/root/data/interim/build
-export TRIZOD_RELEASE_DIR=$RB/release
-export TRIZOD_BUNDLE=$TRIZOD_BUILD_DIR/release_bundle/trizod-dataset-2026-11
-export TRIZOD_REBUILD_LOG=$RB/rebuild_2026-11.log
-export TRIZOD_PKL_DIR=$RB/root/tmp/bmrb_entries
-export TRIZOD_CACHE_DIR=$PWD/tmp/paper-2026-11
+T=/path/to/trizod                                  # the checkout holding data/
+export TRIZOD_DATA_ROOT=$T
+export TRIZOD_BUILD_DIR=$T/data/interim/build
+export TRIZOD_RELEASE_DIR=$TRIZOD_BUILD_DIR/parquet-2026-10-simplify
+export TRIZOD_BUNDLE=$TRIZOD_BUILD_DIR/release_bundle/trizod-dataset-2026-10
+export TRIZOD_REBUILD_LOG=$TRIZOD_BUILD_DIR/rebuild_2026-10.log
 # then the loop above, unchanged
 ```
 
@@ -117,13 +114,17 @@ export TRIZOD_CACHE_DIR=$PWD/tmp/paper-2026-11
 - **Caches.** Derived intermediates are cached in the git-ignored `tmp/` of the code
   checkout (or `$TRIZOD_CACHE_DIR`):
   - `tmp/manuscript_numbers/`
-  - `tmp/paper_figures/raw_scan.json`
+  - `tmp/paper_figures/` (raw scan, deposited conditions, entry authors)
   - `tmp/paper_figs/` (PANAV loop map, S6d recovery, S8 case search)
   - `tmp/fig1c_mmseqs/`
   - `tmp/fig3c_split/`
 
-  To recompute, delete them or pass `--refresh` (`make_numbers`, `fig3c`, `S8`) or
-  `--recompute` (`S6`).
+  The raw-file scans, the PANAV loop map, the entry authors and every `make_numbers` cache
+  are keyed by their inputs (`paper_config.keyed_json`): the snapshot's `BMRB_SNAPSHOT.json`,
+  the build's `MANIFEST.json`, the code that computes them and the mmseqs inputs and
+  arguments. A cache written for another snapshot, build or code is recomputed, never
+  reused. To force a recompute, pass `--refresh` (`make_numbers`, `fig2_composition`,
+  `fig3c`, `S8`) or `--recompute` (`S6`), or delete the cache.
 - **MMseqs2** must be on `PATH` when one of these caches is empty: `fig1c`, `fig3c`, `S8`,
   and the leakage and cluster numbers of `make_numbers`.
 
@@ -160,7 +161,7 @@ Retired on 12 Nov 2026: Suppl. Fig. S19 (now Fig. 4d) and Suppl. Table T13 (now 
 | `scripts/manuscript/make_numbers.py` | `numbers.tex`, `numbers_index.md` (in `--out-dir`) | the whole build, CheZOD, PANAV, raw BMRB, the build's `tmp/bmrb_entries`, `sidechain-coverage.md`, `docs/filtering.md` | registry dump in `--work-dir` |
 | `fig1b_record.py` | Fig. 1b (`fig1b.pdf`), anatomy of one chain record: shift, side-chain, k and G tracks plus a key-value card; the chain is chosen by a fixed rule (`select_example`) | Parquet, shifts Parquet, raw-scan cache (optional check that the card's conditions were deposited) | `source_data/fig1b.csv`, `fig1b_rule.csv` |
 | `fig1c_scale.py` | Fig. 1c (`fig1c.pdf`), TriZOD vs CheZOD1325 in chains, residues and clusters | Parquet, CheZOD1325 + CheZOD117 sequences, MMseqs2 | `source_data/fig1c.csv` |
-| `fig2_composition.py` | Fig. 2a-d (`fig2_composition.pdf`): pH x temperature with tier windows, annotations per tier, shifts by atom type, repeated measurements (`--refresh` re-reads the raw condition rows; use it after a new snapshot, since a stale `$TRIZOD_CACHE_DIR` scan gives wrong ionic-strength counts) | Parquet, shifts Parquet, tiers, raw scan | `source_data/fig2{a,b,c,d}*.csv`, `fig2_summary.json` |
+| `fig2_composition.py` | Fig. 2a-d (`fig2_composition.pdf`): pH x temperature with tier windows, annotations per tier, shifts by atom type, repeated measurements (`--refresh` re-reads the raw condition rows; a new snapshot rescans by itself, the scan cache is keyed by `BMRB_SNAPSHOT.json`) | Parquet, shifts Parquet, tiers, raw scan | `source_data/fig2{a,b,c,d}*.csv`, `fig2_summary.json` |
 | `fig2c_chezod.py` | Fig. 3c (`fig3c_chezod.pdf`), MAE vs CheZOD1325 without and with LACS (`--potenci-only PATH`) | CheZOD1325, a LACS-off run (`--potenci-only`; the paper uses `interim/chezod_verification_2026-11-12/trizod_potenci_only.json`, run on the release code), unfiltered tier | `source_data/fig3c_chezod.csv` |
 | `fig2a_kpaired.py` | Fig. 3b (`fig3b_kpaired.pdf`), within-residue shift-count test (`--replot` redraws from the CSV) | Parquet | `source_data/fig3b_kpaired.csv` |
 | `fig1a_ubiquitin.py` | Fig. 3a (`fig3a_ubiquitin.pdf`), ubiquitin Z/G profiles of the native-condition chains | Parquet, tiers, raw BMRB (ubiquitin entries) | `source_data/fig3a_ubiquitin*.csv` |

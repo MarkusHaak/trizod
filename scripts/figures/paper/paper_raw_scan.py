@@ -13,8 +13,9 @@ figures need, so they are read straight from ``data/raw/bmrb_entries/bmr*/bmr*_3
   approximate -- Supplementary Fig. S5).
 
 The scan is a text parse (no pynmrstar) over ~3 GB, run in parallel and cached as JSON in
-``<repo>/tmp/paper_figures/raw_scan.json`` (``tmp*/`` is git-ignored). Delete the cache or
-pass ``refresh=True`` to recompute. It never imports pyarrow.
+``<repo>/tmp/paper_figures/raw_scan.json`` (``tmp*/`` is git-ignored), keyed by the
+snapshot's ``BMRB_SNAPSHOT.json`` and the parsing code (``paper_config.keyed_json``), so a new
+snapshot or a parser change rescans. Pass ``refresh=True`` to force a rescan. It never imports pyarrow.
 
 "Deposited" -- the paper's ONE definition (12 Nov 2026). :func:`chain_deposited` says
 whether a chain's own condition list deposits pH, temperature and ionic strength, read
@@ -31,7 +32,6 @@ condition comparison of Fig. 4a and the ``\\n*NotDeposited*`` macros) uses
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shlex
@@ -42,10 +42,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import paper_config as pc  # noqa: E402
 import style_paper as sp  # noqa: E402
 
 CACHE = sp.TMP / "paper_figures" / "raw_scan.json"
-SCAN_VERSION = 3  # 3: pH*/pD rows count as a deposited pH
 
 _FRAME_SPLIT = re.compile(r"(?m)^[ \t]*save_\S*[ \t]*$")
 _SUB = re.compile(r"_Entry\.Submission_date\s+(\S+)")
@@ -161,10 +161,11 @@ def scan_file(path: str) -> tuple[str, dict]:
 
 def scan_raw(refresh: bool = False, workers: int | None = None) -> dict:
     """``{entry_id: {sub, cond: {list_id: {...}}, st: {st_id: list_id}, org: {entity: name}}}``."""
-    if CACHE.exists() and not refresh:
-        d = json.loads(CACHE.read_text())
-        if d.get("_version") == SCAN_VERSION:
-            return d["entries"]
+    inputs = _scan_inputs()
+    if not refresh:
+        hit = pc.read_keyed(CACHE, inputs)
+        if hit is not None:
+            return hit
     files = []
     for d in sorted(os.listdir(sp.RAW_BMRB)):
         fs = sorted((sp.RAW_BMRB / d).glob("*.str"))
@@ -174,9 +175,16 @@ def scan_raw(refresh: bool = False, workers: int | None = None) -> dict:
     with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:
         out = dict(ex.map(scan_file, files, chunksize=64))
     print(f"  raw scan: {len(out)} files in {time.time() - t:.0f} s", file=sys.stderr)
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(json.dumps({"_version": SCAN_VERSION, "entries": out}))
+    pc.write_keyed(CACHE, inputs, out)
     return out
+
+
+def _scan_inputs() -> dict:
+    """Cache key of the scan: the raw snapshot and the parsing code (no hand-bumped version)."""
+    return {
+        "snapshot": pc.snapshot_digest(sp.RAW_BMRB),
+        "code": pc.code_digest(scan_file, _loop_rows, to_bar, _num, _TO_BAR, _FRAME_SPLIT, _SUB, _COND_ID, _ST_ID, _ST_COND),
+    }  # fmt: skip
 
 
 def chain_conditions(raw: dict, entry_id: str, st_id: str) -> dict | None:
@@ -193,7 +201,6 @@ def chain_conditions(raw: dict, entry_id: str, st_id: str) -> dict | None:
 # ---------------------------------------------------------------- deposited (pipeline)
 DEPOSITED = ("ph", "temperature", "ionic_strength")
 DEPOSITED_CACHE = sp.TMP / "paper_figures" / "deposited_pipeline.json"
-DEPOSITED_VERSION = 1
 
 
 class _Saveframe:
@@ -261,16 +268,18 @@ def deposited_lists(
 ) -> dict:
     """``{entry id: {condition list id: {"ph", "temperature", "ionic_strength": bool}}}``
     for every condition list that a shift table of the raw files points at, read with the
-    pipeline's parser (module docstring). Cached as JSON, keyed by the parser version."""
+    pipeline's parser (module docstring). Cached as JSON, keyed by the snapshot, the parser
+    version and this code."""
     raw = scan_raw() if raw is None else raw
-    pv = _parser_version()
-    if DEPOSITED_CACHE.exists() and not refresh:
-        try:
-            d = json.loads(DEPOSITED_CACHE.read_text())
-        except ValueError:  # a cache another process is still writing
-            d = {}
-        if d.get("_version") == DEPOSITED_VERSION and d.get("_parser") == pv:
-            return d["entries"]
+    inputs = {
+        "snapshot": pc.snapshot_digest(sp.RAW_BMRB),
+        "parser": _parser_version(),
+        "code": pc.code_digest(_deposited_lists, _Saveframe, _loop_rows),
+    }
+    if not refresh:
+        hit = pc.read_keyed(DEPOSITED_CACHE, inputs)
+        if hit is not None:
+            return hit
     tasks = []
     for eid, rec in raw.items():
         fs = sorted((sp.RAW_BMRB / f"bmr{eid}").glob("*.str"))
@@ -280,13 +289,7 @@ def deposited_lists(
     with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:
         out = dict(ex.map(_deposited_lists, tasks, chunksize=64))
     print(f"  deposited conditions: {len(out)} files in {time.time() - t:.0f} s", file=sys.stderr)  # fmt: skip
-    DEPOSITED_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = DEPOSITED_CACHE.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(
-        json.dumps({"_version": DEPOSITED_VERSION, "_parser": pv, "entries": out})
-    )
-    # atomic: a concurrent reader never sees half a file
-    os.replace(tmp, DEPOSITED_CACHE)
+    pc.write_keyed(DEPOSITED_CACHE, inputs, out)
     return out
 
 
@@ -329,12 +332,9 @@ def entry_authors(entry_ids, workers: int | None = None) -> dict:
     (``_Entry_author``), read from the raw files on demand and cached as JSON (entries are
     added to the cache; a deposited author list does not change within a snapshot)."""
     want = {str(e) for e in entry_ids}
-    cache = {}
-    if AUTHORS_CACHE.exists():
-        try:
-            cache = json.loads(AUTHORS_CACHE.read_text())
-        except ValueError:
-            cache = {}
+    # per-entry cache, valid for one raw snapshot and this parsing code
+    inputs = {"snapshot": pc.snapshot_digest(sp.RAW_BMRB), "code": pc.code_digest(_entry_author_rows, _loop_rows)}  # fmt: skip
+    cache = pc.read_keyed(AUTHORS_CACHE, inputs) or {}
     todo = []
     for e in sorted(want - set(cache)):
         fs = sorted((sp.RAW_BMRB / f"bmr{e}").glob("*.str"))
@@ -345,10 +345,7 @@ def entry_authors(entry_ids, workers: int | None = None) -> dict:
     if todo:
         with ProcessPoolExecutor(max_workers=workers or min(8, os.cpu_count() or 2)) as ex:  # fmt: skip
             cache.update(dict(ex.map(_entry_author_rows, todo, chunksize=32)))
-        AUTHORS_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = AUTHORS_CACHE.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(cache))
-        os.replace(tmp, AUTHORS_CACHE)
+        pc.write_keyed(AUTHORS_CACHE, inputs, cache)
     return {e: frozenset(cache.get(e, [])) for e in want}
 
 
