@@ -174,6 +174,8 @@ def _frame(tier, rows):
         "bbshift_types": 7,
         "bbshift_positions": 20,
         "paramagnetic": False,
+        "pressure_bar": np.nan,
+        "membrane_mimetic_sample": False,
         "physical_state": "native",
         "cosolvent_evidence": False,
         "sample_state_evidence": "unknown",

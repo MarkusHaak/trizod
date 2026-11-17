@@ -864,3 +864,90 @@ def test_redundancy_removes_search_logs_of_the_old_per_tier_layout(tmp_path):
     remove_stale_outputs(tmp_path)
 
     assert sorted(p.name for p in tmp_path.iterdir()) == [kept.name]
+
+
+# ------------------------------- retired TriZOD test chains (2026-11)
+#
+# Since the TriZOD test set is resolved against the strict pool, a pinned test
+# chain that leaves strict after a rule change is RETIRED: no longer a test
+# chain, but still a leakage target, so it and its homologues stay out of
+# training exactly as with the full pin. ``trizod dataset test-set`` writes them
+# to testset/TriZOD_test_retired.fasta.
+
+RETIRED = "980_1_1_1"
+RETIRED_HOMOLOG = "981_1_1_1"
+
+
+def _add_retired_chain(work: Path) -> str:
+    """A retired chain and a ~90 %-identity homologue, both in every pool."""
+    rng = random.Random(1980)
+    retired = _rand(rng, 110)
+    homolog = _substitute(retired, list(range(4, 110, 9)))
+    for tier in redundancy.TIERS:
+        fa = work / "final_dataset" / tier / f"{tier}.fasta"
+        pool = read_fasta(fa)
+        pool.update({RETIRED: retired, RETIRED_HOMOLOG: homolog})
+        write_fasta(pool, fa)
+    return retired
+
+
+@requires_mmseqs
+@pytest.mark.parametrize("with_retired_file", [True, False])
+def test_retired_test_chains_are_leakage_targets(tmp_path, with_retired_file):
+    work = _make_redundancy_inputs(tmp_path)
+    retired = _add_retired_chain(work)
+    if with_retired_file:
+        write_fasta({RETIRED: retired}, work / "testset" / "TriZOD_test_retired.fasta")
+    redundancy.main(["--work-dir", str(work), "--root", str(tmp_path)])
+    out = work / "mmseqs"
+    targets = read_fasta(out / "combined_testset.fasta")
+    for tier in redundancy.TIERS:
+        kept = set(read_fasta(out / f"{tier}_no_testset.fasta"))
+        if with_retired_file:
+            assert not {RETIRED, RETIRED_HOMOLOG} & kept, tier
+        else:  # control: without the file both would re-enter training
+            assert {RETIRED, RETIRED_HOMOLOG} <= kept, tier
+    assert (RETIRED in targets) is with_retired_file
+
+
+def test_leakage_targets_include_the_retired_file_when_present(tmp_path):
+    testset_dir = tmp_path / "testset"
+    testset_dir.mkdir()
+    chezod = tmp_path / "CheZOD117_test_set.fasta"
+    assert redundancy.leakage_target_sources(chezod, testset_dir) == [
+        chezod,
+        testset_dir / "TriZOD_test_set.fasta",
+    ]
+    (testset_dir / "TriZOD_test_retired.fasta").write_text("")
+    assert redundancy.leakage_target_sources(chezod, testset_dir)[-1] == (
+        testset_dir / "TriZOD_test_retired.fasta"
+    )
+
+
+def test_package_gate_fails_on_a_training_copy_of_a_retired_chain(tmp_path):
+    train, test = _fixture_seqs()
+    clean = {k: train[k] for k in (UNRELATED_TRAIN,)}
+    work = _make_release_inputs(tmp_path, clean, test, "test")
+    write_fasta(
+        {RETIRED: clean[UNRELATED_TRAIN]},
+        work / "testset" / "TriZOD_test_retired.fasta",
+    )
+    with pytest.raises(SystemExit, match="exact-sequence"):
+        _package(tmp_path, work)
+    bundle = work / "release_bundle" / "trizod-dataset-t"
+    assert read_fasta(bundle / "test" / "TriZOD_test_retired.fasta") == {
+        RETIRED: clean[UNRELATED_TRAIN]
+    }
+
+
+@requires_mmseqs
+def test_package_stages_the_retired_chains_and_counts_them(tmp_path):
+    train, test = _fixture_seqs()
+    clean = {k: train[k] for k in (UNRELATED_TRAIN,)}
+    work = _make_release_inputs(tmp_path, clean, test, "test")
+    retired = _rand(random.Random(1981), 90)
+    write_fasta({RETIRED: retired}, work / "testset" / "TriZOD_test_retired.fasta")
+    bundle = _package(tmp_path, work)
+    manifest = json.loads((bundle / "MANIFEST.json").read_text())
+    assert manifest["test_sets"]["TriZOD_test_retired"] == 1
+    assert "test/TriZOD_test_retired.fasta" in manifest["files"]

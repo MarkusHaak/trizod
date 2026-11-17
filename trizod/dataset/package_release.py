@@ -10,7 +10,9 @@ Core bundle (~115 MB):
   train/<tier>/   train_<tier>_best.fasta (canonical), train_<tier>.fasta,
                   clusters_best.tsv, clusters.tsv
   scores/<tier>/  scores.json   (per-residue Z/G/k + offsets = the labels)
-  test/           CheZOD117_test_set.fasta, TriZOD_test_set.fasta
+  test/           CheZOD117_test_set.fasta, TriZOD_test_set.fasta,
+                  TriZOD_test_retired.fasta (retired test chains: leakage
+                  targets, not tested on), TriZOD_test_set_labels.tsv
   README.md       (the datasheet)
   MANIFEST.json
 
@@ -30,7 +32,8 @@ The output directory defaults under the work dir (gitignored). Nothing is
 uploaded; this only stages files locally for a manual Zenodo deposit.
 
 Before the manifest is written, a leakage gate checks the staged bundle and
-fails the step when any training record
+fails the step when any training record -- checked against every ``test/``
+FASTA, the retired TriZOD test chains included --
 
 * shares an ID or an exact sequence with a test chain,
 * is an exact substring of a test chain, or contains one, over >= 20 aa
@@ -71,6 +74,7 @@ from trizod.dataset.mmseqs import (
     read_leakage_record,
 )
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.testset import RETIRED_FASTA
 from trizod.io.fasta import count_fasta, read_fasta, write_fasta
 from trizod.provenance import file_sha256, pipeline_version
 from trizod.shifts import SHIFTS_PARQUET_NAME
@@ -438,6 +442,15 @@ def main(argv=None) -> None:
         if not src.exists():
             raise SystemExit(f"missing test set: {src}")
         planned.append((src, f"test/{src.name}"))
+    # Retired TriZOD test chains (pinned, no longer strict): not tested on, but
+    # still leakage targets. Staged under test/ so the gate below, which reads
+    # every test/*.fasta, checks the training sets against them too. Absent
+    # only in a work dir from before they existed.
+    retired = paths.testset / RETIRED_FASTA
+    if retired.exists():
+        planned.append((retired, f"test/{RETIRED_FASTA}"))
+    else:
+        print(f"  note: no {retired} -- no retired test chains staged")
 
     # The label table records, per pinned test chain, the strictest tier it still
     # satisfies and any ID substituted since the pin was drawn. Without it an
@@ -496,6 +509,9 @@ def main(argv=None) -> None:
         "test_sets": {
             "CheZOD117": manifest["test/CheZOD117_test_set.fasta"]["n_sequences"],
             "TriZOD_test": manifest["test/TriZOD_test_set.fasta"]["n_sequences"],
+            "TriZOD_test_retired": manifest.get(f"test/{RETIRED_FASTA}", {}).get(
+                "n_sequences", 0
+            ),
         },
         "total_bytes": total,
         "n_files": len(planned),
@@ -526,7 +542,8 @@ def main(argv=None) -> None:
         )
     print(
         f"  test: CheZOD117={summary['test_sets']['CheZOD117']}, "
-        f"TriZOD={summary['test_sets']['TriZOD_test']}"
+        f"TriZOD={summary['test_sets']['TriZOD_test']} "
+        f"(+{summary['test_sets']['TriZOD_test_retired']} retired, leakage only)"
     )
     if shifts is not None:
         n_shifts = summary["chemical_shifts"]["n_records"]

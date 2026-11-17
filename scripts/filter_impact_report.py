@@ -73,6 +73,8 @@ PREFILTER_ARGS = {
     "exclude-paramagnetic": "exclude_paramagnetic",
     "physical-state-blacklist": "physical_state_blacklist",
     "method-fallback": "method_fallback",
+    "max-pressure-bar": "max_pressure_bar",
+    "exclude-membrane-mimetic": "exclude_membrane_mimetic",
 }
 
 #: ``filter_defaults`` column -> ``create_peptide_dataframe`` keyword. These are

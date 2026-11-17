@@ -10,7 +10,10 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      script. CheZOD1325 was used at this step (to exclude its clusters
      from the random sample) but is NOT a training-leakage target.
   2. Test-set leakage removal of every tier's deduplicated FASTA against
-     the combined test set (CheZOD117 + TriZOD test), in TWO stages
+     the combined test set (CheZOD117 + TriZOD test + the RETIRED TriZOD test
+     chains, ``testset/TriZOD_test_retired.fasta``: pinned test chains that
+     left the strict tier, no longer tested on but still kept out of training,
+     so training is what it would be with the full pin), in TWO stages
      (matching the manuscript redundancy-reduction figure):
        2a. stage-1 "remove all cluster members": cluster the unfiltered
            superset together with the test sequences at 30% id / 80%
@@ -76,6 +79,7 @@ from trizod.dataset.mmseqs import (
     write_leakage_rule,
 )
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.testset import RETIRED_FASTA
 from trizod.io.fasta import count_fasta, fasta_ids, read_fasta
 
 TIERS = ["strict", "moderate", "tolerant", "unfiltered"]
@@ -131,6 +135,17 @@ def filter_tsv_by_query(tsv_in: Path, keep_ids: set[str], tsv_out: Path) -> None
         for line in f:
             if line.strip() and line.split("\t", 1)[0] in keep_ids:
                 o.write(line)
+
+
+def leakage_target_sources(chezod: Path, testset_dir: Path) -> list[Path]:
+    """The FASTAs every training chain is checked against: CheZOD117, the
+    TriZOD test set and, when the test-set step wrote one, the retired TriZOD
+    test chains (``trizod.dataset.testset.RETIRED_FASTA``)."""
+    sources = [chezod, testset_dir / "TriZOD_test_set.fasta"]
+    retired = testset_dir / RETIRED_FASTA
+    if retired.exists():
+        sources.append(retired)
+    return sources
 
 
 def build_combined_testset(sources: list[Path], out: Path) -> dict[str, str]:
@@ -290,13 +305,16 @@ def main(argv=None):
     print("Inputs:")
     print(f"  CheZOD117:    {chezod}  ({count_fasta(chezod)} sequences)")
     print(f"  TriZOD test:  {trizod_test}  ({count_fasta(trizod_test)} sequences)")
+    sources = leakage_target_sources(chezod, paths.testset)
+    for src in sources[2:]:
+        print(f"  retired:      {src}  ({count_fasta(src)} sequences, leakage only)")
     for tier in TIERS:
         fa = final / tier / f"{tier}.fasta"
         print(f"  {tier:>10}: {fa}  ({count_fasta(fa)} sequences)")
     print()
 
     combined = out / "combined_testset.fasta"
-    test_map = build_combined_testset([chezod, trizod_test], combined)
+    test_map = build_combined_testset(sources, combined)
     print(f"Combined test set: {combined} ({len(test_map)} sequences)\n")
 
     # ---- Step A0: stage-1 cluster-membership removal (vs test sets) ----

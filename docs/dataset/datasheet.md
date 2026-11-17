@@ -56,7 +56,8 @@ Four layers are shipped:
      REFINED_WEIGHTS[atom]` is the ppm quantity to subtract from a deposited
      shift — see §6.
    - conditions (`pH`, `temperature`, `ionic_strength`, and `pressure_bar` —
-     sample pressure in bar, null when not recorded, annotation only), counts,
+     sample pressure in bar, null when not recorded; >= 400 bar is excluded
+     from tolerant up since 2026-11), counts,
      citation.
    - **sample-state annotation** (new): `physical_state` (the depositor's
      `_Entity_assembly.Physical_state`), `cosolvent_evidence` (does the entry
@@ -72,7 +73,8 @@ Four layers are shipped:
 3. **Single-table Parquet** — `trizod_dataset.parquet`, one row per chain
    (16,851 rows × 70 columns), encoding every published view through the
    ordinal/categorical columns `split` (train 5,803 · excluded 8,175 ·
-   redundant 2,298 · test_trizod 460 · test_chezod117 115), `train_tier`
+   redundant 2,298 · test_trizod 460 · test_chezod117 115; since 2026-11 also
+   `test_retired`, see §4), `train_tier`
    (strict 1,895 · moderate 2,625 · tolerant 946 · unfiltered 337),
    `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
    assembly-composition annotation columns, and per-chain UniProt / PDB
@@ -144,8 +146,8 @@ corresponding score records by `ID`.
    representative.
 9. **Quality-best override** of cluster representatives (`train_<tier>_best`).
 
-The TriZOD test set is a **pinned** set re-resolved against the current tolerant
-pool by `trizod dataset test-set` (`--redraw` re-runs the seeded draw and
+The TriZOD test set is a **pinned** set of strict-tier sequences, re-resolved
+against the current strict pool by `trizod dataset test-set` (`--redraw` re-runs the seeded draw and
 overwrites the pin). Reproduce the whole release with `scripts/build_dataset.sh`
 (chains `trizod dataset build` → `test-set` → `redundancy` →
 `representatives` → `package`).
@@ -178,8 +180,11 @@ once the filter policy was final: **460 sequences**, all strict.
 
 The result is pinned at `trizod/dataset/pinned/TriZOD_test_set.fasta` (seed 42,
 sample fraction 0.25, redrawn 2026-08-11) and re-resolved **by sequence**
-against the current tolerant pool at every rebuild, so entry IDs stay valid as
-the snapshot evolves. In this release all 460 resolve, 0 are dropped, 0 are
+against the current strict pool at every rebuild, so entry IDs stay valid as
+the snapshot evolves (until 2026-11 the pool was tolerant). A pinned sequence
+that no longer meets strict is retired: listed in `TriZOD_test_retired.fasta`
+and as `split = test_retired` in the Parquet, not tested on, but still a
+leakage target, so training is what it would be with the full pin. In this release all 460 resolve, 0 are dropped, 0 are
 ID-substituted and all 460 still satisfy `strict`. `TriZOD_test_set_labels.tsv`
 (`test_id`, `pinned_id`, `substituted`, `label_tier`, `length`) ships beside the
 test FASTA: `label_tier` records the strictest tier each test chain still

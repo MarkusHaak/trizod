@@ -200,6 +200,42 @@ PRESSURE_UNITS_TO_BAR = {
 #: (50 condition lists deposit 'ambient', unit atm). A recorded value, not a gap.
 AMBIENT_PRESSURE_VALUES = frozenset({"ambient", "atmospheric"})
 
+#: A pressure deposited in the unit "bar" with a value in this range (inclusive)
+#: is read as hPa. The corpus's pressures are bimodal -- about 1 bar, or
+#: 2,000-2,500 bar -- and nothing is measured near 1 kbar, so "1013 bar"
+#: (bmr25704, the only case in the 2026-11-11 snapshot) is one atmosphere
+#: written in hPa/mbar, not a high-pressure sample.
+HPA_AS_BAR_RANGE = (900.0, 1100.0)
+
+#: Sample pressure (bar) at and above which a chain counts as high pressure:
+#: the ``max-pressure-bar`` default of the tolerant, moderate and strict tiers
+#: (``trizod.trizod.filter_defaults``) and the release's ``high_pressure`` flag.
+#: 400 bar already shifts random-coil N/HN by ~0.24-0.30 sigma (Koehler et al.
+#: 2012), and kilobar pressure populates partially unfolded states (Akasaka
+#: 2003); any cut between ~10 and 500 bar selects the same deposits.
+HIGH_PRESSURE_BAR = 400.0
+
+#: Raw deposited temperature values that are a placeholder, not a measurement:
+#: exactly "273" or "273.0" with the unit K or none (never 273.15 or 273.65).
+#: Exactly 273 K appears in 12.9 % of the ADIT-NMR entries submitted from July
+#: 2010 to mid-2020 against 0.6 % of all others, and for 237 of 247 checkable
+#: such entries the co-deposited PDB entry reports another temperature (mostly
+#: 298 K). ``SampleConditions.get_temperature`` reads it as not deposited unless
+#: the entry's own text states 0 C (``states_zero_celsius``).
+TEMPERATURE_PLACEHOLDER_VALUES = frozenset({"273", "273.0"})
+TEMPERATURE_PLACEHOLDER_UNITS = frozenset({"k", ""})
+
+#: Text that states a sample temperature of 0 C: "273 K"/"273K", or "0 °C",
+#: "0oC", "0 degC" (case-insensitive). A digit or point before 273 is excluded
+#: so "1273 K" and "0.273 K" do not read as 273 K.
+_ZERO_CELSIUS_RE = re.compile(r"(?<![\d.])273\s?K|\b0\s?(?:°|o|deg)\s?C", re.IGNORECASE)
+
+
+def states_zero_celsius(text) -> bool:
+    """Does ``text`` state a temperature of 0 C (273 K)?"""
+    return bool(text) and _ZERO_CELSIUS_RE.search(str(text)) is not None
+
+
 #: pH-like ``_Sample_condition_variable.Type`` values, keyed lower-case without
 #: whitespace, mapped to the scale they report. The NMR-STAR dictionary allows
 #: all three: ``pH``, ``pH*`` (a glass-electrode reading in D2O, uncorrected)
@@ -332,6 +368,16 @@ class SampleConditions:
     def __init__(self, sf):
         super().__init__()
         self.id = get_tag_vals(sf, "_Sample_condition_list.ID", indices=0)
+        # Free text searched (with the entry's) for a stated 0 C, which keeps a
+        # deposited 273 K -- see TEMPERATURE_PLACEHOLDER_VALUES.
+        self.name = get_tag_vals(sf, "_Sample_condition_list.Name", indices=0)
+        self.framecode = get_tag_vals(
+            sf, "_Sample_condition_list.Sf_framecode", indices=0
+        )
+        self.details = get_tag_vals(sf, "_Sample_condition_list.Details", indices=0)
+        #: Does the entry's own text state 0 C? Set by ``BmrbEntry`` for every
+        #: condition list of the entry, since the evidence is entry-wide.
+        self.zero_celsius_stated = False
         self.ionic_strength = (None, None)
         self.pH = (None, None)
         #: scale of the row ``self.pH`` was read from ('pH', 'pH*', 'pD'), or None
@@ -413,11 +459,32 @@ class SampleConditions:
             return 298.0
         return np.nan
 
+    def is_temperature_placeholder(self):
+        """Is the deposited temperature the 273 K placeholder, read as absent?
+
+        True when the raw value is exactly "273" or "273.0" with the unit K or
+        none (``TEMPERATURE_PLACEHOLDER_VALUES``) and the entry's own text does
+        not state 0 C (``zero_celsius_stated``).
+        """
+        val, unit = getattr(self, "temperature", (None, None))
+        if val is None or str(val).strip() not in TEMPERATURE_PLACEHOLDER_VALUES:
+            return False
+        if _key(unit).strip(".") not in TEMPERATURE_PLACEHOLDER_UNITS:
+            return False
+        return not getattr(self, "zero_celsius_stated", False)
+
     def get_temperature(self, return_default=True, assume_si=True, fix_outliers=True):
         """Temperature in K. A unit written into the value ('281.5K') is used
         over Val_units. An absent value is 298 K with ``return_default``, else
         NaN; a recorded value outside ``TEMPERATURE_RANGE_K`` is invalid and NaN
-        regardless of ``return_default``."""
+        regardless of ``return_default``. The 273 K placeholder
+        (``is_temperature_placeholder``) is absent, not recorded."""
+        if self.is_temperature_placeholder():
+            logging.getLogger("trizod.bmrb").info(
+                f"Placeholder temperature {self.temperature[0]} K for sample "
+                f"condition {self.id}, read as not deposited"
+            )
+            return self._missing_temperature(return_default)
         val, unit_in_val = self.convert_val(self.temperature[0], return_unit=True)
         if np.isnan(val):
             return self._missing_temperature(return_default)
@@ -505,12 +572,14 @@ class SampleConditions:
 
         Converted literally from the deposited unit (``PRESSURE_UNITS_TO_BAR``).
         Unlike pH, temperature and ionic strength there is deliberately **no**
-        default and **no** unit repair: an absent value, a value without a
-        known unit, or a non-numeric one other than ``ambient`` is NaN (null
-        downstream), and an implausible value is not re-interpreted: the 89
-        condition lists depositing ``1 Pa`` (almost certainly one atmosphere)
-        read 1e-5 bar, as deposited. The value only annotates; no tier filters
-        on it.
+        default: an absent value, a value without a known unit, or a
+        non-numeric one other than ``ambient`` is NaN (null downstream). There
+        is one unit repair, ``HPA_AS_BAR_RANGE``: 900-1,100 deposited as "bar"
+        is one atmosphere in hPa (bmr25704, "1013 bar"). Other implausible
+        values are not re-interpreted: the 89 condition lists depositing
+        ``1 Pa`` (almost certainly one atmosphere) read 1e-5 bar, as deposited.
+        The tiers' ``max-pressure-bar`` filter reads this value, with NaN
+        passing as ambient.
         """
         val, unit = self.pressure
         factor = PRESSURE_UNITS_TO_BAR.get(_key(unit))
@@ -519,7 +588,13 @@ class SampleConditions:
         text = str(val if val is not None else "").strip().lower()
         if text in AMBIENT_PRESSURE_VALUES:
             return PRESSURE_UNITS_TO_BAR["atm"]
-        return self.convert_val(text) * factor  # NaN stays NaN
+        bar = self.convert_val(text) * factor  # NaN stays NaN
+        if _key(unit) == "bar" and HPA_AS_BAR_RANGE[0] <= bar <= HPA_AS_BAR_RANGE[1]:
+            logging.getLogger("trizod.bmrb").info(
+                f"Pressure {val} bar for sample condition {self.id} read as hPa"
+            )
+            bar *= PRESSURE_UNITS_TO_BAR["hpa"]
+        return bar
 
     def __str__(self):
         return f"(Conditions {self.id}: pH {self.get_pH()}, {self.get_temperature()} K, {self.get_ionic_strength()} M)"
@@ -829,6 +904,20 @@ class BmrbEntry:
             )
         self.experiment_list = ExperimentList(entry_experiment_lists[0])
         self.experiment_dict = {e[0]: e for e in self.experiment_list.experiments}
+
+        # A deposited 273 K is a placeholder unless the entry itself says 0 C
+        # (TEMPERATURE_PLACEHOLDER_VALUES). The evidence is entry-wide -- one
+        # sentence in the experiment list covers every condition list -- so it
+        # is decided here and handed down to each SampleConditions.
+        corroborating_texts = [self.details, self.experiment_list.details]
+        corroborating_texts += [
+            s.details for s in getattr(self, "samples", {}).values()
+        ]
+        for cond in self.conditions.values():
+            corroborating_texts += [cond.name, cond.framecode, cond.details]
+        self.zero_celsius_stated = any(map(states_zero_celsius, corroborating_texts))
+        for cond in self.conditions.values():
+            cond.zero_celsius_stated = self.zero_celsius_stated
 
         entry_shift_tables = entry.get_saveframes_by_category(
             "assigned_chemical_shifts"

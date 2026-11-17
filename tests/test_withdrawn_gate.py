@@ -230,7 +230,7 @@ def test_default_build_never_touches_the_network(tmp_path, monkeypatch):
 
 
 def test_pinned_test_set_drops_a_withdrawn_chain_or_moves_to_a_live_twin(tmp_path):
-    """The pin is resolved by SEQUENCE against the tolerant pool. A withdrawn
+    """The pin is resolved by SEQUENCE against the strict pool. A withdrawn
     chain with no live identical-sequence twin (36170) is dropped; one whose
     sequence survives in another entry (36288 -> its re-deposition 36385) is
     substituted, not dropped."""
@@ -249,7 +249,7 @@ def test_pinned_test_set_drops_a_withdrawn_chain_or_moves_to_a_live_twin(tmp_pat
     )
     pinned = {"36170_1_1_1": SEQ_A, "36288_1_1_1": SEQ_B, "100_1_1_1": SEQ_C}
     pools = load_tier_pools(final)
-    recs, info = resolve_pinned_testset(pinned, pools["tolerant"], tier_pools=pools)
+    recs, info = resolve_pinned_testset(pinned, pools["strict"], tier_pools=pools)
     assert info["dropped"] == ["36170_1_1_1"]
     assert info["substitutions"] == [["36288_1_1_1", "36385_1_1_1"]]
     assert recs == {"36385_1_1_1": SEQ_B, "100_1_1_1": SEQ_C}

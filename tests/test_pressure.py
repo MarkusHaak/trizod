@@ -1,4 +1,4 @@
-"""Sample pressure is exported per chain as ``pressure_bar`` -- and filters nothing.
+"""Sample pressure is exported per chain as ``pressure_bar`` and capped at 400 bar.
 
 ``_Sample_condition_variable`` rows of type ``pressure`` were parsed into
 ``SampleConditions.pressure`` and then never read, so a 2,500-bar sample
@@ -7,8 +7,12 @@ melittin shift table of bmr51703) was indistinguishable from an ambient one.
 
 The column follows the condition list of the shift table actually scored, as
 ``pH`` and ``temperature`` do, and is converted to bar from the deposited unit.
-No ceiling is applied at any tier: where a high pressure stops being "native"
-is a threshold for an NMR expert, not a parser.
+Since 2026-11 the tolerant, moderate and strict tiers exclude a chain whose
+pressure is >= 400 bar (``max-pressure-bar``): kilobar pressure populates
+partially unfolded states, so its G-scores describe a perturbed ensemble. A
+pressure that is not recorded is taken as ambient and passes. One unit repair
+exists: a value of 900-1,100 deposited as "bar" is read as hPa (bmr25704,
+"1013 bar").
 """
 
 import json
@@ -17,11 +21,20 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from typer.testing import CliRunner
 
-from tests._stubs import Entry, Sample, fill, fill_real
+from tests._stubs import (
+    Entry,
+    Sample,
+    condition_frame,
+    fill,
+    fill_real,
+    prefilter_tier,
+)
 from tests.conftest import requires_bmrb_data
 from trizod.bmrb.bmrb import SampleConditions
-from trizod.pipeline import prefilter_dataframe
+from trizod.cli.main import app
+from trizod.pipeline import print_filter_losses
 from trizod.trizod import filter_defaults, output_dataset
 
 ATM = 1.01325
@@ -99,6 +112,36 @@ def test_literal_values_are_not_repaired():
     assert _conditions("1", "Pa").get_pressure_bar() == pytest.approx(1e-5)
 
 
+@pytest.mark.parametrize(
+    ("val", "bar"),
+    [
+        ("1013", 1.013),  # bmr25704: one atmosphere deposited in hPa as "bar"
+        ("1013.25", 1.01325),
+        ("900", 0.9),  # both edges of the guard are inclusive
+        ("1100", 1.1),
+    ],
+)
+def test_about_one_thousand_bar_is_read_as_hpa(val, bar):
+    # Nothing is measured at ~1 kbar in the corpus (the deposits are bimodal:
+    # ~1 bar, or 2,000-2,500 bar), so a 900-1,100 "bar" value is an
+    # atmosphere written in hPa/mbar -- not a high-pressure sample.
+    assert _conditions(val, "bar").get_pressure_bar() == pytest.approx(bar)
+
+
+@pytest.mark.parametrize(
+    ("val", "unit", "bar"),
+    [
+        ("899", "bar", 899.0),
+        ("1101", "bar", 1101.0),
+        ("2500", "bar", 2500.0),
+        ("1013", "mbar", 1.013),  # already a small unit: not scaled twice
+        ("1000", "atm", 1000 * ATM),  # the guard is for the unit "bar" only
+    ],
+)
+def test_hpa_guard_is_limited_to_bar_values_near_one_thousand(val, unit, bar):
+    assert _conditions(val, unit).get_pressure_bar() == pytest.approx(bar)
+
+
 # --------------------------------------------------------------------------- #
 # per-row: the scored shift table's own condition list
 # --------------------------------------------------------------------------- #
@@ -135,7 +178,7 @@ def test_absent_pressure_is_nan_not_a_default():
 
 
 # --------------------------------------------------------------------------- #
-# exported, never filtered
+# exported to scores.json
 # --------------------------------------------------------------------------- #
 
 
@@ -157,11 +200,13 @@ def _scored_frame(pressures):
                 "physical_state": "native",
                 "cosolvent_evidence": False,
                 "membrane_mimetic": None,
+                "membrane_mimetic_sample": False,
                 "citation_DOI": None,
                 "citation_title": None,
                 "ionic_strength": 0.1,
                 "pH": 7.0,
                 "temperature": 298.0,
+                "temperature_placeholder": False,
                 "pressure_bar": p,
                 "bbshift_positions_post": n,
                 "bbshift_types_post": 3,
@@ -199,45 +244,69 @@ def test_scores_json_carries_pressure_bar(tmp_path):
     assert records[1]["pressure_bar"] is None
 
 
-@pytest.mark.parametrize("tier", ["unfiltered", "tolerant", "moderate", "strict"])
-def test_no_tier_has_a_pressure_filter(tier):
-    assert not any("pressure" in key for key in filter_defaults.columns)
-    defaults = filter_defaults.loc[tier]
-    df = pd.DataFrame(
-        {
-            "exp_method": ["NMR", "NMR"],
-            "exp_method_subtype": ["solution", "solution"],
-            "sample_state_evidence": ["solution", "solution"],
-            "temperature": [298.0, 298.0],
-            "ionic_strength": [0.1, 0.1],
-            "pH": [7.0, 7.0],
-            "seq": ["A" * 40, "A" * 40],
-            "total_bbshifts": [200, 200],
-            "bbshift_types": [7, 7],
-            "bbshift_positions": [40, 40],
-            "pressure_bar": [1.0, 2500.0],
-            "paramagnetic": [False, False],
-        }
+# --------------------------------------------------------------------------- #
+# the max-pressure-bar filter
+# --------------------------------------------------------------------------- #
+
+PRESSURES = [np.nan, 1.01325, 399.9, 400.0, 500.0, 2500.0]
+
+
+def test_max_pressure_bar_defaults_per_tier():
+    # tolerant too: it already removes perturbing cosolvents on the same
+    # "non-ambient ensemble" logic
+    assert filter_defaults["max-pressure-bar"].tolist() == [np.inf, 400.0, 400.0, 400.0]
+
+
+def test_unfiltered_keeps_every_pressure():
+    out = prefilter_tier(condition_frame(pressure_bar=PRESSURES), "unfiltered")
+    assert out["pass_pre"].tolist() == [True] * len(PRESSURES)
+
+
+@pytest.mark.parametrize("tier", ["tolerant", "moderate", "strict"])
+def test_pressure_of_400_bar_or_more_is_excluded(tier):
+    out = prefilter_tier(condition_frame(pressure_bar=PRESSURES), tier)
+    # NaN = not recorded = ambient, and passes; 400 bar itself is excluded
+    assert out["pass_pre"].tolist() == [True, True, True, False, False, False]
+
+
+def test_pressure_filter_is_reported_as_a_prefilter_criterion():
+    sels_pre = prefilter_tier(condition_frame(pressure_bar=PRESSURES), "strict", 2)
+    keys = [name for name, _crit in sels_pre]
+    assert "pressure" in keys
+    sel = sels_pre[next(k for k in sels_pre if k[0] == "pressure")]
+    assert sel.tolist() == [True, True, True, False, False, False]
+
+
+def test_print_filter_losses_lists_the_pressure_filter(capsys):
+    df = condition_frame(pressure_bar=PRESSURES)
+    _, missing, sels_pre, kws, cos, para, sels_all = prefilter_tier(df, "strict", None)
+    df["pass_post"] = df["pass_pre"]
+    print_filter_losses(df, missing, sels_pre, kws, cos, para, sels_all, {}, {}, {})
+    report = capsys.readouterr().out
+    line = next(ln for ln in report.splitlines() if ln.startswith("pressure"))
+    assert line.split(":")[1].split()[0] == "3"
+
+
+def test_a_finite_pressure_cap_needs_the_pressure_column():
+    df = condition_frame().drop(columns="pressure_bar")
+    with pytest.raises(ValueError, match="pressure_bar"):
+        prefilter_tier(df, "strict")
+
+
+def test_max_pressure_bar_is_a_cli_override(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        "trizod.trizod.run_scoring_pipeline",
+        lambda args: captured.setdefault("args", args),
     )
-    out = prefilter_dataframe(
-        df,
-        method_whitelist=defaults["exp-method-whitelist"],
-        method_blacklist=defaults["exp-method-blacklist"],
-        temperature_range=defaults["temperature-range"],
-        ionic_strength_range=defaults["ionic-strength-range"],
-        pH_range=defaults["pH-range"],
-        peptide_length_range=list(defaults["peptide-length-range"]) + [np.inf],
-        min_backbone_shift_types=defaults["min-backbone-shift-types"],
-        min_backbone_shift_positions=defaults["min-backbone-shift-positions"],
-        min_backbone_shift_fraction=defaults["min-backbone-shift-fraction"],
-        max_noncanonical_fraction=defaults["max-noncanonical-fraction"],
-        max_x_fraction=defaults["max-x-fraction"],
-        keywords=[],
-        perturbing_cosolvents=[],
-        exclude_paramagnetic=defaults["exclude-paramagnetic"],
-        method_fallback=defaults["method-fallback"],
-    )[0]
-    assert out["pass_pre"].tolist() == [True, True]
+    argv = ["--input-dir", str(tmp_path), "--output-prefix", str(tmp_path / "o")]
+    argv += ["--cache-dir", str(tmp_path / "c"), "--filter-defaults", "strict"]
+    result = CliRunner().invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    assert captured.pop("args").max_pressure_bar == 400.0
+    result = CliRunner().invoke(app, [*argv, "--max-pressure-bar", "3000"])
+    assert result.exit_code == 0, result.output
+    assert captured["args"].max_pressure_bar == 3000.0
 
 
 # --------------------------------------------------------------------------- #

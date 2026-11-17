@@ -258,6 +258,8 @@ for tier in job["tiers"]:
         exclude_paramagnetic=bool(p["exclude-paramagnetic"]),
         physical_state_blacklist=list(p["physical-state-blacklist"]),
         method_fallback=str(p["method-fallback"]),
+        max_pressure_bar=float(p["max-pressure-bar"]),
+        exclude_membrane_mimetic=bool(p["exclude-membrane-mimetic"]),
     )
     sels_cos, sels_all = sels[4], sels[6]
     fail = {k: (~v).fillna(False).astype(bool).to_numpy() for k, v in sels_all.items()}

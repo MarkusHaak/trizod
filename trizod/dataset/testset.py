@@ -3,19 +3,32 @@
 
 DEFAULT mode: emit the committed pin. Loads the pinned test set from
 ``trizod/dataset/pinned/TriZOD_test_set.fasta`` and resolves it against the
-*current* TOLERANT-tier pool (``trizod.dataset.testset.resolve_pinned_testset``,
+*current* STRICT-tier pool (``trizod.dataset.testset.resolve_pinned_testset``,
 no mmseqs involved) so entry IDs stay valid as the dataset snapshot evolves.
 
-Why tolerant and not strict: the test set is a set of *sequences*, and its
-defining property — CheZOD-disjointness at 30 % id / 80 % cov — belongs to the
-sequences and is invariant under any filter change. "Drawn from the strict
-tier" describes the 2026-07 construction, not an ongoing invariant, and the
-per-residue labels come from ``scores.json`` either way. Resolving against
-strict silently shrinks the published set whenever a rescore moves a chain
-across the offset thresholds (15 of the 365 as of the post-#20 rescore), which
-breaks comparability with the released v0.3.0 numbers. Each resolved chain
-therefore carries a ``label_tier`` — the strictest tier its sequence still
-satisfies — so consumers can restrict to the strict subset if they want it.
+Why strict: the TriZOD test set is defined as strict-tier sequences (2026-11).
+It was drawn from the strict tier, and its labels are meant to carry the
+strictest guarantees the release makes -- no membrane mimetic, no kilobar
+pressure, deposited ambient conditions. Its defining property beyond that,
+CheZOD-disjointness at 30 % id / 80 % cov, belongs to the sequences and holds
+under any filter change. Test metrics are thus only comparable across
+releases on the chains both test sets share. (From 2026-08 to 2026-11 the pin
+was resolved against the tolerant pool, to keep the v0.3.0 test set whole;
+``--resolve-tier`` still allows that.) Each resolved chain carries a
+``label_tier`` -- the strictest tier its sequence still satisfies -- which is
+``strict`` for every chain under the default.
+
+RETIRED test chains: a pinned sequence that no longer meets strict after a rule
+change or rescore leaves the test set, but it is not forgotten. If it still
+resolves against the ``--retire-tier`` pool (default tolerant) it is RETIRED:
+written to ``TriZOD_test_retired.fasta`` (``reason=not_strict``, with its
+``label_tier``), which ``trizod.dataset.redundancy`` adds to the leakage
+targets, ``package_release`` stages under ``test/`` (so its leakage gate checks
+it) and the Parquet marks as ``split = test_retired``. Training is therefore
+exactly what it would be with the full pin; only the test set shrinks. This is
+why the committed pin is NOT trimmed when chains leave strict: the full pin is
+what defines the retired set. Only a pinned sequence absent from the retire
+pool too (e.g. a withdrawn entry with no live twin) is dropped outright.
 
 ``--redraw`` mode (requires ``--confirm-redraw``): reproduces the original
 TriZOD test-set recipe (Senoner & Heinzinger, 2024) on the *current* dataset
@@ -38,9 +51,12 @@ TriZOD-test leakage target.
 
 Outputs (``<work-dir>/testset/``):
   TriZOD_test_set.fasta      one record per representative (pinned or redrawn)
+  TriZOD_test_retired.fasta  retired pinned chains (leakage targets only),
+                             header label_tier=... pinned_id=... reason=...
   TriZOD_test_set_labels.tsv per chain: current ID, pinned (v0.3.0) ID,
-                             whether the ID was substituted, and label_tier —
-                             this file *is* the released-ID mapping table
+                             whether the ID was substituted, label_tier and
+                             status (test / retired) — this file *is* the
+                             released-ID mapping table
   build_test_set_summary.json
   (``--redraw`` additionally writes TriZOD_test_set_clu.tsv: 50/80 cluster
   membership, and overwrites the committed pin + its provenance sidecar)
@@ -71,7 +87,11 @@ CHEZOD_PREFIX = "CHEZOD__"
 # Strictest first: the first tier whose pool holds a sequence is its label_tier.
 TIER_ORDER = ("strict", "moderate", "tolerant", "unfiltered")
 # Tier the pin is resolved against — see the module docstring for why.
-RESOLVE_TIER = "tolerant"
+RESOLVE_TIER = "strict"
+# Looser pool a pinned sequence that left RESOLVE_TIER is retired against: it
+# stays a leakage target (see the module docstring), written to RETIRED_FASTA.
+RETIRE_TIER = "tolerant"
+RETIRED_FASTA = "TriZOD_test_retired.fasta"
 UNKNOWN_TIER = "unknown"
 
 REDRAW_WARNING = """\
@@ -121,7 +141,7 @@ def resolve_pinned_testset(
     pool: dict[str, str],
     tier_pools: dict[str, dict[str, str]] | None = None,
 ) -> tuple[dict[str, str], dict]:
-    """Resolve pinned test sequences against the current ``pool`` (tolerant).
+    """Resolve pinned test sequences against the current ``pool`` (strict).
 
     Each pinned sequence maps to its pinned entry ID if that entry is still in
     the pool, else to the lowest-numbered current entry sharing the identical
@@ -334,28 +354,76 @@ def _write_pin(pin_path, test_recs: dict[str, str]) -> None:
     )
 
 
-def _write_testset(out: Path, test_recs: dict[str, str], info: dict) -> None:
-    """Emit the resolved test set: annotated FASTA + the label/ID-map TSV.
+def retire_dropped(
+    pinned: dict[str, str],
+    dropped: list[str],
+    tier_pools: dict[str, dict[str, str]],
+    retire_tier: str = RETIRE_TIER,
+) -> tuple[dict[str, str], dict]:
+    """Resolve the pinned sequences the test pool dropped against the looser
+    ``retire_tier`` pool. Those found are the RETIRED test chains (same
+    ``(records, info)`` shape as :func:`resolve_pinned_testset`); those not
+    found stay in ``info["dropped"]``. No retire pool -> nothing retired."""
+    subset = {pid: pinned[pid] for pid in dropped}
+    pool = tier_pools.get(retire_tier)
+    if pool is None:
+        return {}, {"dropped": list(dropped), "label_tiers": {}, "id_map": []}
+    return resolve_pinned_testset(subset, pool, tier_pools=tier_pools)
+
+
+def _write_fasta_with_attrs(path: Path, recs: dict[str, str], attrs: dict) -> None:
+    with path.open("w") as fh:
+        for rid, seq in recs.items():
+            tokens = " ".join(f"{k}={v}" for k, v in attrs[rid].items())
+            fh.write(f">{rid} {tokens}\n{seq}\n")
+
+
+def _write_testset(
+    out: Path,
+    test_recs: dict[str, str],
+    info: dict,
+    retired_recs: dict[str, str] | None = None,
+    retired_info: dict | None = None,
+    reason: str = f"not_{RESOLVE_TIER}",
+) -> None:
+    """Emit the resolved test set: annotated FASTA + the label/ID-map TSV, and
+    the retired chains' FASTA (written even when empty, so a stale one from an
+    earlier run cannot survive).
 
     The FASTA header carries ``label_tier`` and the pinned (previous-release)
     ID so the sequence file is self-describing; every consumer in the chain
     keys on the first header token, as the per-tier pool FASTAs already do.
     """
-    label_tiers = info["label_tiers"]
-    pinned_of = {row["test_id"]: row["pinned_id"] for row in info["id_map"]}
-    with (out / "TriZOD_test_set.fasta").open("w") as fh:
-        for rid, seq in test_recs.items():
-            fh.write(
-                f">{rid} label_tier={label_tiers[rid]} "
-                f"pinned_id={pinned_of[rid]}\n{seq}\n"
-            )
+    retired_recs = retired_recs or {}
+    retired_rows = (retired_info or {}).get("id_map", [])
+
+    def attrs(rows, extra):
+        return {
+            row["test_id"]: {
+                "label_tier": row["label_tier"],
+                "pinned_id": row["pinned_id"],
+                **extra,
+            }
+            for row in rows
+        }
+
+    _write_fasta_with_attrs(
+        out / "TriZOD_test_set.fasta", test_recs, attrs(info["id_map"], {})
+    )
+    _write_fasta_with_attrs(
+        out / RETIRED_FASTA, retired_recs, attrs(retired_rows, {"reason": reason})
+    )
     with (out / "TriZOD_test_set_labels.tsv").open("w") as fh:
-        fh.write("test_id\tpinned_id\tsubstituted\tlabel_tier\tlength\n")
-        for row in info["id_map"]:
-            fh.write(
-                f"{row['test_id']}\t{row['pinned_id']}\t{row['substituted']}\t"
-                f"{row['label_tier']}\t{len(test_recs[row['test_id']])}\n"
-            )
+        fh.write("test_id\tpinned_id\tsubstituted\tlabel_tier\tlength\tstatus\n")
+        for rows, recs, status in (
+            (info["id_map"], test_recs, "test"),
+            (retired_rows, retired_recs, "retired"),
+        ):
+            for row in rows:
+                fh.write(
+                    f"{row['test_id']}\t{row['pinned_id']}\t{row['substituted']}\t"
+                    f"{row['label_tier']}\t{len(recs[row['test_id']])}\t{status}\n"
+                )
 
 
 def main(argv=None) -> None:
@@ -392,6 +460,14 @@ def main(argv=None) -> None:
         help=f"pool the pinned sequences are resolved against "
         f"(default: {RESOLVE_TIER}; see the module docstring)",
     )
+    ap.add_argument(
+        "--retire-tier",
+        choices=TIER_ORDER,
+        default=RETIRE_TIER,
+        help=f"looser pool a pinned sequence that left --resolve-tier is "
+        f"retired against: kept as a leakage target in {RETIRED_FASTA} "
+        f"(default: {RETIRE_TIER}; no retiring unless looser than --resolve-tier)",
+    )
     args = ap.parse_args(argv)
     paths = resolve_paths(args.work_dir, args.root)
     out = paths.testset
@@ -404,8 +480,10 @@ def main(argv=None) -> None:
                 f"--confirm-redraw if you really mean to break comparability."
             )
         print(REDRAW_WARNING)
-        # A labels sidecar from an earlier pinned run describes the OLD set.
+        # A labels sidecar or retired list from an earlier pinned run
+        # describes the OLD set.
         (out / "TriZOD_test_set_labels.tsv").unlink(missing_ok=True)
+        (out / RETIRED_FASTA).unlink(missing_ok=True)
         test_recs = _redraw(paths, out)
         _write_pin(paths.pinned_testset, test_recs)
         print(f"Re-pinned {len(test_recs)} sequences -> {paths.pinned_testset}")
@@ -428,14 +506,53 @@ def main(argv=None) -> None:
     pinned = read_fasta(paths.pinned_testset)
     test_recs, info = resolve_pinned_testset(pinned, pool, tier_pools=tier_pools)
 
-    _write_testset(out, test_recs, info)
-    summary = {"mode": "pinned", "resolve_tier": args.resolve_tier, **info}
+    # Pinned sequences that left the test pool: retired (still leakage targets)
+    # when the looser retire pool holds them, dropped only when it does not.
+    retired_recs, retired_info = {}, {"dropped": info["dropped"], "id_map": []}
+    if TIER_ORDER.index(args.retire_tier) > TIER_ORDER.index(args.resolve_tier):
+        if args.retire_tier not in tier_pools and info["dropped"]:
+            print(
+                f"WARNING: no {args.retire_tier} pool -- the "
+                f"{len(info['dropped'])} pinned sequences outside "
+                f"{args.resolve_tier} cannot be retired and are dropped"
+            )
+        retired_recs, retired_info = retire_dropped(
+            pinned, info["dropped"], tier_pools, args.retire_tier
+        )
+    retired = [row["pinned_id"] for row in retired_info["id_map"]]
+    info["dropped"] = retired_info["dropped"]
+    info["retired"] = retired
+    info["retired_id_map"] = retired_info["id_map"]
+
+    _write_testset(
+        out,
+        test_recs,
+        info,
+        retired_recs,
+        retired_info,
+        reason=f"not_{args.resolve_tier}",
+    )
+    summary = {
+        "mode": "pinned",
+        "resolve_tier": args.resolve_tier,
+        "retire_tier": args.retire_tier,
+        **info,
+    }
     (out / "build_test_set_summary.json").write_text(json.dumps(summary, indent=2))
 
+    if retired:
+        print(
+            f"NOTE: {len(retired)} pinned sequences no longer meet "
+            f"{args.resolve_tier} and were retired: not test chains any more, "
+            f"but written to {out / RETIRED_FASTA} as leakage targets, so they "
+            f"and their homologues stay out of training. Do not trim them from "
+            f"the pin: {retired}"
+        )
     if info["dropped"]:
         print(
-            f"WARNING: {len(info['dropped'])} pinned sequences are no longer in "
-            f"the {args.resolve_tier} pool and were dropped: {info['dropped']}"
+            f"WARNING: {len(info['dropped'])} pinned sequences are in neither "
+            f"the {args.resolve_tier} nor the {args.retire_tier} pool and were "
+            f"dropped: {info['dropped']}"
         )
     if info["substitutions"]:
         print(
@@ -448,9 +565,10 @@ def main(argv=None) -> None:
     non_strict = {t: n for t, n in info["label_tier_counts"].items() if t != "strict"}
     if non_strict:
         print(
-            f"NOTE: {sum(non_strict.values())} test chains no longer meet the "
-            f"strict criteria (label_tier: {non_strict}); they are retained so "
-            f"the published test set stays comparable across releases."
+            f"NOTE: {sum(non_strict.values())} test chains do not meet the "
+            f"strict criteria (label_tier: {non_strict}); they are retained "
+            f"because the pin was resolved against {args.resolve_tier}, not "
+            f"strict."
         )
     print(
         f"TriZOD test set (pinned, resolved against {args.resolve_tier}): "
