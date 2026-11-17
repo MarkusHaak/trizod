@@ -18,25 +18,32 @@ authors:
   - family-names: Senoner
     given-names: Tobias
     email: tobias.senoner94@gmail.com
-    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology - i12, Technical University of Munich (TUM), Garching/Munich, Germany"
+    orcid: "https://orcid.org/0000-0002-7900-5896"
   - family-names: Haak
     given-names: Markus
-    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+    affiliation: "Translational Microbiome Data Integration, School of Life Sciences, Technical University of Munich (TUM), Freising, Germany"
+    orcid: "https://orcid.org/0000-0003-0819-1182"
   - family-names: Heinzinger
     given-names: Michael
-    affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
+    affiliation: "Helmholtz Munich, Computational Health Center, Institute of Computational Biology, Neuherberg, Germany; School of Computation, Information and Technology, Technical University of Munich, Germany"
+    orcid: "https://orcid.org/0000-0002-9601-3580"
   - family-names: Wagemann
     given-names: David
-    affiliation: "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany"
+    affiliation: "Department of Informatics, Bioinformatics & Computational Biology - i12, Technical University of Munich (TUM), Garching/Munich, Germany; Institute of Structural and Molecular Biology, University College London, London, UK"
+    orcid: "https://orcid.org/0009-0005-4573-0781"
   - family-names: Pritišanac
     given-names: Iva
-    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
+    affiliation: "Helmholtz Munich, Computational Health Center, Institute of Computational Biology, Neuherberg, Germany; Helmholtz Munich, Molecular Targets and Therapeutics Center, Institute of Structural Biology, Neuherberg, Germany; Technical University of Munich, TUM School of Natural Sciences, Department of Bioscience, Bavarian NMR Center, Garching, Germany"
+    orcid: "https://orcid.org/0000-0002-9152-6555"
   - family-names: Rost
     given-names: Burkhard
-    affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
+    affiliation: "School of Computation, Information and Technology, Technical University of Munich, Germany; Institute for Advanced Study (TUM-IAS), Technical University of Munich, Germany; TUM School of Life Sciences Weihenstephan (TUM-WZW), Technical University of Munich, Freising, Germany"
+    orcid: "https://orcid.org/0000-0003-0179-8424"
   - family-names: Alderson
     given-names: Reid
-    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany; Bavarian NMR Center, Technical University of Munich, Garching, Germany"
+    affiliation: "Helmholtz Munich, Molecular Targets and Therapeutics Center, Institute of Structural Biology, Neuherberg, Germany; Technical University of Munich, TUM School of Natural Sciences, Department of Bioscience, Bavarian NMR Center, Garching, Germany"
+    orcid: "https://orcid.org/0000-0001-5163-2276"
 repository-code: "https://github.com/MarkusHaak/trizod"
 url: "https://doi.org/10.5281/zenodo.21309963"
 doi: 10.5281/zenodo.21309963
