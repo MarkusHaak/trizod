@@ -27,7 +27,7 @@ dependencies = [
     "pynmrstar>=3.5.0",
     "scipy>=1.13.1",
     "tqdm>=4.67.3",
-    "typer>=0.12",
+    "typer>=0.13",
 ]
 
 # matplotlib is imported only by trizod/figures/ (manuscript figure generators);
@@ -58,15 +58,21 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM"]
 ignore = [
     "N803",   # argument name should be lowercase (scientific convention: T, Ion, pH, etc.)
     "N806",   # variable name should be lowercase (scientific convention: N, I, E, etc.)
-    "B905",   # zip() without strict= (py310+): adding strict=True would change behaviour on length mismatch
-    "UP042",  # str+Enum -> StrEnum: changes str()/format() of the Typer CLI enums
     "N802",   # function name should be lowercase (POTENCI naming: predPentShift, etc.)
     "N816",   # mixed-case variable in global scope (AAstandard, CENTSHIFTS, etc.)
     "N818",   # exception name should end in Error (legacy naming: Found, etc.)
     "E741",   # ambiguous variable name (l, I, E — standard in scientific code)
     "E501",   # line too long (formatter handles what it can; remaining are data/strings)
     "SIM115", # open file with context handler (POTENCI CSV I/O)
+    # zip() without strict= (newly active at py310+). The existing zip() calls have
+    # not been audited for equal lengths; strict=True would raise where they
+    # currently truncate, so adopting it is a separate, behaviour-changing change.
+    "B905",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# str+Enum -> StrEnum would change str()/format() of the Typer CLI enums.
+"trizod/cli/main.py" = ["UP042"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["trizod"]

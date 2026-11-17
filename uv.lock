@@ -1179,7 +1179,7 @@ requires-dist = [
     { name = "pynmrstar", specifier = ">=3.5.0" },
     { name = "scipy", specifier = ">=1.13.1" },
     { name = "tqdm", specifier = ">=4.67.3" },
-    { name = "typer", specifier = ">=0.12" },
+    { name = "typer", specifier = ">=0.13" },
 ]
 provides-extras = ["figures"]
 
