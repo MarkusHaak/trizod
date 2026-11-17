@@ -18,6 +18,10 @@ membership:
   * ``train_tier``  strictest tier at which the chain is a training representative
   * ``pool_tier``   strictest tier whose redundancy-reduction pool contains the chain
 
+``sequence_group`` / ``sequence_group_size`` link every chain, in every split,
+to the chains with an identical sequence (:func:`sequence_group_id`, a hash of
+the sequence alone, so stable across releases), for overlaying replicates.
+
 A chain's per-tier *records* are NOT interchangeable, though (audit issue I-01).
 Tolerant is the only tier that combines a finite ``--max-offset`` (3 sigma) with
 ``--reject-shift-type-only``: it masks an over-limit atom type out of the score
@@ -100,6 +104,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import math
@@ -495,6 +500,62 @@ XREFS_DOC = (
 )
 
 
+#: The same-sequence link (2026-11-17): ``seq-`` + the first
+#: ``SEQUENCE_GROUP_HEX`` hex characters of the SHA-256 of the upper-case
+#: sequence. A function of the sequence alone, so a sequence keeps its ID in
+#: every release; changing either constant renames every group.
+SEQUENCE_GROUP_PREFIX = "seq-"
+SEQUENCE_GROUP_HEX = 16
+
+
+def sequence_group_id(seq: str) -> str:
+    """The ``sequence_group`` of a sequence (:data:`SEQUENCE_GROUP_PREFIX`)."""
+    digest = hashlib.sha256(seq.upper().encode("utf-8")).hexdigest()
+    return SEQUENCE_GROUP_PREFIX + digest[:SEQUENCE_GROUP_HEX]
+
+
+def sequence_groups(
+    seqs, group_id: Callable[[str], str] = sequence_group_id
+) -> dict[str, tuple[str, int]]:
+    """``sequence -> (sequence_group, sequence_group_size)`` for the chain
+    sequences ``seqs`` of a release, one element per chain. Fails the build
+    when two distinct sequences get the same ID."""
+    counts = Counter(seqs)
+    ids = {seq: group_id(seq) for seq in counts}
+    by_id: dict[str, list[str]] = {}
+    for seq, gid in ids.items():
+        by_id.setdefault(gid, []).append(seq)
+    clashes = {gid: members for gid, members in by_id.items() if len(members) > 1}
+    if clashes:
+        shown = {gid: [s[:30] for s in m] for gid, m in list(clashes.items())[:5]}
+        raise SystemExit(
+            f"sequence_group collision: {len(clashes)} IDs are shared by distinct "
+            f"sequences ({shown}); lengthen SEQUENCE_GROUP_HEX"
+        )
+    return {seq: (ids[seq], n) for seq, n in counts.items()}
+
+
+#: Table metadata explaining the same-sequence link.
+SEQUENCE_GROUP_DOC = (
+    "sequence_group: '"
+    + SEQUENCE_GROUP_PREFIX
+    + f"' + the first {SEQUENCE_GROUP_HEX} hex characters of the SHA-256 of the "
+    "chain's sequence (upper-case, UTF-8), shared by every chain of the release "
+    "whose sequence is identical, in every split. A function of the sequence "
+    "alone, so a sequence keeps its ID across releases; the build fails if two "
+    "distinct sequences ever get the same ID. sequence_group_size: the number of "
+    "chains of this release, across every split, in the group (1 = no other "
+    "chain has this sequence). Use: overlay replicate measurements of one "
+    "sequence (repeat depositions, other conditions) with "
+    "df.groupby('sequence_group'); their per-residue lists align position by "
+    "position. The group spans train and test: check split before mixing them. "
+    "Identity is exact, so other constructs of the same protein (a tag, a "
+    "truncation, a point mutant) usually share uniprot_ids but not "
+    "sequence_group; overlaying them needs a residue alignment, which the "
+    "release does not provide. Never null"
+)
+
+
 def _scores(name, arrow, source, convert):
     return Column(name, arrow, origin="scores", source=source, convert=convert)
 
@@ -636,6 +697,12 @@ COLUMNS: list[Column] = [
     Column(
         "retired_reason", "string", origin="testset", source="reason", convert=clean_str
     ),
+    # --- appended 2026-11-17: the same-sequence link --------------------------
+    # One ID per distinct sequence (sequence_group_id), shared by every chain of
+    # the release whose sequence is identical, in every split, and the number of
+    # such chains: replicate measurements a viewer can overlay residue by residue.
+    Column("sequence_group", "string", derive=lambda c: c["sequence_group"][0]),
+    Column("sequence_group_size", "int32", derive=lambda c: c["sequence_group"][1]),
 ]
 
 #: ``scores.json`` keys carried into the Parquet, derived from ``COLUMNS`` so
@@ -980,6 +1047,22 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
         + " (metadata `test_retired_semantics`)",
         "null unless `split == 'test_retired'`",
     ),
+    "sequence_group": _doc(
+        f"Same-sequence link: `{SEQUENCE_GROUP_PREFIX}` + the first "
+        f"{SEQUENCE_GROUP_HEX} hex characters of the SHA-256 of the upper-case "
+        "`sequence`, shared by every chain whose `sequence` is identical, in "
+        "every split (`split` says which chain is test). A function of the "
+        "sequence alone, so stable across releases. Overlay replicate "
+        'measurements with `groupby("sequence_group")`: their per-residue lists '
+        "align position by position. Other constructs of the same protein (tag, "
+        "truncation, mutant) usually share `uniprot_ids` but not `sequence_group`; "
+        "overlaying them needs a residue alignment, which the release does not "
+        "provide (metadata `sequence_group_semantics`)"
+    ),
+    "sequence_group_size": _doc(
+        "Number of chains of this release, across every split, in the chain's "
+        "`sequence_group`; 1 = no other chain has this sequence"
+    ),
 }
 
 
@@ -1203,6 +1286,9 @@ def collect_columns(
     if xrefs is None:
         print("  WARNING: --skip-xrefs — every cross-reference column will be null")
 
+    # every row of the release, every split: the group is the release's own
+    groups = sequence_groups([rec["seq"] for _, rec in labelled.values()])
+
     cols: dict[str, list] = {c.name: [] for c in COLUMNS}
     n_comp_hits = 0
 
@@ -1260,6 +1346,7 @@ def collect_columns(
             "label_tier_source": source_tier,
             "xrefs": chain_links,
             "uniprot": None if chain_links is None else xr.uniprot_ids(chain_links),
+            "sequence_group": groups[seq],
         }
         for col in COLUMNS:
             if col.derive is not None:
@@ -1445,6 +1532,7 @@ def table_metadata(
             row_group_size, straddling_entries(cols, row_group_size)
         ).encode(),
         b"xrefs_semantics": XREFS_DOC.encode(),
+        b"sequence_group_semantics": SEQUENCE_GROUP_DOC.encode(),
         b"xrefs_snapshot": (
             (xrefs_snapshot or "unknown") if xrefs is not None else "not read"
         ).encode(),
@@ -1543,6 +1631,22 @@ def build(
         dict(Counter(r for r in cols["retired_reason"] if r is not None)),
     )
     print("train_tier counts (strictest):", dict(tier_counts))
+    print_sequence_groups(cols)
+
+
+def print_sequence_groups(cols: dict, top: int = 5) -> None:
+    """Groups, groups of two or more chains, and the largest groups."""
+    size = dict(zip(cols["sequence_group"], cols["sequence_group_size"]))
+    name = {}
+    for gid, entity in zip(cols["sequence_group"], cols["entity_name"]):
+        name.setdefault(gid, entity)
+    multi = [g for g, n in size.items() if n > 1]
+    print(
+        f"sequence groups: {len(size)}, {len(multi)} with >= 2 chains "
+        f"({sum(size[g] for g in multi)} chains)"
+    )
+    for gid in sorted(size, key=lambda g: (-size[g], g))[:top]:
+        print(f"  {gid}  {size[gid]:4d} chains  e.g. {name[gid]}")
 
 
 def shift_release_metadata(stats, release: dict[str, str]) -> dict[str, str]:

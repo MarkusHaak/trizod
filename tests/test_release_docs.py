@@ -157,3 +157,13 @@ def test_docs_type_no_tier_counts_of_a_build():
     for path in [*TEMPLATES, DOCS / "columns.md"]:
         assert "null in scores.json" not in path.read_text(), path
         assert "null in `scores.json`" not in path.read_text(), path
+
+
+def test_the_readme_and_changelog_introduce_the_sequence_group():
+    """How to overlay replicate measurements of one sequence, and what the
+    group does not cover (other constructs of the same protein)."""
+    readme = (DOCS / "bundle-README.md").read_text()
+    assert 'groupby("sequence_group")' in readme
+    assert "`uniprot_ids`" in readme and "alignment" in readme
+    changelog = (DOCS / "CHANGELOG.md").read_text()
+    assert "`sequence_group`" in changelog and "`sequence_group_size`" in changelog

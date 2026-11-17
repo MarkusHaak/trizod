@@ -450,6 +450,63 @@ def test_calibration_input_with_the_same_data_is_accepted(inputs, tmp_path):
 def test_calibration_input_not_on_this_machine_is_recorded_unchecked(release):
     tp = release["manifest"]["threshold_protocol"]
     assert tp["input_data_identical_to_release"] is None
+    assert tp["columns_added_after_calibration"] is None
+
+
+def _without_columns(src, dst, drop):
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(src)
+    pq.write_table(table.drop_columns(list(drop)), dst)
+    return dst
+
+
+def test_calibration_input_without_the_sequence_group_is_the_same_data(
+    inputs, tmp_path
+):
+    """The cuts were calibrated on a Parquet built before the same-sequence
+    link existed. ``sequence_group`` and ``sequence_group_size`` are functions
+    of ``sequence`` alone, which the framework does not read, so a release that
+    adds them still carries the calibrated data -- on every column the input
+    has. Any other added or changed column is still refused."""
+    full = build_release_parquet(
+        inputs["bundle"],
+        tmp_path / "full.parquet",
+        overlaps={
+            "chezod117": set(),
+            "chezod1325": {"2001_1_1_1"},
+            "chezod1174": set(),
+        },
+    )
+    older = _without_columns(
+        full, tmp_path / "older.parquet", finalize.CALIBRATION_NEUTRAL_COLUMNS
+    )
+    assert finalize.data_fingerprint(full) != finalize.data_fingerprint(older)
+    shared = [
+        c
+        for c in finalize.parquet_columns(full)
+        if c in finalize.parquet_columns(older)
+    ]
+    assert finalize.data_fingerprint(full, shared) == finalize.data_fingerprint(older)
+
+    calibration = {"input_parquet": "older.parquet"}
+    out = finalize.check_calibration_input(full, calibration, input_path=older)
+    assert out["data_identical"] is True
+    assert out["columns_added_after_calibration"] == sorted(
+        finalize.CALIBRATION_NEUTRAL_COLUMNS
+    )
+    same = finalize.check_calibration_input(full, calibration, input_path=full)
+    assert same["data_identical"] is True
+    assert same["columns_added_after_calibration"] == []
+
+    # a column the framework could have read was added since: refused
+    lacking = _without_columns(full, tmp_path / "lacking.parquet", ["quality"])
+    with pytest.raises(SystemExit, match="quality"):
+        finalize.check_calibration_input(full, calibration, input_path=lacking)
+    out = finalize.check_calibration_input(
+        full, calibration, allow_mismatch=True, input_path=lacking
+    )
+    assert out["data_identical"] is False
 
 
 # --------------------------------------------------------------------------- #

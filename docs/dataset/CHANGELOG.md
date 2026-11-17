@@ -95,7 +95,10 @@ reliability cut.
   flags `membrane_mimetic_sample`, `temperature_placeholder` and `high_pressure`;
   UniProt/PDB cross-references (`xrefs`, `uniprot_ids`, `uniprot_source`,
   `pdb_ids`); the CheZOD overlap flags `chezod117_overlap`, `chezod1325_overlap`
-  and `chezod1174_overlap`; and `retired_reason`.
+  and `chezod1174_overlap`; `retired_reason`; and the same-sequence link
+  `sequence_group` (an ID hashed from the sequence alone, so stable across
+  releases, shared by every chain with an identical sequence in every split)
+  with `sequence_group_size`, for overlaying replicate measurements.
 - Rows are sorted by `(entry_id, id)` in 500-row groups for selective reads.
 - `columns.md` documents every column; the Parquet metadata now records the
   version, licences, code commit, scoring commit, BMRB snapshot, test-set

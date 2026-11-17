@@ -1032,11 +1032,12 @@ AUDIT_COLUMNS = [
 ]
 
 
-def test_the_audit_columns_are_appended_last():
-    tail = [(c.name, c.arrow) for c in builder.COLUMNS[-len(AUDIT_COLUMNS) :]]
-    assert tail == AUDIT_COLUMNS
+def test_the_audit_columns_follow_the_tier_rule_flags():
     names = [c.name for c in builder.COLUMNS]
-    assert names.index("chezod117_overlap") == names.index("high_pressure") + 1
+    start = names.index("chezod117_overlap")
+    assert start == names.index("high_pressure") + 1
+    block = [(c.name, c.arrow) for c in builder.COLUMNS[start : start + 4]]
+    assert block == AUDIT_COLUMNS
 
 
 def test_chezod_overlap_flags_come_from_the_overlap_sets(tmp_path):
@@ -1093,3 +1094,139 @@ def test_the_overlap_and_retire_semantics_are_declared_in_the_file(sorted_parque
         assert reason in retired, reason
     assert b"test_retired" in metadata[b"null_semantics"]
     assert b"20 standard" in metadata[b"sequence_alphabet"]
+
+
+# ----------------- same-sequence link (sequence_group, 2026-11-17)
+
+SEQUENCE_GROUP_COLUMNS = [
+    ("sequence_group", "string"),
+    ("sequence_group_size", "int32"),
+]
+UBIQUITIN = (
+    "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+)
+
+
+def _seq_record(entry_id, chain_id, seq):
+    n = len(seq)
+    return _record(
+        entry_id,
+        chain_id,
+        seq=seq,
+        k=[3] * n,
+        zscores=[1.0] * n,
+        gscores=[0.5] * n,
+    )
+
+
+def test_the_sequence_group_columns_are_appended_after_retired_reason():
+    tail = [(c.name, c.arrow) for c in builder.COLUMNS[-len(SEQUENCE_GROUP_COLUMNS) :]]
+    assert tail == SEQUENCE_GROUP_COLUMNS
+    names = [c.name for c in builder.COLUMNS]
+    assert names.index("sequence_group") == names.index("retired_reason") + 1
+
+
+def test_the_sequence_group_id_is_a_function_of_the_sequence_alone():
+    """Stable across releases: ``seq-`` + the first 16 hex characters of the
+    SHA-256 of the upper-case sequence. Pinned literally, so a change of the
+    formula (which would rename every group of every release) fails here."""
+    gid = builder.sequence_group_id(UBIQUITIN)
+    assert gid == "seq-233b4b0b8c461609"
+    assert builder.sequence_group_id("AAAA") == "seq-63c1dd951ffedf6f"
+    assert builder.sequence_group_id(UBIQUITIN.lower()) == gid
+    assert builder.sequence_group_id(UBIQUITIN[:-1]) != gid
+    assert gid.startswith("seq-") and len(gid) == 4 + 16
+    int(gid[4:], 16)
+
+
+def test_identical_sequences_share_a_group_whose_size_counts_them(tmp_path):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _seq_record("5387", "5387_1_1_1", UBIQUITIN),
+            _seq_record("6457", "6457_1_1_1", UBIQUITIN),
+            _seq_record("6457", "6457_2_1_1", UBIQUITIN),
+            _seq_record("7777", "7777_1_1_1", UBIQUITIN[:-2]),  # a construct
+            _seq_record("8888", "8888_1_1_1", "MKVL"),
+        ],
+    )
+    cols = builder.collect_columns(bundle, None)
+    groups, sizes = cols["sequence_group"], cols["sequence_group_size"]
+    ubq = builder.sequence_group_id(UBIQUITIN)
+    assert groups[:3] == [ubq] * 3
+    assert sizes == [3, 3, 3, 1, 1]
+    assert len(set(groups)) == 3
+    assert groups[3] != ubq
+    for seq, gid in zip(cols["sequence"], groups):
+        assert gid == builder.sequence_group_id(seq)
+
+
+def test_the_group_does_not_depend_on_the_other_rows(tmp_path):
+    """The same sequence gets the same ID whatever else the release holds."""
+    one = _write_bundle(
+        tmp_path / "one", records=[_seq_record("5387", "5387_1_1_1", UBIQUITIN)]
+    )
+    two = _write_bundle(
+        tmp_path / "two",
+        records=[
+            _seq_record("9999", "9999_3_1_2", "MKVL"),
+            _seq_record("6457", "6457_1_1_1", UBIQUITIN),
+        ],
+    )
+    a = builder.collect_columns(one, None)["sequence_group"]
+    b = builder.collect_columns(two, None)["sequence_group"]
+    assert a[0] == b[1] == builder.sequence_group_id(UBIQUITIN)
+
+
+def test_the_group_spans_every_split(tmp_path):
+    """A test chain and an identical excluded chain share the group: overlaying
+    test against train is the consumer's call, and ``split`` says which is
+    which."""
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _seq_record("12345", "12345_1_1_1", "AAAA"),
+            _seq_record("23456", "23456_1_1_1", "AAAA"),
+        ],
+        test_trizod_header=">12345_1_1_1 label_tier=strict pinned_id=12345_1_1_1",
+    )
+    cols = builder.collect_columns(bundle, None)
+    assert cols["split"] == ["test_trizod", "excluded"]
+    assert cols["sequence_group"][0] == cols["sequence_group"][1]
+    assert cols["sequence_group_size"] == [2, 2]
+
+
+def test_a_sequence_group_collision_fails_the_build():
+    seqs = ["AAAA", "MKVL", "AAAA"]
+    groups = builder.sequence_groups(seqs)
+    assert groups["AAAA"] == (builder.sequence_group_id("AAAA"), 2)
+    assert groups["MKVL"] == (builder.sequence_group_id("MKVL"), 1)
+    with pytest.raises(SystemExit, match="collision"):
+        builder.sequence_groups(seqs, group_id=lambda s: "seq-0000000000000000")
+
+
+def test_the_sequence_group_is_set_on_every_row_of_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    table = pq.read_table(
+        sorted_parquet, columns=["sequence", "sequence_group", "sequence_group_size"]
+    ).to_pydict()
+    assert all(g is not None for g in table["sequence_group"])
+    assert all(s is not None for s in table["sequence_group_size"])
+    # the five sorted_parquet chains all carry the default sequence "AAAA"
+    assert set(table["sequence_group"]) == {builder.sequence_group_id("AAAA")}
+    assert table["sequence_group_size"] == [5] * 5
+
+
+def test_the_sequence_group_semantics_are_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    text = pq.read_schema(sorted_parquet).metadata[b"sequence_group_semantics"].decode()
+    for word in (
+        "SHA-256",
+        "seq-",
+        "sequence_group_size",
+        "split",
+        "uniprot_ids",
+        "alignment",
+        "groupby",
+    ):
+        assert word in text, word

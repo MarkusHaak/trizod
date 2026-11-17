@@ -84,3 +84,16 @@ def test_the_cli_writes_the_dictionary(tmp_path):
     out = tmp_path / "columns.md"
     builder.main(["--write-column-dictionary", str(out)])
     assert out.read_text() == builder.column_dictionary_markdown()
+
+
+def test_the_sequence_group_columns_are_documented():
+    """The same-sequence link: never null, and the dictionary says that a
+    different construct of the same protein is not in the group."""
+    rows = _table_rows(COLUMNS_MD.read_text())
+    for name, arrow in (("sequence_group", "string"), ("sequence_group_size", "int32")):
+        assert rows[name][2] == f"`{arrow}`", name
+        assert rows[name][3] == "no", name
+        assert builder.COLUMN_DOCS[name].null_rule == builder.NEVER_NULL, name
+    group = " ".join(rows["sequence_group"])
+    for word in ("SHA-256", "identical", "split", "uniprot_ids", "alignment"):
+        assert word in group, word

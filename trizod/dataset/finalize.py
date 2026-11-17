@@ -958,15 +958,32 @@ def check_test_fastas(test_dir: Path, rows: list[dict]) -> None:
         )
 
 
-def data_fingerprint(path: Path) -> str:
-    """SHA-256 of a Parquet's data alone: every column and row serialised as
-    one Arrow IPC batch, the key-value metadata dropped. Equal for two builds
-    that differ only in metadata or row-group layout (NaN compares by its
-    bits, which ``Table.equals`` would not)."""
+#: Release columns that may postdate the Parquet the threshold framework
+#: calibrated on: the same-sequence link, a function of ``sequence`` alone that
+#: the framework does not read. A release that adds them still carries the
+#: calibrated data, which is checked on every column the input has.
+CALIBRATION_NEUTRAL_COLUMNS = frozenset({"sequence_group", "sequence_group_size"})
+
+
+def parquet_columns(path: Path) -> list[str]:
+    """Column names of a Parquet, in order."""
+    import pyarrow.parquet as pq
+
+    return pq.read_schema(path).names
+
+
+def data_fingerprint(path: Path, columns: list[str] | None = None) -> str:
+    """SHA-256 of a Parquet's data alone: every column (or ``columns``, in that
+    order) and row serialised as one Arrow IPC batch, the key-value metadata
+    dropped. Equal for two builds that differ only in metadata or row-group
+    layout (NaN compares by its bits, which ``Table.equals`` would not)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    table = pq.read_table(path).replace_schema_metadata(None).combine_chunks()
+    table = pq.read_table(path, columns=columns)
+    if columns is not None:
+        table = table.select(list(columns))
+    table = table.replace_schema_metadata(None).combine_chunks()
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
@@ -1002,26 +1019,49 @@ def check_calibration_input(
 ) -> dict | None:
     """The threshold framework calibrates on the release Parquet before its
     metadata is stamped, so the final Parquet's bytes differ from the input it
-    records. Check that their data are identical (every column and row; the
-    key-value metadata ignored). ``data_identical`` is None when the input is
-    not on this machine (pass ``input_path``, ``--calibration-input``)."""
+    records. Check that their data are identical (every column of the input
+    and every row; the key-value metadata ignored). The release may add only
+    :data:`CALIBRATION_NEUTRAL_COLUMNS`, recorded as
+    ``columns_added_after_calibration``. ``data_identical`` is None when the
+    input is not on this machine (pass ``input_path``, ``--calibration-input``)."""
     if not calibration:
         return None
     recorded = calibration.get("input_parquet")
     src = locate_calibration_input(recorded, input_path)
-    out = {"input_parquet": recorded, "data_identical": None}
+    out = {
+        "input_parquet": recorded,
+        "data_identical": None,
+        "columns_added_after_calibration": None,
+    }
     if src is None or not src.is_file():
         print(
             f"  note: calibration input {recorded} not found (pass "
             "--calibration-input) -- data identity not checked"
         )
         return out
-    out["data_identical"] = data_fingerprint(parquet) == data_fingerprint(src)
+    release_cols, input_cols = parquet_columns(parquet), parquet_columns(src)
+    added = [c for c in release_cols if c not in input_cols]
+    undeclared = [c for c in added if c not in CALIBRATION_NEUTRAL_COLUMNS]
+    lacking = [c for c in input_cols if c not in release_cols]
+    out["columns_added_after_calibration"] = added
+    out["data_identical"] = (
+        not undeclared
+        and not lacking
+        and data_fingerprint(parquet, input_cols) == data_fingerprint(src)
+    )
+    detail = ""
+    if undeclared:
+        detail += (
+            f"; it adds {undeclared}, and only "
+            f"{sorted(CALIBRATION_NEUTRAL_COLUMNS)} may be added after the calibration"
+        )
+    if lacking:
+        detail += f"; it lacks the input's {lacking}"
     _check(
         out["data_identical"] or allow_mismatch,
         f"the calibration was computed on {src}, whose data differ from "
-        f"{parquet}: rebuild the Parquet with the inputs of the calibrated build, "
-        "or pass --allow-calibration-mismatch for a dry run",
+        f"{parquet}{detail}: rebuild the Parquet with the inputs of the calibrated "
+        "build, or pass --allow-calibration-mismatch for a dry run",
     )
     return out
 
@@ -1324,6 +1364,9 @@ def assemble(
                 "input_parquet_sha256": calibration.get("input_parquet_sha256"),
                 "input_data_identical_to_release": (calibration_input or {}).get(
                     "data_identical"
+                ),
+                "columns_added_after_calibration": (calibration_input or {}).get(
+                    "columns_added_after_calibration"
                 ),
                 "cuts": list(ri.CUTS),
                 "rule": calibration.get("rule"),

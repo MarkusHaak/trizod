@@ -63,6 +63,15 @@ seq, g, mask, k = row["sequence"], row["gscores"], row["mask"], row["k"]
 # loss = mse(pred[mask], g[mask])     # g is NaN exactly where mask is False
 ```
 
+To overlay replicate measurements of one sequence (repeat depositions of
+ubiquitin, say), group on the same-sequence link,
+`df[df.sequence_group_size > 1].groupby("sequence_group")`: the chains of a
+group have identical sequences, so their per-residue lists align position by
+position, and the group spans every split (check `split` before mixing test and
+training chains). Other constructs of the same protein (a tag, a truncation, a
+mutant) usually share `uniprot_ids` but not `sequence_group`; overlaying them
+needs a residue alignment, which the release does not provide.
+
 ## Labels, mask and cuts
 
 - **The label is the continuous G-score** (`gscores`). Train on it as a
