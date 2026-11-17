@@ -237,6 +237,16 @@ def _deposited_lists(task) -> tuple[str, dict]:
                 }
             )
         )
+        if sc.is_temperature_placeholder():
+            # A raw 273 K is a placeholder unless the entry's own text states 0 C, which
+            # the pipeline decides entry-wide (BmrbEntry): ask it, for these few entries.
+            try:
+                entry = bm.BmrbEntry(eid, str(Path(path).parent.parent))
+                sc.zero_celsius_stated = bool(entry.zero_celsius_stated)
+            except (
+                Exception
+            ):  # an entry the pipeline cannot parse keeps the placeholder
+                pass
         vals = (
             sc.get_pH(return_default=False),
             sc.get_temperature(return_default=False),

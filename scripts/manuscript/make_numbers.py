@@ -1608,7 +1608,9 @@ def sec_filter_losses(C):
         "method (sub-)type": "MethodSubtype", "temperature": "Temperature", "ionic strength": "IonicStrength", "pH": "PH",
         "peptide length": "PeptideLength", "bb shift types": "BbShiftTypes", "bb shift positions": "BbShiftPositions",
         "bb shift fraction": "BbShiftFraction", "non-canonical frac": "NoncanonicalFraction", "X fraction": "XFraction",
-        "physical state": "PhysicalState", ".*denatur.*": "KwDenatur", ".*unfold.*": "KwUnfold", ".*misfold.*": "KwMisfold",
+        "physical state": "PhysicalState",
+        # condition rules of 2026-11 (pressure: tolerant+; membrane mimetic: moderate+)
+        "pressure": "Pressure", "membrane mimetic": "MembraneMimetic", ".*denatur.*": "KwDenatur", ".*unfold.*": "KwUnfold", ".*misfold.*": "KwMisfold",
         ".*bound.*": "KwBound", ".*in complex with.*": "KwInComplexWith", ".*complexed with.*": "KwComplexedWith",
         ".*guanidin.*": "CsGuanidin", ".*GdmCl.*": "CsGdmCl", ".*Gdn-Hcl.*": "CsGdnHcl", ".*urea.*": "CsUrea", ".*TFE.*": "CsTFE",
         ".*trifluoroethanol.*": "CsTrifluoroethanol", ".*trifluoro ethanol.*": "CsTrifluoroEthanolSpaced",
@@ -9705,7 +9707,13 @@ def sec_review_science(C):
     src3 = "supp_s4_conditions.load: <cond>_deposited (pipeline reading, paper_raw_scan.chain_deposited) against <cond>_deposited_raw_scan (float() only)"
     for col, nm in (("ph", "Ph"), ("temperature", "Temp"), ("ionic_strength", "Ionic")):
         n_txt = int((d4[f"{col}_deposited"] & ~d4[f"{col}_deposited_raw_scan"]).sum())
-        n_rev = int((~d4[f"{col}_deposited"] & d4[f"{col}_deposited_raw_scan"]).sum())
+        rev = ~d4[f"{col}_deposited"] & d4[f"{col}_deposited_raw_scan"]
+        if col == "temperature":
+            # a deposited 273 K is read as not deposited by rule (temperature_placeholder)
+            rev &= ~d4["temperature_placeholder"].astype("boolean").fillna(
+                False
+            ).astype(bool)
+        n_rev = int(rev.sum())
         assert n_rev == 0, (col, n_rev)  # the pipeline reads every value float() reads
         R.add(f"n{nm}DepositedAsText", I(n_txt), f"chains whose deposited {col.replace('_', ' ')} is written as text the pipeline reads ('298K', '293,15', '298-303'); counted as deposited", src3, STABLE, "r4")  # fmt: skip
 

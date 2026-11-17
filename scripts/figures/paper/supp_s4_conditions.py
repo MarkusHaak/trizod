@@ -105,6 +105,7 @@ def load():
         "physical_state",
         "membrane_mimetic",
         "membrane_mimetic_sample",
+        "temperature_placeholder",
         "cosolvent_evidence",
         "is_bound",
         "n_copies",
