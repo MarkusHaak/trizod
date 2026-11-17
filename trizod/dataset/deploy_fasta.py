@@ -26,7 +26,8 @@ Membership / split (defaults):
 * ``SET=test``  -- the seeded **TriZOD test set**
   (``<work-dir>/testset/TriZOD_test_set.fasta``, 344 seqs).
 * The **retired** TriZOD test chains (``TriZOD_test_retired.fasta`` beside the
-  test FASTA; pinned chains that left the strict tier) are in NEITHER set: the
+  test FASTA; pinned chains that left the strict tier, overlap CheZOD117 or
+  duplicate another test chain) are in NEITHER set: the
   redundancy step keeps them out of training as leakage targets, and the
   test-set step leaves them out of the test set. The script aborts if one of
   them appears in either input.

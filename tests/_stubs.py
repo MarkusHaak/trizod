@@ -62,7 +62,9 @@ class Sample:
         details=None,
         name=None,
         sample_type="solution",
+        sample_id=None,
     ):
+        self.id = sample_id
         self.name = name
         self.details = details
         self.solvent_system = solvent_system
@@ -72,10 +74,11 @@ class Sample:
 
 
 class Named:
-    """Stand-in for an entity or an assembly."""
+    """Stand-in for an entity or an assembly (``_Entity.Type`` polymer)."""
 
-    def __init__(self, name=None):
+    def __init__(self, name=None, entity_type="polymer"):
         self.name = name
+        self.type = entity_type
         self.details = None
         self.seq = None
         self.paramagnetic = None

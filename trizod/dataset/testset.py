@@ -30,6 +30,26 @@ why the committed pin is NOT trimmed when chains leave strict: the full pin is
 what defines the retired set. Only a pinned sequence absent from the retire
 pool too (e.g. a withdrawn entry with no live twin) is dropped outright.
 
+Two more reasons retire a chain that is still strict (release audit
+2026-11-17), in this order:
+
+* ``chezod117_overlap`` (E23): the chain meets the leakage criterion of
+  ``trizod.dataset.mmseqs`` (>= 30 % identity over >= 80 % of either chain,
+  >= 27 bits, either search direction) against a CheZOD117 sequence -- a
+  released CheZOD117 chain or one of the 117 original sequences SETH published
+  (two of which, "hmbdi" and "6078", are no release chain). 19481_1_1_1
+  contains CheZOD117 19482 as an exact 91-residue substring.
+* ``within_test_duplicate`` (E24): the remaining test chains are searched
+  against each other at 50 % identity over 80 % of EITHER chain (the coverage
+  the release uses everywhere else; the 50 % is the test set's own clustering
+  threshold). Of every such pair the shorter chain -- the contained one for an
+  exact substring, 6439_1_1_1 in 6440_1_1_1 -- is retired, the lower entry ID
+  kept on a tie, greedily from the longest chain down
+  (:func:`select_within_test_duplicates`), so no two remaining test chains
+  form a pair and no chain is retired for a partner that is itself retired.
+
+Both checks run mmseqs and need the original CheZOD117 FASTA.
+
 ``--redraw`` mode (requires ``--confirm-redraw``): reproduces the original
 TriZOD test-set recipe (Senoner & Heinzinger, 2024) on the *current* dataset
 snapshot, with a FIXED SEED so it is reproducible (the original 2024 draw was
@@ -54,9 +74,11 @@ Outputs (``<work-dir>/testset/``):
   TriZOD_test_retired.fasta  retired pinned chains (leakage targets only),
                              header label_tier=... pinned_id=... reason=...
   TriZOD_test_set_labels.tsv per chain: current ID, pinned (v0.3.0) ID,
-                             whether the ID was substituted, label_tier and
-                             status (test / retired) — this file *is* the
-                             released-ID mapping table
+                             whether the ID was substituted, label_tier,
+                             status (test / retired) and the retire reason
+                             (not_strict / chezod117_overlap /
+                             within_test_duplicate; empty for a test chain) —
+                             this file *is* the released-ID mapping table
   build_test_set_summary.json
   (``--redraw`` additionally writes TriZOD_test_set_clu.tsv: 50/80 cluster
   membership, and overwrites the committed pin + its provenance sidecar)
@@ -76,6 +98,7 @@ import random
 import shutil
 from pathlib import Path
 
+from trizod.dataset import mmseqs as mm
 from trizod.dataset.mmseqs import COMMON, cluster_tsv_groups, run
 from trizod.dataset.paths import resolve_paths
 from trizod.io.fasta import read_fasta, write_fasta
@@ -93,6 +116,9 @@ RESOLVE_TIER = "strict"
 RETIRE_TIER = "tolerant"
 RETIRED_FASTA = "TriZOD_test_retired.fasta"
 UNKNOWN_TIER = "unknown"
+# Retire reasons beside f"not_{resolve tier}" (release audit 2026-11-17).
+CHEZOD117_OVERLAP = "chezod117_overlap"
+WITHIN_TEST_DUPLICATE = "within_test_duplicate"
 
 REDRAW_WARNING = """\
 !! --redraw DESTROYS COMPARABILITY WITH EVERY PUBLISHED TriZOD RELEASE !!
@@ -378,6 +404,107 @@ def _write_fasta_with_attrs(path: Path, recs: dict[str, str], attrs: dict) -> No
             fh.write(f">{rid} {tokens}\n{seq}\n")
 
 
+def _label_tier_counts(label_tiers) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for tier in [*TIER_ORDER, UNKNOWN_TIER]:
+        n = sum(1 for t in label_tiers if t == tier)
+        if n:
+            counts[tier] = n
+    return counts
+
+
+def retire_chains(
+    test_recs: dict[str, str],
+    info: dict,
+    retired_recs: dict[str, str],
+    retired_info: dict,
+    ids,
+    reason: str,
+) -> None:
+    """Move the test chains ``ids`` to the retired set, in place: their records
+    from ``test_recs`` to ``retired_recs`` and their ID-map rows, tagged with
+    ``reason``, from ``info["id_map"]`` to ``retired_info["id_map"]``. The
+    test set only shrinks; a retired chain stays a leakage target."""
+    ids = set(ids)
+    for row in [r for r in info["id_map"] if r["test_id"] in ids]:
+        info["id_map"].remove(row)
+        retired_info["id_map"].append({**row, "reason": reason})
+        retired_recs[row["test_id"]] = test_recs.pop(row["test_id"])
+        info["label_tiers"].pop(row["test_id"], None)
+    info["label_tier_counts"] = _label_tier_counts(info["label_tiers"].values())
+
+
+def find_chezod117_overlaps(
+    test_recs: dict[str, str], chezod117: dict[str, str], work: Path
+) -> list[mm.LeakageHit]:
+    """Test chains that meet the leakage criterion (rule ``either``) against a
+    CheZOD117 sequence, in either search direction. In each hit the TriZOD
+    test chain is ``train_id`` and the CheZOD117 sequence ``test_id``."""
+    work.mkdir(parents=True, exist_ok=True)
+    test_fa, chezod_fa = work / "trizod_test.fasta", work / "chezod117.fasta"
+    write_fasta(test_recs, test_fa)
+    write_fasta(chezod117, chezod_fa)
+    return mm.find_leaks(
+        test_fa,
+        chezod_fa,
+        work / "chezod117_hits.tsv",
+        work / "tmp_chezod117",
+        work / "chezod117_search.log",
+        rule="either",
+    )
+
+
+def find_within_test_pairs(
+    test_recs: dict[str, str], work: Path
+) -> list[mm.LeakageHit]:
+    """Pairs of distinct test chains at >= 50 % identity over >= 80 % of
+    either chain (and the bit floor), one hit per unordered pair."""
+    work.mkdir(parents=True, exist_ok=True)
+    fa = work / "trizod_test.fasta"
+    write_fasta(test_recs, fa)
+    hits = mm.search_both_directions(
+        fa,
+        fa,
+        work / "within_test_hits.tsv",
+        work / "tmp_within_test",
+        work / "within_test_search.log",
+        min_seq_id=mm.WITHIN_TEST_MIN_SEQ_ID,
+    )
+    pairs: dict[frozenset, mm.LeakageHit] = {}
+    for h in hits:
+        if h.train_id != h.test_id and mm.is_leak(h, rule="either"):
+            pairs.setdefault(frozenset((h.train_id, h.test_id)), h)
+    return list(pairs.values())
+
+
+def select_within_test_duplicates(test_recs: dict[str, str], pairs) -> dict[str, str]:
+    """``{retired ID: kept partner}`` for near-duplicate ``pairs`` (ID pairs,
+    either order) of test chains: going from the longest chain down (lower
+    entry ID first on a tie), a chain is kept unless it pairs with a chain
+    already kept, in which case it is retired against the first such partner.
+    So the shorter chain of a pair -- the contained one of an exact substring
+    -- is retired, no two kept chains form a pair, and the result does not
+    depend on the order of ``test_recs`` or ``pairs``."""
+    partners: dict[str, set[str]] = {}
+    for a, b in pairs:
+        if a != b:
+            partners.setdefault(a, set()).add(b)
+            partners.setdefault(b, set()).add(a)
+
+    def priority(cid):
+        return (-len(test_recs[cid]), _entry_sort_key(cid))
+
+    kept: list[str] = []
+    retired: dict[str, str] = {}
+    for cid in sorted(test_recs, key=priority):
+        match = [k for k in kept if k in partners.get(cid, ())]
+        if match:
+            retired[cid] = match[0]
+        else:
+            kept.append(cid)
+    return retired
+
+
 def _write_testset(
     out: Path,
     test_recs: dict[str, str],
@@ -388,33 +515,39 @@ def _write_testset(
 ) -> None:
     """Emit the resolved test set: annotated FASTA + the label/ID-map TSV, and
     the retired chains' FASTA (written even when empty, so a stale one from an
-    earlier run cannot survive).
+    earlier run cannot survive). A retired row's own ``reason`` wins over
+    ``reason``, the default for rows without one (``not_<resolve tier>``).
 
     The FASTA header carries ``label_tier`` and the pinned (previous-release)
     ID so the sequence file is self-describing; every consumer in the chain
     keys on the first header token, as the per-tier pool FASTAs already do.
     """
     retired_recs = retired_recs or {}
-    retired_rows = (retired_info or {}).get("id_map", [])
+    retired_rows = [
+        {**row, "reason": row.get("reason") or reason}
+        for row in (retired_info or {}).get("id_map", [])
+    ]
 
-    def attrs(rows, extra):
+    def attrs(rows, with_reason):
         return {
             row["test_id"]: {
                 "label_tier": row["label_tier"],
                 "pinned_id": row["pinned_id"],
-                **extra,
+                **({"reason": row["reason"]} if with_reason else {}),
             }
             for row in rows
         }
 
     _write_fasta_with_attrs(
-        out / "TriZOD_test_set.fasta", test_recs, attrs(info["id_map"], {})
+        out / "TriZOD_test_set.fasta", test_recs, attrs(info["id_map"], False)
     )
     _write_fasta_with_attrs(
-        out / RETIRED_FASTA, retired_recs, attrs(retired_rows, {"reason": reason})
+        out / RETIRED_FASTA, retired_recs, attrs(retired_rows, True)
     )
     with (out / "TriZOD_test_set_labels.tsv").open("w") as fh:
-        fh.write("test_id\tpinned_id\tsubstituted\tlabel_tier\tlength\tstatus\n")
+        fh.write(
+            "test_id\tpinned_id\tsubstituted\tlabel_tier\tlength\tstatus\treason\n"
+        )
         for rows, recs, status in (
             (info["id_map"], test_recs, "test"),
             (retired_rows, retired_recs, "retired"),
@@ -422,7 +555,8 @@ def _write_testset(
             for row in rows:
                 fh.write(
                     f"{row['test_id']}\t{row['pinned_id']}\t{row['substituted']}\t"
-                    f"{row['label_tier']}\t{len(recs[row['test_id']])}\t{status}\n"
+                    f"{row['label_tier']}\t{len(recs[row['test_id']])}\t{status}\t"
+                    f"{row.get('reason', '') if status == 'retired' else ''}\n"
                 )
 
 
@@ -519,34 +653,98 @@ def main(argv=None) -> None:
         retired_recs, retired_info = retire_dropped(
             pinned, info["dropped"], tier_pools, args.retire_tier
         )
-    retired = [row["pinned_id"] for row in retired_info["id_map"]]
-    info["dropped"] = retired_info["dropped"]
-    info["retired"] = retired
-    info["retired_id_map"] = retired_info["id_map"]
+    not_resolved = f"not_{args.resolve_tier}"
+    for row in retired_info["id_map"]:
+        row["reason"] = not_resolved
 
-    _write_testset(
-        out,
+    # CheZOD117 overlaps, then within-test near-duplicates (release audit
+    # E23/E24): retired, never deleted -- they stay leakage targets.
+    if not shutil.which("mmseqs"):
+        raise SystemExit("mmseqs binary not found in PATH (test-set checks)")
+    for src in (paths.chezod117, paths.chezod117_original):
+        if not src.exists():
+            raise SystemExit(
+                f"CheZOD117 sequences not found at {src}: the test set is checked "
+                "against every released and original CheZOD117 sequence"
+            )
+    chezod117 = {**read_fasta(paths.chezod117), **read_fasta(paths.chezod117_original)}
+    work = out / "_checks"
+    if work.exists():
+        shutil.rmtree(work)
+    overlaps = mm.strongest_per_pair(
+        sorted(
+            find_chezod117_overlaps(test_recs, chezod117, work),
+            key=lambda h: (h.train_id, -h.bits, h.test_id),
+        )
+    )
+    retire_chains(
         test_recs,
         info,
         retired_recs,
         retired_info,
-        reason=f"not_{args.resolve_tier}",
+        {h.train_id for h in overlaps},
+        CHEZOD117_OVERLAP,
     )
+    pair_hits = find_within_test_pairs(test_recs, work)
+    duplicates = select_within_test_duplicates(
+        test_recs, [(h.train_id, h.test_id) for h in pair_hits]
+    )
+    retire_chains(
+        test_recs, info, retired_recs, retired_info, duplicates, WITHIN_TEST_DUPLICATE
+    )
+    hit_of = {frozenset((h.train_id, h.test_id)): h for h in pair_hits}
+
+    retired = [row["pinned_id"] for row in retired_info["id_map"]]
+    info["dropped"] = retired_info["dropped"]
+    info["retired"] = retired
+    info["retired_id_map"] = retired_info["id_map"]
+    by_reason: dict[str, list[str]] = {}
+    for row in retired_info["id_map"]:
+        by_reason.setdefault(row["reason"], []).append(row["test_id"])
+    info["retired_by_reason"] = by_reason
+
+    _write_testset(out, test_recs, info, retired_recs, retired_info, not_resolved)
+    first_overlap: dict[str, mm.LeakageHit] = {}
+    for h in overlaps:
+        first_overlap.setdefault(h.train_id, h)
     summary = {
         "mode": "pinned",
         "resolve_tier": args.resolve_tier,
         "retire_tier": args.retire_tier,
+        "test_set_size": len(test_recs),
         **info,
+        "leakage_criterion": mm.describe_rule("either"),
+        "chezod117_overlaps": [
+            {
+                "test_id": h.train_id,
+                "chezod117_id": h.test_id,
+                "pident": h.pident,
+                "bits": h.bits,
+                "test_cov": round(h.train_cov, 3),
+                "chezod117_cov": round(h.test_cov, 3),
+                "direction": h.direction,
+            }
+            for h in first_overlap.values()
+        ],
+        "within_test_criterion": (
+            f">= {mm.WITHIN_TEST_MIN_SEQ_ID * 100:g} % identity over >= "
+            f"{mm.LEAKAGE_MIN_COV * 100:g} % of either chain, >= "
+            f"{mm.LEAKAGE_MIN_BITS:g} bits"
+        ),
+        "within_test_duplicates": [
+            [rid, kid, hit_of[frozenset((rid, kid))].pident]
+            for rid, kid in duplicates.items()
+        ],
     }
     (out / "build_test_set_summary.json").write_text(json.dumps(summary, indent=2))
 
     if retired:
         print(
-            f"NOTE: {len(retired)} pinned sequences no longer meet "
-            f"{args.resolve_tier} and were retired: not test chains any more, "
-            f"but written to {out / RETIRED_FASTA} as leakage targets, so they "
-            f"and their homologues stay out of training. Do not trim them from "
-            f"the pin: {retired}"
+            f"NOTE: {len(retired)} pinned sequences were retired: not test chains "
+            f"any more, but written to {out / RETIRED_FASTA} as leakage targets, "
+            f"so they and their homologues stay out of training. Do not trim "
+            f"them from the pin. By reason: "
+            + "; ".join(f"{r}: {len(ids)} {ids}" for r, ids in by_reason.items())
         )
     if info["dropped"]:
         print(

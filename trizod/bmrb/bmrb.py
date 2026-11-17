@@ -50,6 +50,31 @@ def get_tag_vals(
     return default
 
 
+#: A character of a deposited one-letter sequence that is not a letter.
+_NON_LETTER = re.compile(r"[^A-Z]")
+#: A run of non-letters ending the sequence.
+_TRAILING_NON_LETTERS = re.compile(r"[^A-Z]+$")
+
+
+def normalize_sequence(deposited: str) -> str | None:
+    """The parsed form of ``_Entity.Polymer_seq_one_letter_code`` (release
+    audit D15).
+
+    Whitespace (the line breaks of the NMR-STAR text field) is dropped and
+    letters are upper-cased. A TRAILING run of non-letters -- the
+    translation-stop symbol ``*`` (bmr50015), a typed apostrophe (bmr52376) --
+    is no residue and is stripped; this happens here, before any per-residue
+    array is built, so the sequence and every array lose the position together
+    (no shift of either entry references it). An INTERNAL non-letter (a ``-`` in
+    bmr53341, an entry without shifts) becomes ``X``, one for one, so the
+    residue numbering of the shifts still holds. The released chains hold the
+    20 standard residues plus X, U and Z only. None when nothing is left.
+    """
+    seq = "".join(deposited.split()).upper()
+    seq = _NON_LETTER.sub("X", _TRAILING_NON_LETTERS.sub("", seq))
+    return seq or None
+
+
 class Entity:
     def __init__(self, sf):
         super().__init__()
@@ -75,7 +100,7 @@ class Entity:
         )
         self.seq = get_tag_vals(sf, "_Entity.Polymer_seq_one_letter_code", indices=0)
         if self.seq is not None and self.seq not in ["", "."]:
-            self.seq = self.seq.replace("\n", "").strip().upper()
+            self.seq = normalize_sequence(self.seq)
         else:
             self.seq = None
         self.paramagnetic = get_tag_vals(sf, "_Entity.Paramagnetic", indices=0)

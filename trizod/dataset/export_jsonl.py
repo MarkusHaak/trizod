@@ -44,8 +44,9 @@ Membership (by the Parquet's ``split`` / ``train_tier`` / ``cluster_repr``):
   cluster by construction; grouping by ``cluster_repr`` keeps it so if a
   release ever lists several representatives per cluster.
 * test -- ``split == "test_trizod"`` only. ``test_retired`` (pinned test chains
-  that no longer meet strict) is neither test nor training and is never
-  exported.
+  retired because they no longer meet strict, overlap CheZOD117 or duplicate
+  another test chain; column ``retired_reason``) is neither test nor training
+  and is never exported.
 * chezod117 -- ``split == "test_chezod117"``; ``y`` is TriZOD G for those
   chains, not CheZOD Z.
 
@@ -559,8 +560,9 @@ def render_readme(summary: dict) -> str:
         "can still fall on both sides.",
         f'- **test**: the final TriZOD test set, `split == "test_trizod"` '
         f"(n = {n_test}), identical in every tier folder. Retired test chains "
-        "(`test_retired`: pinned test chains that no longer meet strict) are "
-        "neither test nor training and appear in no file.",
+        "(`test_retired`: pinned test chains that no longer meet strict, "
+        "overlap CheZOD117 or duplicate another test chain; see "
+        "`retired_reason`) are neither test nor training and appear in no file.",
         "",
         "## Using it with UdonPred v2",
         "",

@@ -504,6 +504,60 @@ LMPG 0.16, LDAO 1.0, DH7PC 1.4, DPC 1.5, SDS 8.2, FC-10 11, DHPC 15 mM. Columns:
 `membrane_mimetic_sample` (the verdict) and `membrane_mimetic` (every class recognised,
 counted or not).
 
+#### Which components and sample fields are read (release audit C8, 2026-11-17)
+
+The first version read only components **without** an `_Sample_component.Entity_ID`,
+so a detergent deposited as its own non-polymer entity (DPC as entity 2 in 16853, CHAPS
+in 26756) or linked by mistake to the protein entity ("DPC", 200 mM, Entity_ID 1 in
+26040) was never classified: 118 moderate/strict chains slipped past, 5 of them TriZOD
+test chains. Now:
+
+- **Non-polymer entity.** A component linked to an entity whose `_Entity.Type` is not
+  `polymer` is classified by the whole class table, like an unlinked one.
+- **Linked to a polymer.** Such a component is normally the studied protein, named as
+  the depositor liked, so it counts only when its name holds an **explicit** mimetic
+  token (`EXPLICIT_MIMETIC`): micelle, bicelle, nanodisc, liposome, *membrane scaffold
+  protein*, SDS, DPC, DHPC, LPPG, LMPG, LDAO, dodecylphosphocholine, dodecyl sulfate, a
+  phospholipid acronym (DMPC, POPC, DOPS …) or a nanodisc scaffold (MSP1D1, MSP1E3D1,
+  MSPdH5, MSP2N2). Acronyms must not touch another letter or digit, so the protein
+  names that contain a class pattern do not count: merozoite surface proteins
+  ("MSP1-19", "MSP2"), Sds3 ("Sds3 CTD"), lipid-transfer and lipid-binding proteins,
+  VAP-A ("vesicle-associated membrane protein-associated protein-A"), DPCD, the
+  dehaloperoxidase construct "DHPCN", Drosophila "Dm EDC3", Salmonella "SopE2". A bare
+  "MSP" (scaffold protein or merozoite antigen) does not count either. An `Entity_ID`
+  that names no entity is judged the same way. Lipid-transfer/-binding proteins and
+  VAP-A are also excluded by name when deposited without an `Entity_ID`.
+- **Sample-level fallback.** A sample is also a mimetic when its `_Sample.Type` names
+  one (micelle(s), bicelle/bi-cell, liposome/proteoliposome, membrane, oriented
+  membrane film, nanodisc; **not** "reverse micelle", which encapsulates a soluble
+  protein in a water pool and labels two PEG/hexanol alignment media, nor "liquid
+  crystal") or when `_Sample.Details`, `_Sample.Solvent_system` or `_Sample.Name` holds
+  an explicit mimetic token that is not negated ("absence of", "without", "-free"):
+  "in DPC micelles" (11049), solvent system "SDS" (15853), "Ost4 reconstituted in POPC
+  and POPE" (52090). A sample whose every experiment is anisotropic, next to one that
+  is not, is an RDC alignment sample and is **not** judged by this fallback (30410's
+  bicelle samples serve only the IPAP-HSQC; the shifts were assigned in the isotropic
+  sample); when every experiment of the entry is marked anisotropic (34738) none is
+  set apart. The component rule is unchanged for alignment samples.
+- **Reviewed title-only entries.** Titles are never matched automatically. Entries
+  whose only evidence is the title (or the assembly name, the sample-condition details
+  or the structure keywords) were reviewed against the raw NMR-STAR files of the
+  2026-11-11 snapshot; the genuine ones are listed, with the class and the quoted
+  evidence, in `trizod/dataset/data/membrane_overrides.tsv` (41 rows: 40 entries and one
+  chain, `6857_3_1_1`, whose entry also holds an aqueous shift list). Two-state entries
+  whose chain was measured in buffer (16514, 19253, 6068, 7233, …) are not listed; the
+  file header names every entry reviewed and rejected.
+
+Effect on the 2026-11-17 build: 119 moderate chains (19 of them strict) become membrane
+samples — by their 2026-11-17 split, 47 training representatives, 12 redundant, 55 excluded and 5 TriZOD test chains
+(18817, 19941, 30170, 30761, 30834, which leave strict and are retired).
+
+**Known limits.** A mimetic named only in free text the rule does not read (a citation,
+a bare "detergent"), or only in a title not yet reviewed (titles of tolerant and
+unfiltered chains were not reviewed); a bare "MSP" linked to a polymer (30639). Known
+false positive: 34151 (C12E5 in sample 4, which serves an isotropic and an anisotropic
+IPAP-HSQC, without an n-alkanol).
+
 ### Ionic strength — strict `ionic-strength-range` [0, 0.5] M
 
 Strict now caps the ionic strength at 0.5 M (was 3 M); moderate (≤ 5 M) and tolerant

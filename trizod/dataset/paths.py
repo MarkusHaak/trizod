@@ -36,6 +36,14 @@ def resolve_paths(work_dir=None, root=None) -> SimpleNamespace:
         scored=layout.interim_scored,
         pkl_dir=layout.pkl_dir,
         chezod117=layout.ext_chezod117 / "CheZOD117_test_set.fasta",
+        # the CheZOD117 / CheZOD1174 sequences as SETH published them
+        # (github.com/DagmarIlz/SETH); 2 of the 117 are no release chain
+        chezod117_original=layout.ext_chezod
+        / "seth_github"
+        / "CheZOD117_test_set_sequences.fasta",
+        chezod1174=layout.ext_chezod
+        / "seth_github"
+        / "CheZOD1174_training_set_sequences.fasta",
         chezod1325_txt=layout.ext_chezod_1325 / "allseqs1325.txt",
         bundle_readme=layout.root / "docs" / "dataset" / "bundle-README.md",
         # committed pinned test set (repo-root input, not a work-dir artifact)

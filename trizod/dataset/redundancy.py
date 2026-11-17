@@ -10,10 +10,15 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      script. CheZOD1325 was used at this step (to exclude its clusters
      from the random sample) but is NOT a training-leakage target.
   2. Test-set leakage removal of every tier's deduplicated FASTA against
-     the combined test set (CheZOD117 + TriZOD test + the RETIRED TriZOD test
+     the combined test set (CheZOD117 as released, the 117 ORIGINAL CheZOD117
+     sequences as SETH published them -- two of which, "hmbdi" and "6078", are
+     no release chain, and none of which is identical to its release chain
+     (release audit E23) -- the TriZOD test set and the RETIRED TriZOD test
      chains, ``testset/TriZOD_test_retired.fasta``: pinned test chains that
-     left the strict tier, no longer tested on but still kept out of training,
-     so training is what it would be with the full pin), in TWO stages
+     left the strict tier or were retired for a CheZOD117 overlap or as a
+     within-test duplicate, no longer tested on but still kept out of
+     training, so training is what it would be with the full pin), in TWO
+     stages
      (matching the manuscript redundancy-reduction figure):
        2a. stage-1 "remove all cluster members": cluster the unfiltered
            superset together with the test sequences at 30% id / 80%
@@ -22,15 +27,17 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
            (catches transitive leakage A~B~test that a direct search
            misses).
        2b. stage-2 "search & remove": easy-search the training sequences
-           (query) against the test sets (target) -- once, on the unfiltered
+           against the test sets IN BOTH DIRECTIONS (training as query, and
+           test as query; release audit E22) -- once, on the unfiltered
            superset, whose hits restricted to a tier's IDs are that tier's
-           hits (the tiers nest, and E-values depend only on the test target
-           DB) -- and drop every training chain with an alignment of >= 30%
-           identity over >= 80% of the TEST chain (``--leakage-rule test``)
+           hits (the tiers nest, and the criterion is a bit score, which
+           depends on neither the database size nor the direction) -- and
+           drop every TRAINING chain with an alignment of >= 30% identity and
+           >= 27 bits over >= 80% of the TEST chain (``--leakage-rule test``)
            or of the test OR the training chain (``--leakage-rule either``,
-           the default, i.e. of the shorter chain; decision D2). Coverage is
-           the aligned span, gaps included (--cov-mode 1 -c 0 with the 80 %
-           applied to the parsed spans, see
+           the default, i.e. of the shorter chain; decision D2). A test chain
+           is never removed here. Coverage is the aligned span, gaps included
+           (--cov-mode 1 -c 0 with the 80 % applied to the parsed spans, see
            ``trizod.dataset.mmseqs.leakage_search_cmd`` / ``is_leak``). This
            is the leakage criterion: a longer training construct that
            contains a test protein, or a pair whose length ratio is below
@@ -75,6 +82,7 @@ from trizod.dataset.mmseqs import (
     cluster_tsv_groups,
     describe_rule,
     find_leaks,
+    reverse_hits_path,
     run,
     write_leakage_rule,
 )
@@ -128,20 +136,28 @@ def filter_fasta_by_ids(fa_in: Path, remove_ids: set[str], fa_out: Path) -> int:
     return kept
 
 
-def filter_tsv_by_query(tsv_in: Path, keep_ids: set[str], tsv_out: Path) -> None:
-    """Copy the rows of an mmseqs hit TSV whose query (first column) is in
-    ``keep_ids``, in their original order."""
+def filter_tsv_by_query(
+    tsv_in: Path, keep_ids: set[str], tsv_out: Path, column: int = 0
+) -> None:
+    """Copy the rows of an mmseqs hit TSV whose ``column`` (default the query)
+    is in ``keep_ids``, in their original order."""
     with open(tsv_in) as f, open(tsv_out, "w") as o:
         for line in f:
-            if line.strip() and line.split("\t", 1)[0] in keep_ids:
+            if line.strip() and line.split("\t")[column] in keep_ids:
                 o.write(line)
 
 
-def leakage_target_sources(chezod: Path, testset_dir: Path) -> list[Path]:
-    """The FASTAs every training chain is checked against: CheZOD117, the
-    TriZOD test set and, when the test-set step wrote one, the retired TriZOD
-    test chains (``trizod.dataset.testset.RETIRED_FASTA``)."""
-    sources = [chezod, testset_dir / "TriZOD_test_set.fasta"]
+def leakage_target_sources(
+    chezod: Path, testset_dir: Path, chezod_original: Path | None = None
+) -> list[Path]:
+    """The FASTAs every training chain is checked against: CheZOD117 as
+    released, the original CheZOD117 sequences (``chezod_original``, when
+    given), the TriZOD test set and, when the test-set step wrote one, the
+    retired TriZOD test chains (``trizod.dataset.testset.RETIRED_FASTA``)."""
+    sources = [chezod]
+    if chezod_original is not None:
+        sources.append(chezod_original)
+    sources.append(testset_dir / "TriZOD_test_set.fasta")
     retired = testset_dir / RETIRED_FASTA
     if retired.exists():
         sources.append(retired)
@@ -238,15 +254,17 @@ def stage2_search_removal(
     """Stage-2 "search & remove".
 
     Return the training IDs with an alignment to any test chain of >= 30 %
-    identity over >= 80 % of the TEST chain (rule ``"test"``) or of the test
-    or the training chain (rule ``"either"``). The search runs training
-    (query) against test (target) without a coverage threshold inside mmseqs
-    (which would skip pairs by length ratio) and keeps alignments whose span
+    identity and >= ``LEAKAGE_MIN_BITS`` bits over >= 80 % of the TEST chain
+    (rule ``"test"``) or of the test or the training chain (rule
+    ``"either"``), found by either search direction (training as query, test
+    as query). The searches run without a coverage threshold inside mmseqs
+    (which would skip pairs by length ratio) and keep alignments whose span
     covers >= 80 % of the test chain, so a training chain that contains a
     test protein is caught however long it is, and a shorter one whose gapped
     alignment spans the test chain is caught too. Under ``"either"`` an
     alignment that covers >= 80 % of the training chain also counts, which
-    catches a training fragment of a longer test chain.
+    catches a training fragment of a longer test chain. Only training IDs are
+    returned: the training partner of a hit is removed, never the test chain.
     """
     return {
         h.train_id
@@ -285,6 +303,7 @@ def main(argv=None):
     out = paths.mmseqs
     tmp = out / "_tmp"
     chezod = paths.chezod117
+    chezod_original = paths.chezod117_original
     trizod_test = paths.testset / "TriZOD_test_set.fasta"
 
     out.mkdir(parents=True, exist_ok=True)
@@ -303,10 +322,19 @@ def main(argv=None):
 
     print(f"Leakage rule: {rule} ({describe_rule(rule)})")
     print("Inputs:")
+    if not chezod_original.exists():
+        raise SystemExit(
+            f"original CheZOD117 sequences not found at {chezod_original}: they "
+            "are leakage targets (release audit E23)"
+        )
     print(f"  CheZOD117:    {chezod}  ({count_fasta(chezod)} sequences)")
+    print(
+        f"  CheZOD117 (original): {chezod_original}  "
+        f"({count_fasta(chezod_original)} sequences)"
+    )
     print(f"  TriZOD test:  {trizod_test}  ({count_fasta(trizod_test)} sequences)")
-    sources = leakage_target_sources(chezod, paths.testset)
-    for src in sources[2:]:
+    sources = leakage_target_sources(chezod, paths.testset, chezod_original)
+    for src in sources[3:]:
         print(f"  retired:      {src}  ({count_fasta(src)} sequences, leakage only)")
     for tier in TIERS:
         fa = final / tier / f"{tier}.fasta"
@@ -329,12 +357,13 @@ def main(argv=None):
     print()
 
     # ---------------- Step A: stage-2 easy-search vs test sets ----------
-    # One search, of the unfiltered superset. Every tier FASTA is a subset of
-    # it -- same IDs, same sequences (build names each sequence by its global
-    # representative in every tier) -- and the training chains are the queries,
-    # so each one is aligned independently, with E-values computed against the
-    # test target DB alone: a tier's hits are the superset's hits restricted to
-    # the tier's IDs, which is what a per-tier search would report.
+    # One search per direction, of the unfiltered superset. Every tier FASTA is
+    # a subset of it -- same IDs, same sequences (build names each sequence by
+    # its global representative in every tier) -- every training x test pair is
+    # aligned independently (no prefilter), and the criterion is a bit score,
+    # which no database size enters: a tier's hits are the superset's hits
+    # restricted to the tier's IDs, which is what a per-tier search would
+    # report.
     print(f"=== Step A: stage-2 easy-search vs test sets ({describe_rule(rule)}) ===")
     unfiltered_hits = out / "unfiltered_testset_hits.tsv"
     all_hit_ids = stage2_search_removal(
@@ -363,6 +392,13 @@ def main(argv=None):
         if tier != "unfiltered":
             filter_tsv_by_query(
                 unfiltered_hits, tier_ids, out / f"{tier}_testset_hits.tsv"
+            )
+            # the reverse search's training chain is its target (column 2)
+            filter_tsv_by_query(
+                reverse_hits_path(unfiltered_hits),
+                tier_ids,
+                reverse_hits_path(out / f"{tier}_testset_hits.tsv"),
+                column=1,
             )
         hit_ids = all_hit_ids & tier_ids
         leaked_tier = leaked & tier_ids

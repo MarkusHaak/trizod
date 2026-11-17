@@ -25,7 +25,16 @@ import math
 import pandas as pd
 import pytest
 
-from tests._stubs import Entry, Sample, condition_frame, fill, prefilter_tier
+from tests._stubs import (
+    Entry,
+    Named,
+    Sample,
+    condition_frame,
+    fill,
+    fill_real,
+    prefilter_tier,
+)
+from tests.conftest import requires_bmrb_data
 from trizod.bmrb import membrane
 from trizod.trizod import filter_defaults
 
@@ -386,9 +395,28 @@ def test_no_referenced_sample_falls_back_to_every_sample():
 
 
 def test_the_polymer_itself_is_not_a_component():
-    # _Sample_component.Entity_ID set: the studied molecule, whatever its name
-    row = fill(Entry({"1": Sample([_component("DPC", entity_id="1")])}))
+    # _Sample_component.Entity_ID set to the studied polymer: its own name, even
+    # one the full class table would read as a lipid, says nothing
+    row = fill(
+        Entry({"1": Sample([_component("lipid transfer protein", entity_id="1")])})
+    )
     assert row["membrane_mimetic_sample"] is False
+
+
+def test_a_mimetic_mislinked_to_the_polymer_is_classified():
+    # bmr26040: "DPC", 200 mM, deposited with Entity_ID 1 (the peptide)
+    row = fill(Entry({"1": Sample([_component("DPC", entity_id="1")])}))
+    assert row["membrane_mimetic_sample"] is True
+    assert row["membrane_mimetic"] == "DPC"
+
+
+def test_a_non_polymer_entity_component_is_classified():
+    # bmr16853: DPC deposited as its own non-polymer entity 2
+    entry = Entry({"1": Sample([_component("DPC", entity_id="2")])})
+    entry.entities["2"] = Named(name="DPC", entity_type="non-polymer")
+    row = fill(entry)
+    assert row["membrane_mimetic_sample"] is True
+    assert row["membrane_mimetic"] == "DPC"
 
 
 def test_sub_cmc_chaps_chain_is_annotated_but_not_a_mimetic():
@@ -429,3 +457,391 @@ def test_the_filter_needs_the_bool_column():
     df = condition_frame().drop(columns="membrane_mimetic_sample")
     with pytest.raises(ValueError, match="membrane_mimetic_sample"):
         prefilter_tier(df, "strict")
+
+
+# --------------------------------------------------------------------------- #
+# release audit C8 (2026-11-17): entity-linked components, sample-level
+# evidence and the reviewed title-only entries
+# --------------------------------------------------------------------------- #
+
+
+def _linked(name, entity_id, value="100", unit="mM"):
+    """A component carrying an ``_Sample_component.Entity_ID``."""
+    return ("1", "1", entity_id, name, value, unit)
+
+
+def _entities(**types):
+    """``{entity ID: entity}``; entity 1 is the studied polymer."""
+    ents = {"1": Named(name="protein", entity_type="polymer")}
+    ents.update({eid: Named(name=f"e{eid}", entity_type=t) for eid, t in types.items()})
+    return ents
+
+
+def _classify(*samples, entities=None, alignment_samples=frozenset()):
+    return membrane.classify_samples(
+        list(samples),
+        entities=_entities() if entities is None else entities,
+        alignment_samples=alignment_samples,
+    )
+
+
+@pytest.mark.parametrize(
+    ("component", "label"),
+    [
+        (("DPC", "200", "mM"), "DPC"),  # bmr16853
+        (("Dodecylphosphocholine (DPC) Micelle", "14", "mg"), "DPC"),  # bmr17558
+        (
+            ("1,2-DIOCTANOYL-SN-GLYCERO-3-PHOSPHOCHOLINE", "", ""),
+            "short-chain phospholipid",
+        ),
+        (("SDS", "40", "mM"), "SDS"),  # bmr51632
+        (("CHAPS", "1", "%"), "CHAPS"),  # bmr26756: 16 mM, above the CMC
+    ],
+)
+def test_a_non_polymer_entity_component_is_judged_by_the_full_table(component, label):
+    name, value, unit = component
+    labels, is_mimetic = _classify(
+        Sample([_linked(name, "2", value, unit)]),
+        entities=_entities(**{"2": "non-polymer"}),
+    )
+    assert labels == [label] and is_mimetic is True
+
+
+def test_a_sub_cmc_non_polymer_additive_is_still_not_counted():
+    labels, is_mimetic = _classify(
+        Sample([_linked("CHAPS", "2", "1", "mM")]),
+        entities=_entities(**{"2": "non-polymer"}),
+    )
+    assert labels == ["CHAPS"] and is_mimetic is False
+
+
+@pytest.mark.parametrize(
+    ("name", "label"),
+    [
+        ("DPC", "DPC"),  # bmr26040, 200 mM
+        ("DPC-d38", "DPC"),  # bmr30059/30060, Hylin analogs
+        ("YW12D_SDS", "SDS"),  # bmr15544
+        ("HSP12_SDS", "SDS"),
+        ("Spike Fusion Peptide, Bicelles", "bicelle"),  # bmr30909
+        ("OmpX in MSPdH5 Nanodisc", "nanodisc"),  # bmr27315
+        ("tBid in LPPG micelle", "LPPG"),  # bmr19054
+        ("DMPC:DHPC(3:1)", "phospholipid"),  # bmr6457
+        ("pentameric CorA in DMPC bilayers", "phospholipid"),
+        ("Membrane Scaffold Protein", "nanodisc"),
+        ("MSP1D1", "nanodisc"),
+        ("Capra hircus Cathelicidin-1 (dodecylphosphocholine)", "DPC"),
+    ],
+)
+def test_an_explicit_mimetic_linked_to_a_polymer_is_classified(name, label):
+    labels, is_mimetic = _classify(Sample([_linked(name, "1")]))
+    assert label in labels and is_mimetic is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # merozoite surface proteins, not the nanodisc scaffold protein
+        "MSP1-19",
+        "MSP2",
+        "1-25MSP2",
+        "C-terminal domain of MSP2",
+        "MSP-P56S DOMAIN/VAPB",  # a major-sperm-protein domain
+        "MSP",  # bare: scaffold or antigen, the name cannot tell
+        # Sds3 (a Sin3 corepressor subunit), not SDS
+        "Sds3 CTD",
+        "Sds3SID",
+        # lipid-transfer and lipid-binding proteins
+        "Plant Lipid Transfer Protein-2",
+        "non-specific lipid transfer protein 1",
+        "ileal lipid binding protein",
+        # VAP-A, named after the vesicle it binds
+        "vesicle-associated membrane protein-associated protein-A",
+        "DPCD",  # deleted in primary ciliary dyskinesia
+        "DHPCN",  # bmr16401, a dehaloperoxidase construct
+        "Dm EDC3",  # Drosophila, not decyl maltoside
+        "Dm_DCP1_EVH1_domain",
+        "Salmonella SopE2",  # not SOPE
+    ],
+)
+def test_a_protein_name_linked_to_a_polymer_is_not_a_mimetic(name):
+    labels, is_mimetic = _classify(Sample([_linked(name, "1")]))
+    assert labels == [] and is_mimetic is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Plant Lipid Transfer Protein-2",
+        "merozoite surface protein 2",
+        "vesicle-associated membrane protein-associated protein-A",
+        "Sds3",
+    ],
+)
+def test_a_protein_name_is_not_a_mimetic_even_without_an_entity_id(name):
+    assert membrane.classify_name(name) == []
+
+
+def test_a_dangling_entity_id_is_judged_like_a_polymer_link():
+    # Entity_ID 7 names no entity: only an explicit mimetic name counts
+    assert _classify(Sample([_linked("DPC", "7")]))[1] is True
+    assert _classify(Sample([_linked("lipid transfer protein", "7")]))[1] is False
+
+
+@pytest.mark.parametrize(
+    "sample_type",
+    [
+        "micelle",
+        "micelles",
+        "b_micelles",
+        "DPC micelle",
+        "bicelle",
+        "bi-cell",
+        "bicell_solution",
+        "liposome",
+        "proteoliposome",
+        "membrane",
+        "oriented membrane film",
+        "micelle, lipid bilayers",
+        "nanodisc",
+    ],
+)
+def test_the_sample_type_alone_makes_a_membrane_mimetic(sample_type):
+    # bmr30170, 11049, 36080 ...: the protein is the only component listed
+    sample = Sample([_linked("peptide", "1", "1", "mM")], sample_type=sample_type)
+    labels, is_mimetic = _classify(sample)
+    assert labels and is_mimetic is True
+
+
+@pytest.mark.parametrize(
+    "sample_type",
+    [
+        "solution",
+        "solid",
+        "emulsion",
+        "liquid crystal",
+        "gel solution",
+        "filamentous virus",
+        "membrane protein",
+        # 34477/34490: a PEG/hexanol alignment medium deposited as a reverse
+        # micelle; 36005: calmodulin in the water pool of a CTAB reverse micelle
+        "reverse micelle",
+    ],
+)
+def test_other_sample_types_are_not_membrane_mimetics(sample_type):
+    sample = Sample([_linked("peptide", "1", "1", "mM")], sample_type=sample_type)
+    assert _classify(sample) == ([], False)
+
+
+@pytest.mark.parametrize(
+    ("details", "label"),
+    [
+        ("in DPC micelles", "DPC"),  # bmr11049
+        ("16% deuterated DMPC/DHPC (q=0.3)", "phospholipid"),  # bmr25268
+        ("Bacteriorhodopsin incorporated into nanodiscs", "nanodisc"),  # bmr50009
+        ("1 mM peptide, 20 mM sodium acetate, 100 mM [U-2H] SDS", "SDS"),  # 36361
+        ("1 mM mo1853, 5 mM d-36 Dodecylphosphorylcholine", "DPC"),  # bmr36584
+        ("sodium dodecyl sulfate : peptide = 100 : 1 (Molar ratio)", "SDS"),
+        ("15N, 13C labelled mini-NS2B in LMPG micelles", "LMPG"),  # bmr51929
+        ("micelle-solubilized cytosolic domain", "micelle"),  # bmr30200
+    ],
+)
+def test_explicit_mimetic_words_in_the_sample_details_count(details, label):
+    sample = Sample([_linked("peptide", "1", "1", "mM")], details=details)
+    labels, is_mimetic = _classify(sample)
+    assert label in labels and is_mimetic is True
+
+
+@pytest.mark.parametrize(
+    ("field", "text", "label"),
+    [
+        ("solvent_system", "SDS", "SDS"),  # bmr15853
+        ("solvent_system", "90% H2O/10% D2O + dodecylphosphocholine", "DPC"),
+        ("name", "Ost4 reconstituted in POPC and POPE", "phospholipid"),  # 52090
+    ],
+)
+def test_explicit_mimetic_words_in_the_solvent_system_or_name_count(field, text, label):
+    sample = Sample([_linked("peptide", "1", "1", "mM")], **{field: text})
+    labels, is_mimetic = _classify(sample)
+    assert label in labels and is_mimetic is True
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        # bmr50217: a non-detergent sulfobetaine is not a detergent
+        "0.5 M Non-detergent sulfobetaine (NDSB)-195 buffer",
+        "in the absence of SDS",
+        "without DPC",
+        "SDS-free buffer",
+        "1 mM CHAPS",  # an additive detergent needs a concentration: components only
+        "lipid-free apoA-I",  # 'lipid' is not an explicit mimetic in free text
+        "Sds3 C-terminal domain",
+        "protein in CTAB reverse micelles",
+        "20 mM sodium phosphate, 50 mM NaCl, 90% H2O/10% D2O",
+    ],
+)
+def test_other_sample_details_are_not_evidence(details):
+    sample = Sample([_linked("peptide", "1", "1", "mM")], details=details)
+    assert _classify(sample) == ([], False)
+
+
+def test_an_alignment_sample_is_not_judged_by_its_type_or_details():
+    # bmr30410: samples 3 and 4 are typed "bicelle" but serve only the
+    # anisotropic IPAP-HSQC (RDC) experiments; the shifts are isotropic
+    rdc = Sample(
+        [_linked("Mpp11", "1", "200", "uM")], sample_type="bicelle", sample_id="3"
+    )
+    assert _classify(rdc, alignment_samples=frozenset({"3"})) == ([], False)
+    assert _classify(rdc)[1] is True
+
+
+def test_an_alignment_sample_component_still_counts():
+    # the component rule is unchanged: a bicelle listed as a component counts
+    rdc = Sample([_component("DMPC")], sample_type="bicelle", sample_id="3")
+    assert _classify(rdc, alignment_samples=frozenset({"3"}))[1] is True
+
+
+@pytest.mark.parametrize(
+    ("experiments", "aligned"),
+    [
+        # (ID, name, raw-data flag, Sample_ID, label, Sample_state)
+        ([("1", "HSQC", "no", "1", "", "isotropic")], set()),
+        (
+            [
+                ("1", "HNCA", "no", "1", "", "isotropic"),
+                ("2", "IPAP", "no", "2", "", "anisotropic"),
+                ("3", "IPAP", "no", " 3 ", "", "Anisotropic"),
+            ],
+            {"2", "3"},
+        ),
+        (
+            [
+                ("1", "HSQC", "no", "2", "", "isotropic"),
+                ("2", "IPAP", "no", "2", "", "anisotropic"),
+            ],
+            set(),
+        ),
+        ([("1", "HSQC", "no", "2", "", "")], set()),
+        # bmr34738: every experiment marked anisotropic -- the shifts were
+        # measured in those samples, none is an alignment sample
+        (
+            [
+                ("1", "HSQC", "no", "1", "", "anisotropic"),
+                ("2", "HNCO", "no", "2", "", "anisotropic"),
+            ],
+            set(),
+        ),
+    ],
+)
+def test_alignment_samples_are_used_only_by_anisotropic_experiments(
+    experiments, aligned
+):
+    assert membrane.alignment_sample_ids(experiments) == aligned
+
+
+def test_fill_skips_the_sample_level_evidence_of_an_alignment_sample():
+    # bmr30410: the shift table lists the isotropic assignment sample 1 and,
+    # through its RDC experiment, the bicelle-typed alignment sample 2
+    iso = Sample([_component("Mpp11", entity_id="1")], sample_id="1")
+    rdc = Sample(
+        [_component("Mpp11", entity_id="1")], sample_type="bicelle", sample_id="2"
+    )
+    entry = Entry({"1": iso, "2": rdc}, referenced=("1", "2"))
+    entry.experiment_list.experiments = [
+        ("1", "3D HNCA", "no", "1", "", "isotropic"),
+        ("2", "1H-15N IPAP HSQC", "no", "2", "", "anisotropic"),
+    ]
+    assert fill(entry)["membrane_mimetic_sample"] is False
+
+
+# --------------------------------------------------------------------------- #
+# reviewed title-only entries: the committed override table
+# --------------------------------------------------------------------------- #
+
+
+def test_the_committed_override_table_is_well_formed():
+    overrides = membrane.load_overrides()
+    assert overrides, "the reviewed title-only entries must not be empty"
+    for key, override in overrides.items():
+        assert key == override.id and key.split("_")[0].isdigit()
+        assert len(key.split("_")) in (1, 4)
+        assert override.label in membrane.MIMETIC_CLASSES_BY_LABEL
+        assert override.reason.strip()
+
+
+@pytest.mark.parametrize(
+    ("text", "error"),
+    [
+        ("id\tclass\n1\tDPC\treason\n", "header"),
+        ("id\tclass\treason\n1\tsoap\ttitle\n", "class"),
+        ("id\tclass\treason\n1\tDPC\ttitle\n1\tSDS\ttitle\n", "duplicate"),
+        ("id\tclass\treason\n1\tDPC\t\n", "reason"),
+        ("id\tclass\treason\nbmr1\tDPC\ttitle\n", "ID"),
+        ("id\tclass\treason\n1_1\tDPC\ttitle\n", "ID"),
+    ],
+)
+def test_a_malformed_override_table_is_rejected(tmp_path, text, error):
+    path = tmp_path / "overrides.tsv"
+    path.write_text(text)
+    with pytest.raises(ValueError, match=error):
+        membrane.load_overrides(path)
+
+
+def test_an_overridden_entry_is_a_membrane_mimetic(monkeypatch):
+    override = membrane.MembraneOverride("1", "DPC", "title: 'in DPC micelles'")
+    monkeypatch.setattr(membrane, "load_overrides", lambda path=None: {"1": override})
+    row = fill(Entry({"1": Sample([_component("sodium phosphate")])}))
+    assert row["membrane_mimetic_sample"] is True
+    assert row["membrane_mimetic"] == "DPC"
+
+
+def test_a_chain_override_marks_only_that_chain(monkeypatch):
+    # bmr6857: shift list 3 is the DPC one (conditions "FF2 in DPC"), though
+    # its experiment cites the aqueous sample 1 that shift list 1 also uses
+    override = membrane.MembraneOverride("1_3_1_1", "DPC", "conditions_3")
+    monkeypatch.setattr(
+        membrane, "load_overrides", lambda path=None: {"1_3_1_1": override}
+    )
+    entry = Entry(
+        {"1": Sample([_component("KCl")])},
+        peptide_shifts={
+            ("1", "1", "1"): (None, "1", "1", ["1"]),
+            ("3", "1", "1"): (None, "1", "1", ["1"]),
+        },
+    )
+    assert fill(entry, st_id="3")["membrane_mimetic_sample"] is True
+    assert fill(entry, st_id="1")["membrane_mimetic_sample"] is False
+
+
+def test_an_entry_not_in_the_table_is_untouched(monkeypatch):
+    monkeypatch.setattr(membrane, "load_overrides", lambda path=None: {})
+    row = fill(Entry({"1": Sample([_component("sodium phosphate")])}))
+    assert row["membrane_mimetic_sample"] is False
+
+
+# --------------------------------------------------------------------------- #
+# deposited entries (release audit C8)
+# --------------------------------------------------------------------------- #
+
+
+@requires_bmrb_data
+@pytest.mark.parametrize(
+    ("entry_id", "expected", "label"),
+    [
+        ("26040", True, "DPC"),  # DPC 200 mM linked to the peptide entity
+        ("16853", True, "DPC"),  # DPC as its own non-polymer entity
+        ("11049", True, "DPC"),  # _Sample.Type micelle, Details "in DPC micelles"
+        ("15853", True, "SDS"),  # _Sample.Solvent_system "SDS" (shift table 3)
+        ("34738", True, "micelle"),  # micelle samples, every experiment anisotropic
+        ("30761", True, "DPC"),  # title only: reviewed override
+        ("30410", False, None),  # bicelle samples serve only the RDC experiments
+        ("30969", False, None),  # "Sds3 CTD"
+        ("5325", False, None),  # "Plant Lipid Transfer Protein-2"
+    ],
+)
+def test_deposited_entries(entry_id, expected, label):
+    st_id = "3" if entry_id == "15853" else None
+    row = fill_real(entry_id, st_id)
+    assert row["membrane_mimetic_sample"] is expected
+    if label is not None:
+        assert label in row["membrane_mimetic"].split(";")

@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import pytest
 
@@ -6,6 +7,10 @@ from trizod.dataset import testset
 from trizod.dataset.paths import resolve_paths
 from trizod.dataset.testset import resolve_pinned_testset
 from trizod.io.fasta import count_fasta, read_fasta, write_fasta
+
+requires_mmseqs = pytest.mark.skipif(
+    shutil.which("mmseqs") is None, reason="mmseqs binary not found in PATH"
+)
 
 
 def test_pinned_testset_path_and_file_present():
@@ -82,9 +87,23 @@ def _setup_root_and_wd(tmp_path, pin_records, tier_records):
         with (tier_dir / f"{tier}.fasta").open("w") as fh:
             for rid, seq in records.items():
                 fh.write(f">{rid} tier={tier}\n{seq}\n")
+    # CheZOD117, released and original: the test chains are checked against
+    # them (release audit E23); unrelated to every test chain here
+    ext = root / "data" / "external"
+    (ext / "chezod117").mkdir(parents=True)
+    write_fasta(
+        {"9_1_1_1": "MKTAYIAKQRQISFVKSHFSRQ"},
+        ext / "chezod117" / "CheZOD117_test_set.fasta",
+    )
+    (ext / "chezod" / "seth_github").mkdir(parents=True)
+    write_fasta(
+        {"hmbdi": "KHDHHQGHTHSGKGHACHHEHN"},
+        ext / "chezod" / "seth_github" / "CheZOD117_test_set_sequences.fasta",
+    )
     return root, wd
 
 
+@requires_mmseqs
 def test_main_pinned_mode_emits_pinned_set(tmp_path):
     pool = {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC", "300_1_1_1": "GG"}
     root, wd = _setup_root_and_wd(
@@ -206,6 +225,7 @@ def _three_tier_pin(tmp_path):
     )
 
 
+@requires_mmseqs
 def test_main_resolves_against_strict_and_retires_the_rest(tmp_path, capsys):
     # 200 (tolerant only) and 300 (moderate) left strict: they are no longer
     # test chains, but they are RETIRED, not forgotten -- written to their own
@@ -236,6 +256,7 @@ def test_main_resolves_against_strict_and_retires_the_rest(tmp_path, capsys):
     assert "retired" in capsys.readouterr().out
 
 
+@requires_mmseqs
 def test_retired_chains_are_listed_in_the_labels_table(tmp_path):
     root, wd = _three_tier_pin(tmp_path)
     testset.main(["--work-dir", str(wd), "--root", str(root)])
@@ -243,8 +264,8 @@ def test_retired_chains_are_listed_in_the_labels_table(tmp_path):
         ln.rstrip("\n").split("\t")
         for ln in (wd / "testset" / "TriZOD_test_set_labels.tsv").open()
     ]
-    assert rows[0][-1] == "status"
-    status = {r[0]: (r[3], r[-1]) for r in rows[1:]}
+    assert rows[0][-2:] == ["status", "reason"]
+    status = {r[0]: (r[3], r[5]) for r in rows[1:]}
     assert status == {
         "100_1_1_1": ("strict", "test"),
         "200_1_1_1": ("tolerant", "retired"),
@@ -252,6 +273,7 @@ def test_retired_chains_are_listed_in_the_labels_table(tmp_path):
     }
 
 
+@requires_mmseqs
 def test_a_pinned_sequence_in_no_pool_is_dropped_not_retired(tmp_path):
     # e.g. a withdrawn entry with no live twin: nothing to keep out of training
     pool = {"100_1_1_1": "AAAA"}
@@ -283,6 +305,7 @@ def test_a_redraw_removes_a_stale_retired_file(tmp_path, monkeypatch):
     assert not (stale / testset.RETIRED_FASTA).exists()
 
 
+@requires_mmseqs
 def test_main_with_a_looser_resolve_tier_writes_labels(tmp_path):
     root, wd = _three_tier_pin(tmp_path)
     testset.main(
@@ -316,6 +339,7 @@ def test_main_with_a_looser_resolve_tier_writes_labels(tmp_path):
         "label_tier",
         "length",
         "status",
+        "reason",
     ]
     labels = {r[0]: r[3] for r in rows[1:]}
     assert labels == {
@@ -331,6 +355,7 @@ def test_main_with_a_looser_resolve_tier_writes_labels(tmp_path):
     assert summary["label_tier_counts"] == {"strict": 1, "moderate": 1, "tolerant": 1}
 
 
+@requires_mmseqs
 def test_main_records_id_substitution_in_label_map(tmp_path):
     # The pinned representative 999 lost its pool ID to the lower-numbered 50.
     strict = {"50_1_1_1": "AAAA"}

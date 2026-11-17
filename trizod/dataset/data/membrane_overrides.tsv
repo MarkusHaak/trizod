@@ -1,0 +1,61 @@
+# Membrane-mimetic samples the class rule of trizod/bmrb/membrane.py cannot see:
+# no _Sample_component, _Sample.Type, _Sample.Details, _Sample.Solvent_system or
+# _Sample.Name of the chain's samples names the mimetic; only the entry title (or
+# the assembly name, the sample-condition details or the structure keywords) does.
+# Each row was reviewed against the raw NMR-STAR file of the 2026-11-11 snapshot
+# (release audit C8, 2026-11-17). Titles are never matched automatically.
+# id:     a BMRB entry ID (every chain of the entry) or a chain ID
+#         <entry>_<shift table>_<entity assembly>_<entity> (that chain only)
+# class:  a MIMETIC_CLASSES label of trizod/bmrb/membrane.py
+# reason: where the evidence is, quoted
+# Reviewed and NOT listed (the chain's own sample is aqueous, or the evidence does
+# not attach to the deposited sample): 16514, 19253, 5494_1_1_1, 6068, 7233,
+# 7168_3_1_1 (two-state entries, chain measured in buffer); 15717 (the bicelle
+# sample is the RDC alignment sample); 3436 (a water/micelle comparison, the
+# deposited condition is not stated); 34608 (no lipid in any NMR sample); 36005
+# (calmodulin in the water pool of a CTAB reverse micelle); 16071, 16075-16080,
+# 17720, 19713, 30180 (a keyword only, samples in buffer); and every title that
+# names a protein (lipid-transfer/-binding proteins, StAR lipid-transfer
+# domains, Sds3, lipid-free apoE).
+id	class	reason
+1343	micelle	title: "Mitochondrial Signal Peptide Bound to a Micelle"; no sample component deposited
+15564	LPPG	title: "subunit c of E. coli F1F0 ATP synthase in LPPG micelles"
+15921	micelle	assembly name: "a monomeric form in presence of detergent micelles"
+15933	DPC	title: "NOGO66 in DPC."; keyword "DPC micelle"
+16012	micelle	title: "BNIP3 transmembrane peptide dimer in detergent micelles"
+16074	micelle	title: "Solution structure of micelle-bound kalata B2"
+16726	bicelle	title: "in membrane bound form"; sample conditions: "membrane(15%) prepared from mixture of DMPC and DHPC in the ratio of 3:1"
+17424	micelle	title: "Integrin 1 in Detergent Micelles"; keyword "Detergent micelle"
+18796	nanodisc	title and assembly name: "OmpX in phopspholipid nanodiscs"
+18817	micelle	title: "intact KCNE2 in detergent micelles"; keyword "detergent micelle"
+18958	bicelle	title: "The Integrin L Transmembrane Domain in Bicelles"
+19334	micelle	title and assembly name: "Temporin-1 Ta in lipopolysaccharide micelles"
+19597	SDS	assembly name: "Ctrr_sds"; title: "model membrane interactions of Ctriporin"
+19941	DPC	title: "TM domain of LAMP-2A in DPC micelles"
+20044	SDS	title: "Interleukin-8 C-terminal domain in solution with SDS micelles"; keyword "micelle"
+20059	membrane	title: "designed peptide, YI12WY in the presence of LPS bilayer"
+20060	membrane	title: "designed peptide, YI12FF in the presence of LPS bilayer"; component "YI12FF+LPS"
+20124	DPC	keywords "Dodecylphosphocholine", "Micelles"; title: "lipid interactions of an Apolipoprotein J peptide"
+20125	DPC	title: "DPC micelle bound VK22"; assembly name "VK22 in DPC micelles"
+21019	DPC	keyword "Peptide/DPC"; title: "localization and vesicle fusion of Chikungunya Virus Fusion Peptide"
+2249	DPC	title: "Epidermal Growth Factor Bound to Perdeuterated Dodecylphosphocholine Micelles"
+23	DPC	title: "Glucagon Bound to Perdeuterated Dodecylphosphocholine Micelles"
+25684	DPC	title: "LIPID DROPLET ANCHORING PEPTIDE OF CGI-58 BOUND TO DPC MICELLES"
+25729	DPC	title: "EGFR transmembrane and juxtamembrane domains in DPC micelles"; keyword "micelles"
+26036	micelle	title: "KYE21 structure in LPS micelles"
+26037	micelle	assembly name: "RWS21 in LPS micelles"
+26049	liposome	title and assembly name: "DK17 IN GM1 LUVS"
+26050	liposome	title and assembly name: "DK17 IN POPC:POPG:CHOLESTEROL:GM1 LUVS"
+26554	SDS	title: "K2 dehydrin in the presence of SDS micelles"
+27107	DPC	title: "complexin-1 CTD in the presence of dodecylphosphocholine micelles"; sample conditions: "with ~55 mM dodecylphosphocholine (DPC)"
+30761	DPC	title: "NMR structure of Ost4 in DPC micelles"
+30834	DPC	title: "Nav1.5 DIV S3b-S4a paddle motif in DPC micelle"
+34645	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
+34646	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
+34647	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
+36347	SDS	title: "VV14 peptide in the presence of Deuterated SDS micelle"; keyword "SDS micelle"
+36384	DPC	title: "NERP-2 in a DPC solution"
+36450	bicelle	title and assembly name: "Escherichia coli Total Lipid Extract Bicelle bound VR18 Antimicrobial Peptide"
+36451	bicelle	title and assembly name: "Pseudomonas aeruginosa Lipopolysaccharide (LPS) Bicelle bound VR18"
+50744	nanodisc	title: "Nanodisc reconstitution of flavin mononucleotide binding domain"; assembly name "Protein-lipid-nanodisc"
+6857_3_1_1	DPC	shift list 3 is recorded under sample conditions "conditions of FF2 in DPC" (study "MBP immunodomiant peptide in 100mM DPC-d38"), though its experiment cites the aqueous sample 1

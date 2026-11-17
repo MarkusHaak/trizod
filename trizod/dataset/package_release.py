@@ -10,9 +10,11 @@ Core bundle (~115 MB):
   train/<tier>/   train_<tier>_best.fasta (canonical), train_<tier>.fasta,
                   clusters_best.tsv, clusters.tsv
   scores/<tier>/  scores.json   (per-residue Z/G/k + offsets = the labels)
-  test/           CheZOD117_test_set.fasta, TriZOD_test_set.fasta,
-                  TriZOD_test_retired.fasta (retired test chains: leakage
-                  targets, not tested on), TriZOD_test_set_labels.tsv
+  test/           CheZOD117_test_set.fasta, CheZOD117_original_sequences.fasta
+                  (the 117 CheZOD117 sequences as SETH published them: leakage
+                  targets), TriZOD_test_set.fasta, TriZOD_test_retired.fasta
+                  (retired test chains: leakage targets, not tested on),
+                  TriZOD_test_set_labels.tsv
   README.md       (the datasheet)
   MANIFEST.json
 
@@ -32,16 +34,19 @@ The output directory defaults under the work dir (gitignored). Nothing is
 uploaded; this only stages files locally for a manual Zenodo deposit.
 
 Before the manifest is written, a leakage gate checks the staged bundle and
-fails the step when any training record -- checked against every ``test/``
-FASTA, the retired TriZOD test chains included --
+fails the step when any training record -- every record of every
+``train/<tier>/*.fasta`` and every member of every ``train/<tier>/clusters*.tsv``
+(the redundant rows; their sequences read from ``scores/<tier>/scores.json``),
+checked against every ``test/`` FASTA, the original CheZOD117 sequences and the
+retired TriZOD test chains included --
 
 * shares an ID or an exact sequence with a test chain,
 * is an exact substring of a test chain, or contains one, over >= 20 aa
   (``SUBSTRING_MIN_LEN``), whatever the leakage rule, or
 * meets the stage-2 criterion of ``trizod.dataset.redundancy`` under the rule
-  the build used: >= 30 % identity over >= 80 % of the test chain (rule
-  "test") or of the test or the training chain (rule "either"). This check
-  runs mmseqs, which must be on PATH.
+  the build used: >= 30 % identity and >= 27 bits over >= 80 % of the test
+  chain (rule "test") or of the test or the training chain (rule "either"),
+  searched in both directions. This check runs mmseqs, which must be on PATH.
 
 Every offending pair is reported. The rule is read from
 ``<work-dir>/mmseqs/leakage_rule.json``, written by the redundancy step;
@@ -53,6 +58,7 @@ under ``leakage``.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import shutil
 import tempfile
@@ -81,6 +87,8 @@ from trizod.shifts import SHIFTS_PARQUET_NAME
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 DEFAULT_VERSION = "2026-07"
+#: Bundle name of the original CheZOD117 sequences (``paths.chezod117_original``).
+CHEZOD117_ORIGINAL_FASTA = "CheZOD117_original_sequences.fasta"
 
 
 def sha256(path: Path) -> str:
@@ -174,13 +182,13 @@ def find_coverage_leaks(
     training chain (``"either"``).
 
     ``train`` maps ``"<file>:<id>"`` labels to sequences. Each distinct
-    training sequence is searched once (query) against the test sequences
-    (target) with the stage-2 search of ``trizod.dataset.redundancy``
-    (:func:`trizod.dataset.mmseqs.leakage_search_cmd`), so the gate re-checks
-    exactly what stage 2 enforced, with E-values against the same test
-    database. mmseqs scratch lives in a temporary directory, never in the
-    bundle. Returns ``(training label, hit)`` pairs. ``labels_by_seq`` is
-    ``group_labels_by_seq(train)``, when already built.
+    training sequence is searched once against the test sequences, in both
+    directions, with the stage-2 search of ``trizod.dataset.redundancy``
+    (:func:`trizod.dataset.mmseqs.find_leaks`), so the gate re-checks exactly
+    what stage 2 enforced; its bit-score criterion does not depend on how
+    many records the gate searches. mmseqs scratch lives in a temporary
+    directory, never in the bundle. Returns ``(training label, hit)`` pairs.
+    ``labels_by_seq`` is ``group_labels_by_seq(train)``, when already built.
     """
     check_rule(rule)
     if not shutil.which("mmseqs"):
@@ -213,14 +221,79 @@ def find_coverage_leaks(
     ]
 
 
+def cluster_members(tsv: Path) -> list[str]:
+    """Member IDs of a staged cluster table: the ``member`` column of
+    ``clusters_best.tsv`` (headed), the second column of the mmseqs
+    ``clusters.tsv`` (no header)."""
+    with Path(tsv).open() as fh:
+        first = fh.readline()
+        fh.seek(0)
+        if first.startswith("cluster_repr\t"):
+            return [row["member"] for row in csv.DictReader(fh, delimiter="\t")]
+        return [ln.split("\t")[1].strip() for ln in fh if ln.strip()]
+
+
+def _scored_sequences(bundle: Path, wanted: set[str]) -> dict[str, str]:
+    """``{chain ID: sequence}`` for the ``wanted`` IDs, from the bundle's
+    ``scores/<tier>/scores.json`` (JSON lines with ``ID`` and ``seq``)."""
+    found: dict[str, str] = {}
+    for path in sorted((bundle / "scores").glob("*/scores.json")):
+        if not wanted - set(found):
+            break
+        with path.open() as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                rid, seq = rec.get("ID"), rec.get("seq")
+                if rid in wanted and seq and rid not in found:
+                    found[rid] = seq
+    return found
+
+
+def training_records(bundle: Path) -> dict[str, str]:
+    """Every training row the release ships, as ``{"<file>:<id>": sequence}``:
+    the records of every ``train/**/*.fasta`` and every member of every
+    ``train/**/clusters*.tsv`` -- the redundant rows, which no FASTA holds
+    (release audit E22: the gate used to read the FASTAs only and so missed
+    1,521 rows). A member's sequence is read from a training FASTA or from the
+    bundle's ``scores/*/scores.json``; one found in neither fails the gate."""
+    records: dict[str, str] = {}
+    seq_of: dict[str, str] = {}
+    for trf in sorted((bundle / "train").rglob("*.fasta")):
+        rel = trf.relative_to(bundle / "train").as_posix()
+        for tid, seq in read_fasta(trf).items():
+            records[f"{rel}:{tid}"] = seq
+            seq_of.setdefault(tid, seq)
+    tables = {
+        tsv.relative_to(bundle / "train").as_posix(): cluster_members(tsv)
+        for tsv in sorted((bundle / "train").rglob("clusters*.tsv"))
+    }
+    missing = {m for members in tables.values() for m in members} - set(seq_of)
+    if missing:
+        seq_of.update(_scored_sequences(bundle, missing))
+    unknown = sorted({m for ms in tables.values() for m in ms} - set(seq_of))
+    if unknown:
+        raise SystemExit(
+            f"LEAKAGE GATE: {len(unknown)} cluster members have no sequence in "
+            f"the bundle's training FASTAs or scores.json, e.g. {unknown[:5]}"
+        )
+    for rel, members in tables.items():
+        for member in members:
+            records[f"{rel}:{member}"] = seq_of[member]
+    return records
+
+
 def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
-    """Release gate: no training sequence may share an ID or an exact
-    sequence with any held-out test sequence; none may be an exact substring
-    of a test chain, or contain one, over >= ``SUBSTRING_MIN_LEN`` aa (whatever
-    the rule); and none may meet the stage-2 criterion of ``rule`` (>= 30 %
-    identity over >= 80 % of the test chain, or under ``"either"`` of the test
-    or the training chain). A shared BMRB entry ID (a different shift record of
-    the same entry, not a sequence leak) is only reported, not failed."""
+    """Release gate: no training row (:func:`training_records`: the training
+    FASTAs and every cluster member) may share an ID or an exact sequence with
+    any held-out test sequence; none may be an exact substring of a test
+    chain, or contain one, over >= ``SUBSTRING_MIN_LEN`` aa (whatever the
+    rule); and none may meet the stage-2 criterion of ``rule`` (>= 30 %
+    identity and the bit floor over >= 80 % of the test chain, or under
+    ``"either"`` of the test or the training chain, in either search
+    direction). A shared BMRB entry ID (a different shift record of the same
+    entry, not a sequence leak) is only reported, not failed."""
     criterion = f"rule '{rule}': {describe_rule(rule)}"
     test: dict[str, str] = {}
     for tf in sorted((bundle / "test").glob("*.fasta")):
@@ -231,18 +304,16 @@ def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
 
     id_hits: list[tuple[str, str]] = []
     seq_hits: list[tuple[str, str]] = []
-    train_records: dict[str, str] = {}
-    entry_hits = 0
-    for trf in sorted((bundle / "train").rglob("*.fasta")):
-        rel = trf.relative_to(bundle / "train").as_posix()
-        for tid, seq in read_fasta(trf).items():
-            train_records[f"{rel}:{tid}"] = seq
-            if tid in test_ids:
-                id_hits.append((trf.name, tid))
-            if seq in test_seqs:
-                seq_hits.append((trf.name, tid))
-            if tid.split("_", 1)[0] in test_entry:
-                entry_hits += 1
+    train_records = training_records(bundle)
+    entry_hits = set()
+    for label, seq in train_records.items():
+        tid = label.rsplit(":", 1)[1]
+        if tid in test_ids:
+            id_hits.append((label, tid))
+        if seq in test_seqs:
+            seq_hits.append((label, tid))
+        if tid.split("_", 1)[0] in test_entry:
+            entry_hits.add(tid)
     if id_hits or seq_hits:
         raise SystemExit(
             f"LEAKAGE GATE FAILED: {len(id_hits)} shared IDs + {len(seq_hits)} "
@@ -286,15 +357,17 @@ def assert_no_leakage(bundle: Path, rule: str = DEFAULT_LEAKAGE_RULE) -> None:
         ]
         raise SystemExit("\n".join(lines))
     msg = (
-        f"  leakage gate: OK ({criterion}) — 0 shared IDs, 0 exact-sequence "
-        f"matches, 0 exact-substring containments >= {SUBSTRING_MIN_LEN} aa "
-        f"(either direction) & 0 training records at {describe_rule(rule)}, "
-        f"vs {len(test_ids)} test sequences"
+        f"  leakage gate: OK ({criterion}) — {len(train_records)} training "
+        f"rows ({len({label.rsplit(':', 1)[1] for label in train_records})} "
+        f"chains, training FASTAs and cluster members), 0 shared IDs, 0 "
+        f"exact-sequence matches, 0 exact-substring containments >= "
+        f"{SUBSTRING_MIN_LEN} aa (either direction) & 0 training records at "
+        f"{describe_rule(rule)}, vs {len(test_ids)} test sequences"
     )
     if entry_hits:
         msg += (
-            f"; note: {entry_hits} train records share a BMRB entry ID with a "
-            f"test sequence (different shift record, not a sequence leak)"
+            f"; note: {len(entry_hits)} training chains share a BMRB entry ID "
+            f"with a test sequence (different shift record, not a sequence leak)"
         )
     print(msg)
 
@@ -442,6 +515,12 @@ def main(argv=None) -> None:
         if not src.exists():
             raise SystemExit(f"missing test set: {src}")
         planned.append((src, f"test/{src.name}"))
+    # The original CheZOD117 sequences (two are no release chain, none is
+    # identical to its release chain): leakage targets, so the gate checks the
+    # training rows against them too (release audit E23).
+    if not paths.chezod117_original.exists():
+        raise SystemExit(f"missing test set: {paths.chezod117_original}")
+    planned.append((paths.chezod117_original, f"test/{CHEZOD117_ORIGINAL_FASTA}"))
     # Retired TriZOD test chains (pinned, no longer strict): not tested on, but
     # still leakage targets. Staged under test/ so the gate below, which reads
     # every test/*.fasta, checks the training sets against them too. Absent
@@ -508,6 +587,9 @@ def main(argv=None) -> None:
         },
         "test_sets": {
             "CheZOD117": manifest["test/CheZOD117_test_set.fasta"]["n_sequences"],
+            "CheZOD117_original": manifest[f"test/{CHEZOD117_ORIGINAL_FASTA}"][
+                "n_sequences"
+            ],
             "TriZOD_test": manifest["test/TriZOD_test_set.fasta"]["n_sequences"],
             "TriZOD_test_retired": manifest.get(f"test/{RETIRED_FASTA}", {}).get(
                 "n_sequences", 0

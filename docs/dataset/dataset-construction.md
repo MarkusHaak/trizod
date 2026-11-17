@@ -97,7 +97,7 @@ pin holds **460** sequences at `trizod/dataset/pinned/TriZOD_test_set.fasta`
 `trizod dataset test-set` resolves each pinned sequence against the **current
 strict pool** and writes `TriZOD_test_set.fasta` plus
 `TriZOD_test_set_labels.tsv` (`test_id`, `pinned_id`, `substituted`,
-`label_tier`, `length`, `status`). The TriZOD test set is defined as
+`label_tier`, `length`, `status`, `reason`). The TriZOD test set is defined as
 strict-tier sequences (since 2026-11; from 2026-08 it was resolved against
 tolerant to keep the benchmark whole). A pinned sequence that no longer meets
 strict after a rule change or rescore is **retired**: it leaves the test set but
@@ -112,6 +112,23 @@ trimmed when chains leave strict — it is what defines the retired set; only a
 pinned sequence absent from the tolerant pool too is dropped outright. Test
 metrics are comparable across releases only on the chains both test sets
 share.
+
+Two more reasons retire a chain that is still strict (release audit
+2026-11-17), checked in this order after the resolution, both with mmseqs:
+
+| `reason` | when |
+|---|---|
+| `not_strict` | the pinned sequence is no longer in the strict pool (above) |
+| `chezod117_overlap` | the chain meets the leakage criterion (§4: ≥ 30 % identity over ≥ 80 % of either chain, ≥ 27 bits, either search direction) against a CheZOD117 sequence — a released CheZOD117 chain or one of the 117 original sequences (§4). `19481_1_1_1` contains CheZOD117 `19482` as an exact 91-residue substring, so the two test sets overlapped |
+| `within_test_duplicate` | the remaining test chains are searched against each other at ≥ 50 % identity over ≥ 80 % of **either** chain (the coverage the release uses everywhere else; until 2026-11-17 within-test redundancy was controlled only at both-chain coverage by the 50 %/80 % recluster of the draw). Of every such pair the shorter chain is retired — the contained one for an exact substring (`6439_1_1_1` inside `6440_1_1_1`), the lower entry ID kept on a tie — greedily from the longest chain down, so no two remaining test chains form a pair and no chain is retired for a partner that is itself retired |
+
+Every retired chain, whatever the reason, stays a leakage target; the test set
+only shrinks. The per-chain hits are recorded in `build_test_set_summary.json`
+(`chezod117_overlaps`, `within_test_duplicates`, `retired_by_reason`), and the
+Parquet carries the reason as `retired_reason`. The test set is therefore
+**disjoint from CheZOD117 at the leakage criterion** and CheZOD-disjoint at
+cluster level from the draw; it is not "CheZOD-free" — 88 test chains overlap
+CheZOD1325 (flag `chezod1325_overlap`, §6).
 
 For the `2026-08` build (`build_test_set_summary.json`):
 
@@ -145,15 +162,22 @@ the same seed, so a redraw invalidates comparison with every previous release.
 
 ## 4. Redundancy reduction (two-stage leakage removal + clustering)
 
-`trizod dataset redundancy`, against the held-out test sets **CheZOD117 (115) +
-TriZOD test (460)**, 575 sequences in total — CheZOD1325 is *not* a
-training-leakage target. Common mmseqs options throughout:
+`trizod dataset redundancy`, against the held-out test sets **CheZOD117 (115
+release chains) + the 117 original CheZOD117 sequences + the TriZOD test set +
+the retired TriZOD test chains** — CheZOD1325 is *not* a training-leakage
+target. The original CheZOD117 sequences are the ones SETH published
+(`data/external/chezod/seth_github/CheZOD117_test_set_sequences.fasta`); none is
+identical to its release chain, and two ("hmbdi" and "6078") map to no release
+chain at all, so until 2026-11-17 a training chain could hold one of them
+(`34812_1_1_1` is "hmbdi" with one extra N-terminal Gly; release audit E23).
+Common mmseqs options throughout:
 `--alignment-mode 3 -s 7.5 --comp-bias-corr 0 --mask 0`, with `--cov-mode 0`
 (80 % coverage of **both** sequences) everywhere except the stage-2 search.
 
 **Leakage criterion.** A training chain leaks when an alignment to a test chain
-reaches **≥ 30 % identity over ≥ 80 %** of the chain(s) named by the
-**leakage rule** (`--leakage-rule`, decision D2), **at E ≤ 10⁻³**:
+reaches **≥ 30 % identity and ≥ 27 bits over ≥ 80 %** of the chain(s) named by
+the **leakage rule** (`--leakage-rule`, decision D2), found by **either search
+direction**:
 
 | rule | ≥ 80 % of | also catches |
 |---|---|---|
@@ -165,17 +189,36 @@ under both rules; only the coverage test on its hits differs. The redundancy
 step records the rule in `mmseqs/leakage_rule.json`, and the package step checks
 the same rule.
 
-**The E-value condition.** An alignment counts only if mmseqs reports it, i.e.
-at E ≤ 10⁻³, the `easy-search` default, computed with the test chains as the
-target database. Without it, identity and coverage alone would count chance
-alignments of short chains (a 20–30 aa pair at 30 % identity is expected by
-chance). E-values depend on how a search is set up (which side is the database,
-its size, the options), so a different search can report a borderline pair that
-stage 2 does not. The paper's Fig. 3c search, test chains against the strict
-representatives, finds `34481_1_1_1` ~ `15008_1_1_1` (31.8 % identity over 93 %
-of the test chain, E = 6 × 10⁻⁴) and `15844_1_1_1` ~ `17736_1_1_1` (32.8 %, 86 %,
-E = 8 × 10⁻⁴); the stage-2 search reports neither, so by this definition neither
-is a leak. The release gate's exact-substring check (below) needs no E-value.
+**The significance condition (since 2026-11-17).** Identity and coverage alone
+would count chance alignments of short chains (a 20–30 aa pair at 30 % identity
+is expected by chance), so an alignment must also be significant. Until
+2026-11-17 that was the `easy-search` default E ≤ 10⁻³ with the test chains as
+the target database — but an E-value scales with the query length and the size
+of the target database, so the same pair passed or failed depending on which
+side was the query and how many chains the target set held. Searching with the
+test chains as queries found three more pairs at 30 %/80 % (`7350_1_1_1` ~
+`52238_1_1_1`, `30761_1_1_1` ~ `26610_1_1_1`, `34286_1_1_1` ~ `52584_1_1_1`, all at
+30–39 % identity and 32–33 bits), and searching per target set found more
+(`34481_1_1_1` ~ `15008_1_1_1`, `15844_1_1_1` ~ `17736_1_1_1`; release audit E22).
+The condition is now a **bit-score floor of 27 bits**, a property of the
+alignment alone. *Why a bit score and why 27:* mmseqs 18 has no option to fix
+the database size of its E-values, and a bit score makes forward and reverse
+searches, a per-tier search and the release gate agree on every pair whatever
+their database. 27 bits is the most permissive score the former cut admitted in
+the 2026-11-17 build (its shortest queries against the ~570-chain test
+database), so every pair it removed is still removed, while the dependence on
+query length and database size is gone; for two 100-residue chains a chance
+local alignment of 27 bits has a pairwise E-value of about 10⁻⁴, and the
+identity and coverage thresholds carry the rest. mmseqs runs with `-e 100` only
+so that it reports every alignment above the floor; the search fails if the cap
+could have hidden one (`check_evalue_headroom`). **Both directions are
+searched** — training chains as queries against the test chains and test chains
+as queries against the training chains — and a pair counts when either meets
+the criterion: the alignment score is symmetric but the aligned span is not
+always (`26357_1_1_1` ~ CheZOD117 `19135_1_1_1` spans 76 % of the training chain
+one way and 80 % the other). The **training** partner of a hit is removed, never
+the test chain. The release gate's exact-substring check (below) needs no
+score.
 
 - **Stage 1 — remove all cluster members** (A0): cluster the unfiltered
   superset with the test sequences at 30 % id / 80 % coverage of both
@@ -185,11 +228,13 @@ is a leak. The release gate's exact-substring check (below) needs no E-value.
   multi-domain construct pull fragments of its other domains into one
   cluster, dropping chains unrelated to any test chain. The containment case
   is handled by stage 2.
-- **Stage 2 — search & remove** (A): `easy-search` the training chains (query;
-  since 2026-11 one search of the unfiltered superset, whose hits each tier
-  restricts to its own IDs) against the test sets (target) with
-  `--min-seq-id 0.3 --cov-mode 1 -c 0 --prefilter-mode 2` (every pair aligned,
-  no k-mer prefilter; reported at the default E ≤ 10⁻³) and drop
+- **Stage 2 — search & remove** (A): `easy-search` the training chains against
+  the test sets in both directions (since 2026-11 one search per direction of
+  the unfiltered superset, whose hits each tier restricts to its own IDs;
+  `<tier>_testset_hits.tsv` and `<tier>_testset_hits_reverse.tsv`) with
+  `--min-seq-id 0.3 --cov-mode 1 -c 0 --prefilter-mode 2 -e 100 --dbtype 1`
+  (every pair aligned, no k-mer prefilter; the 27-bit floor applied to the
+  parsed hits) and drop
   every training chain with an alignment that spans ≥ 80 % of the test chain,
   `(tend − tstart + 1) / tlen ≥ 0.8`, computed from the hit table (rule
   `either`: or ≥ 80 % of the training chain, `(qend − qstart + 1) / qlen`).
@@ -270,19 +315,60 @@ table is flagged against the frozen median/MAD reference
 ## 7. The leakage guarantee
 
 Every `train_<tier>` set is redundancy-reduced in two stages against
-**CheZOD117 + the 460-sequence TriZOD test set**. The stage-2 mmseqs search
-finds no training chain that aligns to a test chain at ≥ 30 % identity over
-≥ 80 % of the test chain (rule `test`) or of the test or the training chain
-(rule `either`), whatever the length ratio, at E ≤ 10⁻³ (the `easy-search`
-default; builds since 2026-11 align every pair, `--prefilter-mode 2`, so no
-k-mer prefilter can miss one; see "The E-value condition"), and the gate finds no
-exact-substring containment of ≥ 20 aa in either direction. The two test
-sets are themselves disjoint
-(the TriZOD set excludes CheZOD clusters). So a model can train on any
+**CheZOD117 (release chains and original sequences), the TriZOD test set and
+the retired test chains**. The stage-2 mmseqs search, in both directions, finds
+no training chain that aligns to a test chain at ≥ 30 % identity and ≥ 27 bits
+over ≥ 80 % of the test chain (rule `test`) or of the test or the training chain
+(rule `either`), whatever the length ratio (builds since 2026-11 align every
+pair, `--prefilter-mode 2`, so no k-mer prefilter can miss one; see "The
+significance condition"), and the release gate finds none either, nor an
+exact-substring containment of ≥ 20 aa in either direction. Since 2026-11-17 the
+gate reads **every training and redundant row of every tier** — the training
+FASTAs and every member of every `clusters*.tsv`, with sequences from
+`scores/<tier>/scores.json` — where it used to read the training FASTAs only and
+so missed 1,521 redundant rows. The two test sets are themselves disjoint at the
+leakage criterion: the TriZOD set was drawn from CheZOD-free clusters, and a
+TriZOD test chain that still meets the criterion against CheZOD117 is retired
+(§3). So a model can train on any
 `train_<tier>` set and be evaluated on **CheZOD117** (the established
 hand-balanced benchmark, comparable to ODiNPred/SETH) and on the TriZOD test set
 (the larger, natural-BMRB-distribution held-out set) with no train/test leakage
 — the basis for the UdonPred benchmark.
+
+## 8. Sequence alphabet
+
+A released `sequence` holds the **20 standard residues plus X, U and Z**: X for
+an unknown or non-standard residue, U for selenocysteine, Z for Glx, each as
+deposited in `_Entity.Polymer_seq_one_letter_code` (upper-cased, line breaks
+removed). Characters that are not letters are no residues (release audit D15):
+
+- A **trailing** run of non-letters is stripped at parse time
+  (`trizod.bmrb.bmrb.normalize_sequence`), before any per-residue array is
+  built, so the sequence and every per-residue array (`gscores`, `zscores`,
+  `k`, `mask`) lose that terminal position together. The 2026-11-11 snapshot
+  has two: `50015_1_1_1` ends in the translation-stop symbol `*` (its poly-seq
+  loop lists residue 106 as `X`; the last shift is on residue 105) and
+  `52376_1_1_1` in a typed apostrophe (the poly-seq loop ends at 77; the last
+  shift is on 77). No shift references either stripped position.
+- An **internal** non-letter becomes `X`, one for one, which keeps the residue
+  numbering of the shifts. The snapshot holds one, a `-` in bmr53341, an entry
+  without assigned chemical shifts, so no released chain has one.
+
+A protein-language-model tokenizer that knows the 20 residues and X therefore
+needs only U and Z mapped (the 2026-11-17 build: U at 2 positions of 1 chain, Z
+at 1 position).
+
+## 9. CheZOD overlap flags
+
+The Parquet flags every chain whose sequence meets the leakage criterion (§4,
+rule `either`, both directions, ≥ 27 bits) against at least one sequence of a
+CheZOD set: `chezod117_overlap` (release chains plus the 117 original
+sequences), `chezod1325_overlap` (`allseqs1325.txt`) and `chezod1174_overlap`
+(the SETH training set, `CheZOD1174_training_set_sequences.fasta`)
+(`trizod/dataset/chezod_overlap.py`). Training and redundant rows never overlap
+CheZOD117; the CheZOD1325 and CheZOD1174 flags pick the test chains clean of a
+predictor's own training data (SETH and ADOPT train on CheZOD1174, ODiNPred on
+CheZOD1325) for a fair comparison.
 
 ## Scripts (run order)
 

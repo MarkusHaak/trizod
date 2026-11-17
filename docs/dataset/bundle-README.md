@@ -54,7 +54,7 @@ when pruning matters. `trizod_shifts.parquet` is sorted by
 | field | meaning |
 |---|---|
 | `ID` | `entryID_stID_entityAssemID_entityID` |
-| `seq` | amino-acid sequence (1-letter) |
+| `seq` | amino-acid sequence (1-letter): the 20 standard residues plus X (unknown/non-standard), U (selenocysteine) and Z (Glx). A trailing non-letter of the deposited sequence (a translation-stop `*`, a typed apostrophe) is no residue and is not part of the chain; an internal one would be X. Every per-residue array is aligned 1:1 to it |
 | `gscores` | per-residue **G-score** (0–1), aligned 1:1 to `seq` (`null` = no data) |
 | `zscores` | per-residue CheZOD Z-score (same alignment) |
 | `k` | number of weighted secondary shifts behind each residue (`0` = no shift) |
@@ -82,7 +82,20 @@ filters, the rest annotate.
 `multi_protein_assembly`, `has_non_polymer`, `has_nucleic`, `has_metal`,
 `has_metal_ion`, `has_metal_cofactor`, `has_water`, `has_other_ligand`,
 `metal_comp_ids`, `ligand_comp_ids`, `ligand_names`, `is_bound`, and the split
-columns `split` / `train_tier` / `pool_tier` / `cluster_repr` / `label_tier`.
+columns `split` / `train_tier` / `pool_tier` / `cluster_repr` / `label_tier` /
+`retired_reason`.
+
+Since 2026-11-17 it also carries three CheZOD overlap flags (bool, null when not
+computed): `chezod117_overlap`, `chezod1325_overlap` and `chezod1174_overlap` —
+does the chain meet the leakage criterion (≥ 30 % identity over ≥ 80 % of either
+chain, ≥ 27 bits, either search direction) against at least one sequence of
+CheZOD117 (the released chains plus the 117 original sequences), CheZOD1325 or
+CheZOD1174 (the SETH training set)? Training and redundant rows never overlap
+CheZOD117. To compare with a predictor trained on CheZOD1325 (ODiNPred) or
+CheZOD1174 (SETH, ADOPT), evaluate on the test chains whose flag for that set is
+false. `retired_reason` says why a `test_retired` chain was retired:
+`not_strict`, `chezod117_overlap` or `within_test_duplicate` (the shorter chain
+of two test chains at ≥ 50 % identity over ≥ 80 % of either chain).
 
 ### Cross-references: UniProt and PDB (`trizod_dataset.parquet` only)
 

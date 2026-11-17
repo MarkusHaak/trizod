@@ -589,7 +589,12 @@ def fill_row_data(
     # the exclude-membrane-mimetic filter reads; the string names every class
     # recognised (counted or not, e.g. a sub-CMC CHAPS), so an SDS micelle stays
     # distinguishable from DDM solubilisation.
-    mimetic_labels, is_mimetic = membrane.classify_samples(samples)
+    # Reviewed title-only entries come from trizod/dataset/data/
+    # membrane_overrides.tsv, keyed by entry or by this chain's ID.
+    chain_id = "_".join(
+        str(row[k]) for k in ("entryID", "stID", "entity_assemID", "entityID")
+    )
+    mimetic_labels, is_mimetic = membrane.classify_chain(entry, samples, chain_id)
     row["membrane_mimetic"] = ";".join(mimetic_labels) if mimetic_labels else pd.NA
     row["membrane_mimetic_sample"] = bool(is_mimetic)
     # add columns that will be filled later

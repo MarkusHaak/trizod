@@ -270,12 +270,14 @@ TIER_RULE_COLUMNS = [
 ]
 
 
-def test_tier_rule_columns_are_appended_last():
+def test_tier_rule_columns_follow_the_cross_references():
+    names = [c.name for c in builder.COLUMNS]
+    start = names.index("membrane_mimetic_sample")
     tail = [
-        (c.name, c.arrow, c.source) for c in builder.COLUMNS[-len(TIER_RULE_COLUMNS) :]
+        (c.name, c.arrow, c.source)
+        for c in builder.COLUMNS[start : start + len(TIER_RULE_COLUMNS)]
     ]
     assert tail == TIER_RULE_COLUMNS
-    names = [c.name for c in builder.COLUMNS]
     assert names.index("membrane_mimetic_sample") == names.index("pdb_ids") + 1
     for name, _arrow, source in TIER_RULE_COLUMNS:
         assert builder.COLUMNS[names.index(name)].origin == "scores"
@@ -1018,3 +1020,76 @@ def test_external_sources_are_recorded_in_the_file(xref_bundle, external, tmp_pa
     assert recorded["min_identity"] == 95.0
     builder.build(bundle, out, None, xrefs=xrefs)
     assert b"snapshot only" in pq.read_schema(out).metadata[b"xref_sources"]
+
+
+# ----------------- CheZOD overlap flags and retire reasons (audit E23/E24)
+
+AUDIT_COLUMNS = [
+    ("chezod117_overlap", "bool"),
+    ("chezod1325_overlap", "bool"),
+    ("chezod1174_overlap", "bool"),
+    ("retired_reason", "string"),
+]
+
+
+def test_the_audit_columns_are_appended_last():
+    tail = [(c.name, c.arrow) for c in builder.COLUMNS[-len(AUDIT_COLUMNS) :]]
+    assert tail == AUDIT_COLUMNS
+    names = [c.name for c in builder.COLUMNS]
+    assert names.index("chezod117_overlap") == names.index("high_pressure") + 1
+
+
+def test_chezod_overlap_flags_come_from_the_overlap_sets(tmp_path):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[_record("12345", "12345_1_1_1"), _record("23456", "23456_1_1_1")],
+    )
+    overlaps = {
+        "chezod117": {"12345_1_1_1"},
+        "chezod1325": {"12345_1_1_1", "23456_1_1_1"},
+        "chezod1174": set(),
+    }
+    cols = builder.collect_columns(bundle, None, chezod_overlaps=overlaps)
+    assert cols["chezod117_overlap"] == [True, False]
+    assert cols["chezod1325_overlap"] == [True, True]
+    assert cols["chezod1174_overlap"] == [False, False]
+
+
+def test_chezod_overlap_flags_are_null_when_not_computed(tmp_path):
+    bundle = _write_bundle(tmp_path / "bundle", records=[_record("1", "1_1_1_1")])
+    cols = builder.collect_columns(bundle, None)
+    for name in ("chezod117_overlap", "chezod1325_overlap", "chezod1174_overlap"):
+        assert cols[name] == [None], name
+
+
+def test_retired_reason_is_read_from_the_retired_header(tmp_path):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _record("12345", "12345_1_1_1"),
+            _record("19481", "19481_1_1_1"),
+            _record("99999", "99999_1_1_1"),
+        ],
+        test_trizod_header=">12345_1_1_1 label_tier=strict pinned_id=12345_1_1_1",
+    )
+    (bundle / "test" / "TriZOD_test_retired.fasta").write_text(
+        ">19481_1_1_1 label_tier=strict pinned_id=19481_1_1_1 "
+        "reason=chezod117_overlap\nAAAA\n"
+    )
+    cols = builder.collect_columns(bundle, None)
+    assert cols["split"] == ["test_trizod", "test_retired", "excluded"]
+    assert cols["retired_reason"] == [None, "chezod117_overlap", None]
+    assert cols["label_tier"] == ["strict", "strict", None]
+
+
+def test_the_overlap_and_retire_semantics_are_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    metadata = pq.read_schema(sorted_parquet).metadata
+    text = metadata[b"chezod_overlap_semantics"].decode()
+    for word in ("CheZOD117", "CheZOD1325", "CheZOD1174", "80 %", "either"):
+        assert word in text, word
+    retired = metadata[b"test_retired_semantics"].decode()
+    for reason in ("not_strict", "chezod117_overlap", "within_test_duplicate"):
+        assert reason in retired, reason
+    assert b"test_retired" in metadata[b"null_semantics"]
+    assert b"20 standard" in metadata[b"sequence_alphabet"]

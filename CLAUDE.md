@@ -79,7 +79,9 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `trizod dataset deploy` (`deploy_fasta.py`) — build the UdonPred-handoff FASTA (per-residue G-score labels)
 - `trizod dataset export-jsonl` (`export_jsonl.py`) — the UdonPred v2 view of the release Parquet: `trizod_<tier>/{train,valid,test}.jsonl` (`id`, `x_0`, `y`; 999 = masked), cluster-seeded valid split, checked back against the Parquet
 - `trizod dataset test-crosswalk` (`testset_crosswalk.py`) — every earlier TriZOD test set (Trizod348, v0.2.0, the pins, v0.3.0) against the final release, by exact sequence
-- Shared helpers: `composition.py` (bound-complex classifier), `mmseqs.py` (mmseqs wrappers), `paths.py` (path resolution), `trizod/io/fasta.py`
+- Shared helpers: `composition.py` (bound-complex classifier), `mmseqs.py` (mmseqs wrappers; the leakage criterion: >= 30 % id over >= 80 % of either chain, >= 27 bits, searched in both directions), `chezod_overlap.py` (per-chain CheZOD117/1325/1174 overlap flags of the Parquet), `paths.py` (path resolution), `trizod/io/fasta.py`
+- Leakage targets: CheZOD117 (released chains + the 117 original SETH sequences in `data/external/chezod/seth_github/`), the TriZOD test set and the retired test chains. `test-set` retires (never deletes) a pinned chain as `not_strict`, `chezod117_overlap` or `within_test_duplicate`
+- Membrane-mimetic rule: `trizod/bmrb/membrane.py`; reviewed title-only entries in `trizod/dataset/data/membrane_overrides.tsv`
 
 ## Scripts
 - `scripts/build_dataset.sh` — run the full `trizod dataset` chain end-to-end
@@ -104,6 +106,11 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `tests/test_str_writer.py` — re-referenced NMR-STAR emission
 - `tests/test_xrefs.py` — UniProt/PDB cross-reference parsing, normalisation and which accessions reach `uniprot_ids`
 - `tests/test_xref_sources.py` — dated external sources: manifest check, sequence matching, per-chain SIFTS assignment
+- `tests/test_membrane_mimetic.py` — membrane-mimetic class rule, entity-linked components, sample-level fallback, override table
+- `tests/test_leakage_coverage.py` — leakage criterion, both search directions, bit floor, release gate (every train/redundant row)
+- `tests/test_testset_retirement.py` — CheZOD117-overlap and within-test-duplicate retirement
+- `tests/test_chezod_overlap.py` — CheZOD overlap flags
+- `tests/test_sequence_alphabet.py` — trailing non-letters stripped, internal ones mapped to X
 - `tests/test_chezod_equality.py` — CheZOD reproduction regression
 - `tests/test_full_dataset_regression.py` — full-dataset regression (requires data/)
 - Pipeline/regression tests require BMRB data in `data/raw/bmrb_entries/`

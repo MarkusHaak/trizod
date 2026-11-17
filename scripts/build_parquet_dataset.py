@@ -12,8 +12,9 @@ membership:
 
   * ``split``       one of train / redundant / test_chezod117 / test_trizod /
                     test_retired / excluded (test_retired: a pinned TriZOD
-                    test chain that left the strict tier -- not tested on,
-                    still a leakage target, so never train or redundant)
+                    test chain retired as not_strict, chezod117_overlap or
+                    within_test_duplicate, see ``retired_reason`` -- not tested
+                    on, still a leakage target, so never train or redundant)
   * ``train_tier``  strictest tier at which the chain is a training representative
   * ``pool_tier``   strictest tier whose redundancy-reduction pool contains the chain
 
@@ -85,6 +86,8 @@ from trizod.bmrb import xref_sources as xs
 from trizod.bmrb import xrefs as xr
 from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS, HIGH_PRESSURE_BAR
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
+from trizod.dataset import chezod_overlap as co
+from trizod.dataset.mmseqs import describe_rule
 from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
 from trizod.dataset.testset import RETIRED_FASTA
 from trizod.dataset.tiers import (
@@ -545,6 +548,26 @@ COLUMNS: list[Column] = [
     _scores("temperature_placeholder", "bool", "temperature_placeholder", as_bool),
     # pressure_bar >= 400 bar, the tolerant/moderate/strict ceiling.
     _scores("high_pressure", "bool", "pressure_bar", as_high_pressure),
+    # --- appended 2026-11-17: release audit E23/E24 ---------------------------
+    # Does the chain's sequence meet the leakage criterion (>= 30 % identity
+    # over >= 80 % of either chain, >= 27 bits, either search direction)
+    # against CheZOD117 (released + original sequences), CheZOD1325 or
+    # CheZOD1174? Null when the overlap was not computed.
+    *[
+        Column(
+            co.overlap_column(name),
+            "bool",
+            derive=lambda c, name=name: (
+                None if c["chezod"] is None else c["id"] in c["chezod"][name]
+            ),
+        )
+        for name in co.CHEZOD_SETS
+    ],
+    # Why a test_retired chain was retired (not_strict, chezod117_overlap,
+    # within_test_duplicate), from the retired FASTA header; null elsewhere.
+    Column(
+        "retired_reason", "string", origin="testset", source="reason", convert=clean_str
+    ),
 ]
 
 #: ``scores.json`` keys carried into the Parquet, derived from ``COLUMNS`` so
@@ -662,6 +685,7 @@ def collect_columns(
     labelled: dict[str, tuple[str, dict]] | None = None,
     xrefs: dict[str, xr.EntryXrefs] | None = None,
     external: xs.ExternalSources | None = None,
+    chezod_overlaps: dict[str, set[str]] | None = None,
 ) -> dict:
     """Assemble every ``COLUMNS`` entry into a name -> list-of-values dict.
 
@@ -671,7 +695,9 @@ def collect_columns(
     entry ID to its parsed links (``trizod.bmrb.xrefs.load_xrefs``); None
     leaves every cross-reference column null. ``external`` adds the links of
     the dated sources (``trizod.bmrb.xref_sources``) to every chain whose
-    entry was read.
+    entry was read. ``chezod_overlaps`` (``{set name: chain IDs}``, from
+    ``trizod.dataset.chezod_overlap.chezod_overlaps``) fills the
+    ``<set>_overlap`` flags; None leaves them null.
     """
     reps = read_train_reps(in_bundle)
     if labelled is None:
@@ -762,6 +788,8 @@ def collect_columns(
             "testset": trizod_test_attrs.get(rid) or retired_attrs.get(rid),
         }
         ctx = {
+            "id": rid,
+            "chezod": chezod_overlaps,
             "seq": seq,
             "g": [float(g) if g is not None else float("nan") for g in raw_g],
             "z": [float(z) if z is not None else float("nan") for z in raw_z],
@@ -853,9 +881,15 @@ def build(
     xrefs: dict[str, xr.EntryXrefs] | None = None,
     xrefs_snapshot: str | None = None,
     external: xs.ExternalSources | None = None,
+    chezod_overlaps: dict[str, set[str]] | None = None,
 ) -> None:
     cols = collect_columns(
-        in_bundle, composition_csv, labelled, xrefs=xrefs, external=external
+        in_bundle,
+        composition_csv,
+        labelled,
+        xrefs=xrefs,
+        external=external,
+        chezod_overlaps=chezod_overlaps,
     )
 
     pa, pq = import_pyarrow()
@@ -868,14 +902,27 @@ def build(
         b"description": b"Per-residue protein-disorder labels from re-referenced BMRB NMR backbone chemical shifts. One row per scored chain; per-residue arrays aligned 1:1 to sequence.",
         b"tier_order_loose_to_strict": b"unfiltered,tolerant,moderate,strict",
         b"split_values": b"train,redundant,test_chezod117,test_trizod,test_retired,excluded",
-        b"test_retired_semantics": b"split test_retired: a pinned TriZOD test chain that no longer meets the strict tier (e.g. after the 2026-11 condition rules). It is not in the TriZOD test set, but it stays a leakage target, so it and its homologues are excluded from every training set exactly as with the full pin",
+        b"test_retired_semantics": b"split test_retired: a pinned TriZOD test chain that is no longer tested on, for the reason in retired_reason: not_strict (it no longer meets the strict tier, e.g. after the 2026-11 condition rules), chezod117_overlap (it meets the leakage criterion against a CheZOD117 sequence, so the two test sets would overlap) or within_test_duplicate (it is the shorter chain of a pair of test chains at >= 50 % identity over >= 80 % of either chain). It is not in the TriZOD test set, but it stays a leakage target, so it and its homologues are excluded from every training set exactly as with the full pin; the test set only shrinks",
         b"mask_semantics": b"mask[i]=true where residue i is scored; gscores/zscores are NaN where mask is false",
-        b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null, and label_tier is null for every non-test_trizod row",
+        b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null; label_tier is null for every row that is neither test_trizod nor test_retired, retired_reason for every row but test_retired, and the <set>_overlap flags when the overlap was not computed",
+        b"sequence_alphabet": b"sequence holds the 20 standard residues plus X (unknown or non-standard; also an internal non-letter of the deposited sequence), U (selenocysteine) and Z (Glx). A trailing non-letter of the deposited sequence (a translation-stop '*', a typed apostrophe) is no residue and is not part of the chain; the per-residue arrays are aligned 1:1 to sequence",
+        b"chezod_overlap_semantics": (
+            "chezod117_overlap / chezod1325_overlap / chezod1174_overlap: the "
+            "chain's sequence meets the leakage criterion against at least one "
+            "sequence of CheZOD117 (the released CheZOD117 chains plus the 117 "
+            "original sequences SETH published), CheZOD1325 (allseqs1325) or "
+            "CheZOD1174 (the SETH training set): "
+            + describe_rule("either")
+            + " (mmseqs2, no prefilter). Training and redundant rows never "
+            "overlap CheZOD117 (a leakage target); use the CheZOD1325/CheZOD1174 "
+            "flags to benchmark a predictor trained on those sets on its clean "
+            "subset. Null when not computed"
+        ).encode(),
         b"composition_join": b"composition columns (n_entities .. is_bound) are per BMRB ENTRY, joined on entry_id, from trizod.dataset.composition.detect_bound; n_entities counts distinct _Entity records, so a homodimer is 1 -- see n_copies / n_entity_assembly_rows for stoichiometry",
         b"composition_list_columns": b"metal_comp_ids, ligand_comp_ids and ligand_names are list<string>; an empty list is a measured absence, null is an unclassified entry",
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
-        b"membrane_mimetic_semantics": b"';'-joined membrane-mimetic classes (trizod.bmrb.membrane: phospholipid, bicelle, nanodisc, SDS, DPC, DHPC, LMPG, LDAO, CHAPS, DDM, ...) recognised among the non-polymer components of the samples the scored shift table references, counted or not (a sub-CMC CHAPS is named), null when none. Descriptive; the moderate/strict filter reads membrane_mimetic_sample",
-        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always); CnEm/n-alkanol alignment media are not counted. Excluded from the moderate and strict tiers; null when the record predates the rule",
+        b"membrane_mimetic_semantics": b"';'-joined membrane-mimetic classes (trizod.bmrb.membrane: phospholipid, bicelle, nanodisc, liposome, membrane, SDS, DPC, DHPC, LMPG, LDAO, CHAPS, DDM, ...) recognised in the samples the scored shift table references -- among their components (a non-polymer one by the whole class table, one linked to a polymer entity only by an explicit mimetic name), in _Sample.Type, or as explicit mimetic words in _Sample.Details / Solvent_system / Name -- or set by the reviewed override table trizod/dataset/data/membrane_overrides.tsv; counted or not (a sub-CMC CHAPS is named), null when none. Descriptive; the moderate/strict filter reads membrane_mimetic_sample",
+        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a component that is a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always), CnEm/n-alkanol alignment media not counted; or a sample whose _Sample.Type (micelle, bicelle, liposome, membrane, nanodisc; not reverse micelle) or free text (Details, Solvent_system, Name) names an explicit mimetic, unless it serves only anisotropic (RDC alignment) experiments; or an entry/chain listed, after review of its raw file, in trizod/dataset/data/membrane_overrides.tsv (title-only evidence). Excluded from the moderate and strict tiers; null when the record predates the rule",
         b"temperature_placeholder_semantics": b"true when the deposited temperature was exactly 273 K (the text '273' or '273.0', unit K or none) with no statement of 0 C in the entry's own text, and was read as not deposited: temperature then holds the 298 K default and the strict tier excludes the chain. Null when the record predates the rule",
         b"high_pressure_semantics": b"pressure_bar >= 400 bar, the ceiling of the tolerant, moderate and strict tiers; null when no pressure was recorded (an unrecorded pressure passes as ambient)",
         b"label_tier_semantics": b"test_trizod and test_retired rows only: strictest tier whose pool still contains the pinned test sequence (strict for every test_trizod row; moderate/tolerant for a test_retired row)",
@@ -915,6 +962,10 @@ def build(
     sort_keys = ",".join(name for name, _ in SORT_KEYS)
     print(f"sorted by {sort_keys}; {n_groups} row groups of <= {row_group_size}")
     print("split counts:", dict(split_counts))
+    print(
+        "retired by reason:",
+        dict(Counter(r for r in cols["retired_reason"] if r is not None)),
+    )
     print("train_tier counts (strictest):", dict(tier_counts))
 
 
@@ -1054,6 +1105,20 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help=(
+            "repository root whose data/external holds the CheZOD sequence sets "
+            "(default: auto-detected)"
+        ),
+    )
+    ap.add_argument(
+        "--skip-chezod-overlap",
+        action="store_true",
+        help="write the <set>_overlap columns as all-null instead of searching",
+    )
+    ap.add_argument(
         "--shifts-out",
         type=Path,
         default=None,
@@ -1114,6 +1179,22 @@ def main() -> None:
             external = xs.ExternalSources.load(
                 args.xref_sources, entry_ids, extra_pdb_ids=confident_pdb
             )
+        overlaps = None
+        if args.skip_chezod_overlap:
+            print("  WARNING: --skip-chezod-overlap — the overlap flags will be null")
+        else:
+            import tempfile
+
+            chains = {rid: rec["seq"] for rid, (_, rec) in labelled.items()}
+            sets = co.load_chezod_sets(root=args.root)
+            print(
+                "searching CheZOD overlaps: "
+                + ", ".join(f"{k} {len(v)}" for k, v in sets.items())
+            )
+            with tempfile.TemporaryDirectory(prefix="trizod_chezod_") as td:
+                overlaps = co.chezod_overlaps(chains, sets, Path(td))
+            for name, ids in overlaps.items():
+                print(f"  {co.overlap_column(name)}: {len(ids)} chains")
         build(
             args.in_bundle,
             args.out,
@@ -1122,6 +1203,7 @@ def main() -> None:
             xrefs=xrefs,
             xrefs_snapshot=xrefs_snapshot,
             external=external,
+            chezod_overlaps=overlaps,
         )
     if args.shifts_out:
         build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)

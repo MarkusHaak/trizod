@@ -154,9 +154,12 @@ overwrites the pin). Reproduce the whole release with `scripts/build_dataset.sh`
 
 ## 4. Splits and the leakage guarantee
 
-Every `train_<tier>` set is **redundancy-reduced against CheZOD117 + the
-TriZOD-460 test set** at 30% identity / 80% coverage (E ≤ 10⁻³; see
-`dataset-construction.md`, "The E-value condition"), in two stages
+Every `train_<tier>` set is **redundancy-reduced against CheZOD117 (the
+released chains and the 117 original sequences), the TriZOD test set and the
+retired test chains** at 30% identity / 80% coverage of either chain and ≥ 27
+bits, searched in both directions (since 2026-11-17; until then E ≤ 10⁻³ with
+the training chains as queries — see `dataset-construction.md`, "The
+significance condition"), in two stages
 (cluster-membership removal + `easy-search`); 1,381 / 1,341 / 1,183 / 714
 training sequences are dropped per tier (of which 159 / 152 / 129 / 54 are
 transitive leaks caught only by stage-1). The TriZOD test set is itself
@@ -184,7 +187,15 @@ against the current strict pool at every rebuild, so entry IDs stay valid as
 the snapshot evolves (until 2026-11 the pool was tolerant). A pinned sequence
 that no longer meets strict is retired: listed in `TriZOD_test_retired.fasta`
 and as `split = test_retired` in the Parquet, not tested on, but still a
-leakage target, so training is what it would be with the full pin. In this release all 460 resolve, 0 are dropped, 0 are
+leakage target, so training is what it would be with the full pin. Since
+2026-11-17 a strict chain is also retired when it meets the leakage criterion
+against CheZOD117 (`chezod117_overlap`; `19481_1_1_1` contains CheZOD117 19482)
+or is the shorter of two test chains at ≥ 50 % identity over ≥ 80 % of either
+chain (`within_test_duplicate`; `6439_1_1_1` inside `6440_1_1_1`); the reason is
+in the labels table and the Parquet column `retired_reason`. The test set is
+CheZOD-disjoint at cluster level, not "CheZOD-free": `chezod1325_overlap` and
+`chezod1174_overlap` mark the test chains a CheZOD-trained predictor has seen
+relatives of. In this release all 460 resolve, 0 are dropped, 0 are
 ID-substituted and all 460 still satisfy `strict`. `TriZOD_test_set_labels.tsv`
 (`test_id`, `pinned_id`, `substituted`, `label_tier`, `length`) ships beside the
 test FASTA: `label_tier` records the strictest tier each test chain still
@@ -219,10 +230,13 @@ it.
   values). The deny list is an **exact** match, so a new spelling silently stops
   matching; the pipeline logs a warning for any unrecognised value occurring on
   ≥ 5 rows.
-- Membrane mimetics (SDS, DPC, bicelles, nanodiscs, …) are **annotated, not
-  filtered**, at every tier. Records under a membrane mimetic are 93.7 % ordered
-  and contain no disordered chains, so removing them would bias the label
-  distribution toward disorder.
+- Membrane mimetics (SDS, DPC, bicelles, nanodiscs, …) are annotated at every
+  tier and, since 2026-11, **excluded from moderate and strict** by the class
+  rule of `trizod/bmrb/membrane.py` (`docs/filtering.md`). Its recall is limited
+  by what the deposition states: a mimetic named only in a title is caught only
+  for the entries reviewed into `trizod/dataset/data/membrane_overrides.tsv`.
+- Sequences hold the 20 standard residues plus X, U and Z (see
+  `dataset-construction.md` §8).
 - **`trizod_shifts.parquet` is re-referenced in three different regimes**, and
   `offset_source` is the column that tells you which one a row is in. `val_ppm`
   is always as deposited; `val_corrected_ppm = val_ppm − offset_applied_ppm`.

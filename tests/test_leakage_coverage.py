@@ -578,6 +578,27 @@ def test_gate_rule_either_rejects_what_rule_test_passes(tmp_path, capsys):
 # ------------------------------------- package step: the recorded rule
 
 
+#: An original CheZOD117 sequence (unrelated to every fixture chain), as the
+#: SETH FASTA under data/external/chezod/seth_github holds them.
+ORIGINAL_CHEZOD = "hmbdi"
+
+
+def _write_chezod117_original(root: Path, records: dict | None = None) -> Path:
+    path = (
+        root
+        / "data"
+        / "external"
+        / "chezod"
+        / "seth_github"
+        / "CheZOD117_test_set_sequences.fasta"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if records is None:
+        records = {ORIGINAL_CHEZOD: _rand(random.Random(117), 82)}
+    write_fasta(records, path)
+    return path
+
+
 def _make_release_inputs(
     root: Path, train: dict[str, str], test: dict[str, str], rule: str | None
 ) -> Path:
@@ -589,6 +610,7 @@ def _make_release_inputs(
     chezod_dir.mkdir(parents=True)
     items = list(test.items())
     write_fasta(dict(items[:1]), chezod_dir / "CheZOD117_test_set.fasta")
+    _write_chezod117_original(root)
     (work / "testset").mkdir(parents=True)
     write_fasta(dict(items[1:]), work / "testset" / "TriZOD_test_set.fasta")
     (work / "testset" / "TriZOD_test_set_labels.tsv").write_text("id\tlabel\n")
@@ -684,6 +706,7 @@ def _make_redundancy_inputs(root: Path) -> Path:
     chezod_dir.mkdir(parents=True)
     items = list(test.items())
     write_fasta(dict(items[:1]), chezod_dir / "CheZOD117_test_set.fasta")
+    _write_chezod117_original(root)
     (work / "testset").mkdir(parents=True)
     write_fasta(dict(items[1:]), work / "testset" / "TriZOD_test_set.fasta")
     return work
@@ -914,8 +937,14 @@ def test_leakage_targets_include_the_retired_file_when_present(tmp_path):
     testset_dir = tmp_path / "testset"
     testset_dir.mkdir()
     chezod = tmp_path / "CheZOD117_test_set.fasta"
+    original = tmp_path / "CheZOD117_test_set_sequences.fasta"
     assert redundancy.leakage_target_sources(chezod, testset_dir) == [
         chezod,
+        testset_dir / "TriZOD_test_set.fasta",
+    ]
+    assert redundancy.leakage_target_sources(chezod, testset_dir, original) == [
+        chezod,
+        original,
         testset_dir / "TriZOD_test_set.fasta",
     ]
     (testset_dir / "TriZOD_test_retired.fasta").write_text("")
@@ -951,3 +980,371 @@ def test_package_stages_the_retired_chains_and_counts_them(tmp_path):
     manifest = json.loads((bundle / "MANIFEST.json").read_text())
     assert manifest["test_sets"]["TriZOD_test_retired"] == 1
     assert "test/TriZOD_test_retired.fasta" in manifest["files"]
+
+
+# ------------------- both search directions, bit floor (release audit E22)
+#
+# 26357_1_1_1 (130 aa, redundant at the tolerant tier) and CheZOD117 chain
+# 19135_1_1_1 (467 aa), both as deposited at BMRB: the alignment scores 130
+# bits either way, but spans 76 % of the training chain with the training chain
+# as query and 80 % with the test chain as query. Only the reverse search
+# finds the pair.
+
+REVERSE_TRAIN = "26357_1_1_1"
+REVERSE_TEST = "19135_1_1_1"
+REVERSE_PAIR = {
+    REVERSE_TRAIN: (
+        "MQTAPVPMPDLKNVKSKIGSTENLKHQPGGGKVQIINKKLDLSNVQSKAGSKDNIKHVPGGGSVQIVYKP"
+        "VDLSKVTSKAGSLGNIHHKPGGGQVEVKSEKLDFKDRVQSCIGSLDNITHVPGGGNKKIE"
+    ),
+    REVERSE_TEST: (
+        "MADERKDEGKAPHWTSASLTEAAAHPHSPEMKDQGGSGEGLSRSANGFPYREEEEGAFGEHGSQGTYSDT"
+        "KENGINGELTSADRETAEEVSARIVQVVTAEAVAVLKGEQEKEAQHKDQPAALPLAAEETVNLPPSPPPS"
+        "PASEQTAALEEATSGESAQAPSAFKQAKDKVTDGITKSPEKRSSLPRPSSILPPRRGVSGDREENSFSLN"
+        "SSISSARRTTRSEPIRRAGKSGTSTPTTPGSTAITPGTPPSYSSRTPGTPGTPSYPRTPGTPKSGILVPS"
+        "EKKVAIIRTPPKSPATPKQLRLINQPLPDLKNVKSKIGSTDNIKYQPKGGQVQIVTKKIDLSHVTSKCGS"
+        "LKNIRHRPGGGRVKIESVKLDFKEKAQAKVGSLDNAHHVPGGGNVKIDSQKLNFREHAKARVDHGAEIIT"
+        "QSPSRSSVASPRRLSNVSSSGSINLLESPQLATLAEDVTAALAKQGL"
+    ),
+}
+
+
+def _reverse_pair_fastas(tmp_path: Path) -> tuple[Path, Path]:
+    train_fa, test_fa = tmp_path / "train.fasta", tmp_path / "test.fasta"
+    write_fasta({REVERSE_TRAIN: REVERSE_PAIR[REVERSE_TRAIN]}, train_fa)
+    write_fasta({REVERSE_TEST: REVERSE_PAIR[REVERSE_TEST]}, test_fa)
+    return train_fa, test_fa
+
+
+def _bits_hit(bits: float) -> mm.LeakageHit:
+    return mm.LeakageHit(
+        train_id="tr",
+        test_id="te",
+        pident=40.0,
+        evalue=1e-3,
+        bits=bits,
+        train_cov=1.0,
+        test_cov=1.0,
+        train_len=100,
+        test_len=100,
+    )
+
+
+@pytest.mark.parametrize(("bits", "leak"), [(26.9, False), (27.0, True), (40, True)])
+def test_the_significance_floor_is_a_bit_score(bits, leak):
+    # the E-value is ignored: it depends on the query length and the size of
+    # the target database, i.e. on the search direction
+    assert mm.is_leak(_bits_hit(bits)) is leak
+    assert mm.LEAKAGE_MIN_BITS == 27.0
+
+
+def test_the_search_reports_every_alignment_above_the_floor(tmp_path):
+    cmd = mm.leakage_search_cmd(
+        tmp_path / "a.fa", tmp_path / "b.fa", tmp_path / "h.tsv", tmp_path
+    )
+    assert float(cmd[cmd.index("-e") + 1]) == mm.LEAKAGE_SEARCH_EVALUE >= 10
+    assert "bits" in mm.LEAKAGE_FORMAT.split(",")
+
+
+def test_a_reverse_hit_is_keyed_training_then_test(tmp_path):
+    tsv = tmp_path / "rev.tsv"
+    # test chain T (query, 50 aa) aligned over residues 1-50 of training chain
+    # R (target, 200 aa)
+    tsv.write_text(
+        _tsv_row(
+            query="T",
+            target="R",
+            pident=55.0,
+            evalue=1e-9,
+            bits=60,
+            qstart=1,
+            qend=50,
+            qlen=50,
+            tstart=1,
+            tend=50,
+            tlen=200,
+        )
+    )
+    (hit,) = mm.parse_leakage_hits(tsv, reverse=True)
+    assert (hit.train_id, hit.test_id, hit.direction) == ("R", "T", mm.REVERSE)
+    assert hit.test_cov == pytest.approx(1.0) and hit.train_cov == pytest.approx(0.25)
+    assert (hit.train_len, hit.test_len) == (200, 50)
+
+
+def _fake_run(forward_rows: str, reverse_rows: str):
+    """Stand-in for ``mm.run``: writes the canned hits of the search its
+    command runs (forward when the query is the training FASTA)."""
+
+    def run(cmd, log, append=False):
+        out = Path(cmd[4])
+        out.write_text(forward_rows if "train" in Path(cmd[2]).name else reverse_rows)
+
+    return run
+
+
+def test_find_leaks_takes_the_union_of_both_directions(tmp_path, monkeypatch):
+    # a synthetic pair only the reverse search reports above the thresholds
+    # (the forward one spans 76 % of the training chain), and one only the
+    # forward search does
+    fwd = _tsv_row(
+        query="R1",
+        target="T1",
+        pident=62.0,
+        evalue=1e-37,
+        bits=130,
+        qstart=32,
+        qend=130,
+        qlen=130,
+        tstart=299,
+        tend=398,
+        tlen=467,
+    ) + _tsv_row(
+        query="R2",
+        target="T2",
+        pident=40.0,
+        evalue=1e-5,
+        bits=40,
+        qstart=1,
+        qend=90,
+        qlen=90,
+        tstart=1,
+        tend=90,
+        tlen=95,
+    )
+    rev = _tsv_row(
+        query="T1",
+        target="R1",
+        pident=57.1,
+        evalue=1e-37,
+        bits=130,
+        qstart=306,
+        qend=410,
+        qlen=467,
+        tstart=7,
+        tend=110,
+        tlen=130,
+    )
+    monkeypatch.setattr(mm, "run", _fake_run(fwd, rev))
+    (tmp_path / "train.fa").write_text(">R1\n" + "A" * 130 + "\n")
+    (tmp_path / "test.fa").write_text(">T1\n" + "A" * 467 + "\n")
+    hits = mm.find_leaks(
+        tmp_path / "train.fa",
+        tmp_path / "test.fa",
+        tmp_path / "hits.tsv",
+        tmp_path / "tmp",
+        tmp_path / "log",
+    )
+    got = {(h.train_id, h.test_id): h.direction for h in hits}
+    assert got == {("R1", "T1"): mm.REVERSE, ("R2", "T2"): mm.FORWARD}
+    # the forward alignment alone would not have counted
+    (fwd_r1,) = [
+        h for h in mm.parse_leakage_hits(tmp_path / "hits.tsv") if h.train_id == "R1"
+    ]
+    assert not mm.is_leak(fwd_r1)
+    assert mm.reverse_hits_path(tmp_path / "hits.tsv").read_text() == rev
+
+
+def test_a_search_whose_evalue_cap_could_hide_a_pair_fails(tmp_path):
+    tsv = tmp_path / "hits.tsv"
+    query = tmp_path / "q.fa"
+    query.write_text(">q\n" + "A" * 2000 + "\n")
+    # k = E * 2**bits / qlen = 1e3: a 27-bit alignment of the 2000-aa query
+    # would get E = 1e3 * 2000 * 2**-27 = 0.015 -- fine under a cap of 100 ...
+    tsv.write_text(
+        _tsv_row(
+            query="q",
+            target="t",
+            pident=50,
+            evalue=1e3 * 100 / 2**40,
+            bits=40,
+            qstart=1,
+            qend=100,
+            qlen=100,
+            tstart=1,
+            tend=100,
+            tlen=100,
+        )
+    )
+    assert mm.check_evalue_headroom(tsv, query) == pytest.approx(1e3 * 2000 / 2**27)
+    # ... but not under a cap of 0.01
+    with pytest.raises(RuntimeError, match="LEAKAGE_SEARCH_EVALUE"):
+        mm.check_evalue_headroom(tsv, query, cap=0.01)
+    # a long identical pair: E underflows to 0 and 2**bits would overflow
+    with tsv.open("a") as fh:
+        fh.write(
+            _tsv_row(
+                query="q",
+                target="u",
+                pident=100,
+                evalue=0.0,
+                bits=3000,
+                qstart=1,
+                qend=2000,
+                qlen=2000,
+                tstart=1,
+                tend=2000,
+                tlen=2000,
+            )
+        )
+    assert mm.check_evalue_headroom(tsv, query) == pytest.approx(1e3 * 2000 / 2**27)
+
+
+@requires_mmseqs
+def test_only_the_reverse_search_finds_the_real_pair(tmp_path):
+    train_fa, test_fa = _reverse_pair_fastas(tmp_path)
+    hits = mm.find_leaks(
+        train_fa, test_fa, tmp_path / "h.tsv", tmp_path / "tmp", tmp_path / "log"
+    )
+    assert [(h.train_id, h.test_id, h.direction) for h in hits] == [
+        (REVERSE_TRAIN, REVERSE_TEST, mm.REVERSE)
+    ]
+    assert hits[0].train_cov >= 0.8 and hits[0].bits >= mm.LEAKAGE_MIN_BITS
+    forward = mm.parse_leakage_hits(tmp_path / "h.tsv")
+    assert forward and not any(mm.is_leak(h) for h in forward)
+
+
+@requires_mmseqs
+def test_stage2_removes_the_training_partner_of_a_reverse_hit(tmp_path):
+    train_fa, test_fa = _reverse_pair_fastas(tmp_path)
+    removed = redundancy.stage2_search_removal(
+        train_fa, test_fa, tmp_path / "h.tsv", tmp_path / "tmp", tmp_path / "log"
+    )
+    assert removed == {REVERSE_TRAIN}  # the training chain, never the test chain
+
+
+@requires_mmseqs
+def test_the_gate_fails_on_a_pair_only_the_reverse_search_finds(tmp_path):
+    bundle = _make_bundle(
+        tmp_path,
+        {REVERSE_TRAIN: REVERSE_PAIR[REVERSE_TRAIN]},
+        {"1_1_1_1": AA * 5, REVERSE_TEST: REVERSE_PAIR[REVERSE_TEST]},
+    )
+    with pytest.raises(SystemExit) as exc:
+        package_release.assert_no_leakage(bundle, rule="either")
+    assert REVERSE_TRAIN in str(exc.value) and REVERSE_TEST in str(exc.value)
+
+
+def _add_cluster_tables(bundle: Path, tier: str, members: dict[str, str]) -> None:
+    """A redundant row: listed in the tier's cluster tables under a training
+    representative, its sequence only in scores.json."""
+    rep = next(iter(read_fasta(bundle / "train" / tier / f"train_{tier}_best.fasta")))
+    header = "cluster_repr\tmember\tbest_repr\tmember_quality\n"
+    rows = [f"{rep}\t{rep}\t{rep}\t1\n"] + [f"{rep}\t{m}\t{rep}\t0\n" for m in members]
+    (bundle / "train" / tier / "clusters_best.tsv").write_text(header + "".join(rows))
+    (bundle / "train" / tier / "clusters.tsv").write_text(
+        "".join(f"{rep}\t{m}\n" for m in [rep, *members])
+    )
+    scores = bundle / "scores" / tier
+    scores.mkdir(parents=True, exist_ok=True)
+    (scores / "scores.json").write_text(
+        "".join(json.dumps({"ID": m, "seq": q}) + "\n" for m, q in members.items())
+    )
+
+
+def test_training_records_include_every_cluster_member(tmp_path):
+    train, test = _fixture_seqs()
+    bundle = _make_bundle(tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test)
+    _add_cluster_tables(bundle, "strict", {"907_1_1_1": "MKV" * 30})
+    records = package_release.training_records(bundle)
+    assert records["strict/clusters_best.tsv:907_1_1_1"] == "MKV" * 30
+    assert records["strict/clusters.tsv:907_1_1_1"] == "MKV" * 30
+    assert (
+        records["strict/train_strict_best.fasta:" + UNRELATED_TRAIN]
+        == (train[UNRELATED_TRAIN])
+    )
+
+
+def test_a_cluster_member_without_a_sequence_fails_the_gate(tmp_path):
+    train, test = _fixture_seqs()
+    bundle = _make_bundle(tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test)
+    _add_cluster_tables(bundle, "strict", {"907_1_1_1": "MKV" * 30})
+    (bundle / "scores" / "strict" / "scores.json").write_text("")
+    with pytest.raises(SystemExit, match="no sequence"):
+        package_release.training_records(bundle)
+
+
+@requires_mmseqs
+def test_the_gate_reads_the_redundant_rows(tmp_path):
+    # the training FASTAs are clean; a redundant member of a cluster contains
+    # a test chain -- the gate used to read the FASTAs only and missed it
+    train, test = _fixture_seqs()
+    bundle = _make_bundle(tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test)
+    _add_cluster_tables(bundle, "tolerant", {CONTAIN_TRAIN: train[CONTAIN_TRAIN]})
+    with pytest.raises(SystemExit) as exc:
+        package_release.assert_no_leakage(bundle, rule="either")
+    assert f"tolerant/clusters_best.tsv:{CONTAIN_TRAIN}" in str(exc.value)
+
+
+def test_the_package_step_stages_the_original_chezod117_sequences(tmp_path):
+    train, test = _fixture_seqs()
+    work = _make_release_inputs(
+        tmp_path, {UNRELATED_TRAIN: train[UNRELATED_TRAIN]}, test, "either"
+    )
+    # an exact copy of an original CheZOD117 sequence in training fails the
+    # gate, though it is no release chain
+    original = read_fasta(
+        tmp_path
+        / "data"
+        / "external"
+        / "chezod"
+        / "seth_github"
+        / "CheZOD117_test_set_sequences.fasta"
+    )
+    copy = {"908_1_1_1": original[ORIGINAL_CHEZOD]}
+    mm_dir = work / "mmseqs"
+    for tier in package_release.TIERS:
+        write_fasta(copy, mm_dir / f"train_{tier}_best.fasta")
+        write_fasta(copy, mm_dir / f"train_{tier}.fasta")
+        (mm_dir / f"train_{tier}_clu.tsv").write_text("908_1_1_1\t908_1_1_1\n")
+        (mm_dir / f"train_{tier}_clu_best.tsv").write_text("908_1_1_1\t908_1_1_1\n")
+    with pytest.raises(SystemExit, match="exact-sequence"):
+        _package(tmp_path, work)
+    bundle = work / "release_bundle" / "trizod-dataset-t"
+    staged = bundle / "test" / package_release.CHEZOD117_ORIGINAL_FASTA
+    assert read_fasta(staged) == original
+
+
+@requires_mmseqs
+def test_redundancy_removes_a_homologue_of_an_original_chezod117_sequence(tmp_path):
+    # "hmbdi" is an original CheZOD117 sequence that is no release chain
+    # (release audit E23: 34812_1_1_1, hmbdi plus one N-terminal Gly, was in
+    # the moderate training set)
+    work = _make_redundancy_inputs(tmp_path)
+    hmbdi = read_fasta(
+        tmp_path
+        / "data"
+        / "external"
+        / "chezod"
+        / "seth_github"
+        / "CheZOD117_test_set_sequences.fasta"
+    )[ORIGINAL_CHEZOD]
+    for tier in redundancy.TIERS:
+        fa = work / "final_dataset" / tier / f"{tier}.fasta"
+        pool = read_fasta(fa)
+        pool["34812_1_1_1"] = "G" + hmbdi
+        write_fasta(pool, fa)
+    redundancy.main(["--work-dir", str(work), "--root", str(tmp_path)])
+    out = work / "mmseqs"
+    assert ORIGINAL_CHEZOD in read_fasta(out / "combined_testset.fasta")
+    for tier in redundancy.TIERS:
+        assert "34812_1_1_1" not in read_fasta(out / f"{tier}_no_testset.fasta")
+
+
+def test_redundancy_requires_the_original_chezod117_sequences(tmp_path):
+    work = _make_redundancy_inputs(tmp_path)
+    (
+        tmp_path
+        / "data"
+        / "external"
+        / "chezod"
+        / "seth_github"
+        / "CheZOD117_test_set_sequences.fasta"
+    ).unlink()
+    with pytest.raises(SystemExit, match="original CheZOD117"):
+        redundancy.main(["--work-dir", str(work), "--root", str(tmp_path)])
+
+
+def test_the_rule_record_names_the_bit_floor_and_both_directions(tmp_path):
+    rec = json.loads(mm.write_leakage_rule(tmp_path, "either").read_text())
+    assert rec["min_bits"] == mm.LEAKAGE_MIN_BITS
+    assert "both" in rec["directions"]

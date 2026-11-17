@@ -17,27 +17,41 @@ Test-set leakage is defined separately, by :func:`leakage_search_cmd` and
   catches a test chain that contains a shorter training chain, which the
   ``"test"`` rule leaves in (and which the release's substring gate rejects).
 
-Under both rules the alignment must also be reported by mmseqs, i.e. reach
-E <= 1e-3: the ``easy-search`` default, which :func:`leakage_search_options`
-deliberately leaves in place. Identity and coverage alone would count chance
-alignments of short chains (a 20-30 aa pair at 30 % identity is expected by
-chance). E-values depend on the search -- which side is the database, its size,
-the options -- so a search set up differently can report a borderline pair this
-one does not: the paper's Fig. 3c search of test chains against the strict
-representatives finds 34481_1_1_1 ~ 15008_1_1_1 (31.8 % identity over 93 % of
-the test chain, E = 6e-4), which the stage-2 search does not report. The exact
->= 20 aa substring check of the release gate needs no E-value.
+Under both rules the alignment must also score >= ``LEAKAGE_MIN_BITS`` (27)
+bits. Identity and coverage alone would count chance alignments of short chains
+(a 20-30 aa pair at 30 % identity is expected by chance), so a significance
+floor is needed -- but not an E-value: an mmseqs E-value scales with the query
+length and the size of the target database, so the same pair passed or failed
+the former ``E <= 1e-3`` cut depending on which side was the query and how many
+chains the target set held (release audit E22: 7350~52238, 30761~26610 and
+34286~52584 sat at E 5e-4 to 1e-3 with the test chain as query, above 1e-3 the
+other way round). The bit score is a property of the alignment alone. The floor
+is the most permissive bit score the former cut admitted in the 2026-11 build
+(27 bits, its shortest queries against the ~570-chain test database), so every
+pair it removed is still removed; for two 100-residue chains a chance local
+alignment of 27 bits has a pairwise E-value of about 1e-4, and the identity and
+coverage thresholds carry the rest. mmseqs is run with a permissive
+``-e LEAKAGE_SEARCH_EVALUE`` only so that it reports every alignment above the
+floor; :func:`check_evalue_headroom` fails a search in which the cap could have
+hidden one.
+
+The search runs in BOTH directions (:func:`search_both_directions`): training
+chains as queries against the test chains, and test chains as queries against
+the training chains. The alignment score is symmetric, but the aligned span is
+not always: 26357_1_1_1 ~ CheZOD117 19135 covers 76 % of the training chain with
+the training chain as query and 80 % the other way round. A pair counts when
+either search meets the criterion. The same search serves the stage-2 removal
+in :mod:`trizod.dataset.redundancy`, the release gate in
+:mod:`trizod.dataset.package_release`, the test-set checks in
+:mod:`trizod.dataset.testset` and the CheZOD-overlap flags of the Parquet. The
+exact >= 20 aa substring check of the release gate needs no score at all.
 
 Coverage is the mmseqs definition, the aligned span ``(end - start + 1) /
 length``, gaps included. ``--cov-mode 0`` would demand 80 % of both chains, so
-neither kind of containment would be found. The leakage search runs query =
-training chains against target = test chains, with E-values computed against the
-same (test) target database in both places that use it: the stage-2 removal in
-:mod:`trizod.dataset.redundancy` and the release gate in
-:mod:`trizod.dataset.package_release`. The search command is the same under both
-rules; only the coverage test on the parsed hits differs. The redundancy step
-records the rule it applied (:func:`write_leakage_rule`) so the gate checks the
-same one.
+neither kind of containment would be found. The search command is the same
+under both rules; only the coverage test on the parsed hits differs. The
+redundancy step records the rule it applied (:func:`write_leakage_rule`) so the
+gate checks the same one.
 
 The 80 % is NOT passed to mmseqs (``-c 0``): with any ``-c`` above 0, mmseqs
 skips a pair by length ratio before aligning it (under ``--cov-mode 1``, when
@@ -51,6 +65,7 @@ unrounded spans parsed from the hit table (:func:`is_leak`). With ``-c 0`` the
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,6 +108,17 @@ LEAKAGE_COV_MODE = 1
 LEAKAGE_MMSEQS_COV = 0
 # Start/end columns rather than qcov/tcov, which mmseqs rounds to 3 decimals.
 LEAKAGE_FORMAT = "query,target,pident,evalue,bits,qstart,qend,qlen,tstart,tend,tlen"
+# Significance floor of a leak: the alignment's bit score, which does not depend
+# on the search direction or the database size (see the module docstring).
+LEAKAGE_MIN_BITS = 27.0
+# mmseqs -e: permissive, so that every alignment above LEAKAGE_MIN_BITS is
+# reported; check_evalue_headroom fails a search where it could bind.
+LEAKAGE_SEARCH_EVALUE = 100.0
+# The two orientations of a leakage search.
+FORWARD, REVERSE = "forward", "reverse"
+#: The within-test near-duplicate check (release audit E24): 50 % identity over
+#: 80 % of either chain, same search, same bit floor.
+WITHIN_TEST_MIN_SEQ_ID = 0.5
 # No k-mer prefilter: at -s 7.5 it misses weak homologs (30-50 % identity) that
 # meet the criterion. Aligning every training x test pair costs seconds here.
 LEAKAGE_PREFILTER_MODE = 2
@@ -141,6 +167,7 @@ def describe_rule(rule: str) -> str:
     return (
         f">= {LEAKAGE_MIN_SEQ_ID * 100:g} % identity over "
         f">= {LEAKAGE_MIN_TEST_COV * 100:g} % of {LEAKAGE_RULE_COVERAGE_OF[rule]}"
+        f", >= {LEAKAGE_MIN_BITS:g} bits, either search direction"
     )
 
 
@@ -152,7 +179,9 @@ LEAKAGE_RULES_HELP = "; ".join(f"'{r}': {describe_rule(r)}" for r in LEAKAGE_RUL
 @dataclass(frozen=True)
 class LeakageHit:
     """One reported training/test alignment (:func:`parse_leakage_hits`
-    returns every alignment; :func:`is_leak` applies the criterion)."""
+    returns every alignment; :func:`is_leak` applies the criterion).
+    ``direction`` is the search that reported it: ``"forward"`` (training
+    chain as query) or ``"reverse"`` (test chain as query)."""
 
     train_id: str
     test_id: str
@@ -163,84 +192,215 @@ class LeakageHit:
     test_cov: float  # aligned span / length of the test chain (gaps count)
     train_len: int
     test_len: int
+    direction: str = FORWARD
 
 
 def leakage_search_cmd(
-    train_fa: Path, test_fa: Path, out_tsv: Path, tmp: Path
+    query_fa: Path,
+    target_fa: Path,
+    out_tsv: Path,
+    tmp: Path,
+    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
 ) -> list[str]:
-    """``mmseqs easy-search`` for the test-set leakage criterion.
+    """``mmseqs easy-search`` for the test-set leakage criterion, one direction.
 
-    Query = training chains, target = test chains, ``--min-seq-id 0.3`` and
-    ``--cov-mode 1 -c 0``; every other option is the shared ``COMMON`` block.
-    mmseqs gets no coverage threshold, so it aligns every prefilter hit
-    whatever the length ratio; the >= 80 % coverage threshold of the chosen
-    rule is applied to the parsed hits (:func:`is_leak`). The command is the
-    same for every rule.
+    The forward search has the training chains as ``query_fa`` and the test
+    chains as ``target_fa``; :func:`search_both_directions` adds the reverse.
+    ``--min-seq-id 0.3``, ``--cov-mode 1 -c 0`` and a permissive ``-e``; every
+    other option is the shared ``COMMON`` block. mmseqs gets no coverage
+    threshold, so it aligns every pair whatever the length ratio; the >= 80 %
+    coverage of the chosen rule and the bit floor are applied to the parsed
+    hits (:func:`is_leak`). The command is the same for every rule.
     """
     return [
         "mmseqs",
         "easy-search",
-        str(train_fa),
-        str(test_fa),
+        str(query_fa),
+        str(target_fa),
         str(out_tsv),
         str(tmp),
-        *leakage_search_options(),
+        *leakage_search_options(min_seq_id),
     ]
 
 
-def leakage_search_options() -> list[str]:
+def leakage_search_options(min_seq_id: float = LEAKAGE_MIN_SEQ_ID) -> list[str]:
     """The options of :func:`leakage_search_cmd` (everything after the paths)."""
     return [
         "--min-seq-id",
-        str(LEAKAGE_MIN_SEQ_ID),
+        str(min_seq_id),
         "-c",
         str(LEAKAGE_MMSEQS_COV),
         *with_cov_mode(COMMON, LEAKAGE_COV_MODE),
         "--prefilter-mode",
         str(LEAKAGE_PREFILTER_MODE),
+        "-e",
+        f"{LEAKAGE_SEARCH_EVALUE:g}",
+        # amino acids, never auto-detected: a FASTA of a few short chains that
+        # happen to hold only A/C/G/T (GAGA... peptides) reads as nucleotides
+        "--dbtype",
+        "1",
         "--format-output",
         LEAKAGE_FORMAT,
     ]
 
 
-def parse_leakage_hits(tsv: Path) -> list[LeakageHit]:
+def reverse_hits_path(out_tsv: Path) -> Path:
+    """Where :func:`search_both_directions` writes the reverse search's hits:
+    ``<name>_reverse.tsv`` beside the forward ``out_tsv``."""
+    out_tsv = Path(out_tsv)
+    return out_tsv.with_name(f"{out_tsv.stem}_reverse{out_tsv.suffix}")
+
+
+def parse_leakage_hits(tsv: Path, reverse: bool = False) -> list[LeakageHit]:
     """Parse an easy-search TSV written with ``LEAKAGE_FORMAT`` (every reported
     alignment, whatever its coverage). Coverages are computed from the
-    alignment start/end, unrounded."""
+    alignment start/end, unrounded. ``reverse``: the test chain was the query
+    (the reverse search); the hit is still keyed (training, test)."""
     cols = LEAKAGE_FORMAT.split(",")
     hits = []
-    with tsv.open() as f:
+    with Path(tsv).open() as f:
         for line in f:
             if not line.strip():
                 continue
             r = dict(zip(cols, line.rstrip("\n").split("\t")))
             qlen, tlen = int(r["qlen"]), int(r["tlen"])
-            hits.append(
-                LeakageHit(
+            qcov = (int(r["qend"]) - int(r["qstart"]) + 1) / qlen
+            tcov = (int(r["tend"]) - int(r["tstart"]) + 1) / tlen
+            common = {
+                "pident": float(r["pident"]),
+                "evalue": float(r["evalue"]),
+                "bits": float(r["bits"]),
+            }
+            if reverse:
+                hit = LeakageHit(
+                    train_id=r["target"],
+                    test_id=r["query"],
+                    train_cov=tcov,
+                    test_cov=qcov,
+                    train_len=tlen,
+                    test_len=qlen,
+                    direction=REVERSE,
+                    **common,
+                )
+            else:
+                hit = LeakageHit(
                     train_id=r["query"],
                     test_id=r["target"],
-                    pident=float(r["pident"]),
-                    evalue=float(r["evalue"]),
-                    bits=float(r["bits"]),
-                    train_cov=(int(r["qend"]) - int(r["qstart"]) + 1) / qlen,
-                    test_cov=(int(r["tend"]) - int(r["tstart"]) + 1) / tlen,
+                    train_cov=qcov,
+                    test_cov=tcov,
                     train_len=qlen,
                     test_len=tlen,
+                    direction=FORWARD,
+                    **common,
                 )
-            )
+            hits.append(hit)
     return hits
 
 
-def is_leak(hit: LeakageHit, rule: str = DEFAULT_LEAKAGE_RULE) -> bool:
-    """The leakage criterion on one reported alignment. Identity >= 30 % and
-    E <= 1e-3 are enforced by mmseqs (``--min-seq-id`` and the default ``-e``:
-    an alignment above either limit is never reported); coverage is checked
-    here: of the test chain (rule ``"test"``), or of the test or the training
-    chain (rule ``"either"``)."""
+def is_leak(
+    hit: LeakageHit,
+    rule: str = DEFAULT_LEAKAGE_RULE,
+    min_bits: float = LEAKAGE_MIN_BITS,
+) -> bool:
+    """The leakage criterion on one reported alignment: >= ``min_bits`` bits,
+    and >= 80 % coverage of the test chain (rule ``"test"``) or of the test or
+    the training chain (rule ``"either"``). Identity is enforced by mmseqs
+    (``--min-seq-id``: an alignment below it is never reported)."""
     check_rule(rule)
+    if hit.bits < min_bits:
+        return False
     if hit.test_cov >= LEAKAGE_MIN_COV:
         return True
     return rule == "either" and hit.train_cov >= LEAKAGE_MIN_COV
+
+
+def _fasta_lengths(path: Path) -> list[int]:
+    lengths, n = [], None
+    with Path(path).open() as f:
+        for line in f:
+            if line.startswith(">"):
+                if n is not None:
+                    lengths.append(n)
+                n = 0
+            elif n is not None:
+                n += len(line.strip())
+    if n is not None:
+        lengths.append(n)
+    return lengths
+
+
+def check_evalue_headroom(
+    tsv: Path,
+    query_fa: Path,
+    min_bits: float = LEAKAGE_MIN_BITS,
+    cap: float = LEAKAGE_SEARCH_EVALUE,
+) -> float | None:
+    """Fail when the search's ``-e`` cap could have hidden an alignment above
+    the bit floor.
+
+    An mmseqs E-value is ``k * query length * 2**-bits`` with ``k`` set by the
+    target database. ``k`` is read off the reported alignments (its largest
+    value), and the E-value a ``min_bits`` alignment of the longest query would
+    get must stay below ``cap``; otherwise raise ``RuntimeError`` (raise
+    ``LEAKAGE_SEARCH_EVALUE``). Returns that bound, None for a search without
+    hits."""
+    log2_k = None  # in log space: 2**bits overflows for a long identical pair
+    with Path(tsv).open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            r = dict(zip(LEAKAGE_FORMAT.split(","), line.rstrip("\n").split("\t")))
+            evalue = float(r["evalue"])
+            if evalue <= 0:  # underflowed: says nothing about k
+                continue
+            est = math.log2(evalue) + float(r["bits"]) - math.log2(int(r["qlen"]))
+            log2_k = est if log2_k is None else max(log2_k, est)
+    if log2_k is None:
+        return None
+    longest = max(_fasta_lengths(query_fa), default=1)
+    bound = 2.0 ** (log2_k + math.log2(longest) - min_bits)
+    if bound > cap:
+        raise RuntimeError(
+            f"{tsv}: a {min_bits:g}-bit alignment of the longest query would get "
+            f"E = {bound:.3g} > -e {cap:g}, so mmseqs may have dropped pairs above "
+            "the bit floor; raise trizod.dataset.mmseqs.LEAKAGE_SEARCH_EVALUE"
+        )
+    return bound
+
+
+def search_both_directions(
+    train_fa: Path,
+    test_fa: Path,
+    out_tsv: Path,
+    tmp: Path,
+    log: Path,
+    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
+) -> list[LeakageHit]:
+    """Every alignment of the forward search (training chains as queries,
+    hits in ``out_tsv``) and of the reverse search (test chains as queries,
+    hits in :func:`reverse_hits_path`), keyed (training, test) either way."""
+    reverse_tsv = reverse_hits_path(out_tsv)
+    tmp = Path(tmp)
+    for direction in (FORWARD, REVERSE):  # mmseqs makes one level, not two
+        (tmp / direction).mkdir(parents=True, exist_ok=True)
+    run(leakage_search_cmd(train_fa, test_fa, out_tsv, tmp / FORWARD, min_seq_id), log)
+    run(
+        leakage_search_cmd(test_fa, train_fa, reverse_tsv, tmp / REVERSE, min_seq_id),
+        log,
+        append=True,
+    )
+    check_evalue_headroom(out_tsv, train_fa)
+    check_evalue_headroom(reverse_tsv, test_fa)
+    return parse_leakage_hits(out_tsv) + parse_leakage_hits(reverse_tsv, reverse=True)
+
+
+def strongest_per_pair(hits) -> list[LeakageHit]:
+    """One hit per (training, test) pair -- the forward one when both searches
+    report it -- in first-seen order."""
+    best: dict[tuple[str, str], LeakageHit] = {}
+    for h in hits:
+        best.setdefault((h.train_id, h.test_id), h)
+    return list(best.values())
 
 
 def find_leaks(
@@ -250,13 +410,15 @@ def find_leaks(
     tmp: Path,
     log: Path,
     rule: str = DEFAULT_LEAKAGE_RULE,
+    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
 ) -> list[LeakageHit]:
-    """Every training/test pair that meets the leakage criterion of ``rule``
-    (one row per pair mmseqs reports). ``out_tsv`` keeps every alignment
-    mmseqs reported, including those below the coverage threshold."""
+    """Every training/test pair that meets the leakage criterion of ``rule`` in
+    either search direction, one hit per pair (the forward one when both
+    searches qualify). ``out_tsv`` (forward) and its ``_reverse`` sibling keep
+    every alignment mmseqs reported, including those below the thresholds."""
     check_rule(rule)
-    run(leakage_search_cmd(train_fa, test_fa, out_tsv, tmp), log)
-    return [h for h in parse_leakage_hits(out_tsv) if is_leak(h, rule)]
+    hits = search_both_directions(train_fa, test_fa, out_tsv, tmp, log, min_seq_id)
+    return strongest_per_pair(h for h in hits if is_leak(h, rule))
 
 
 def find_test_coverage_leaks(
@@ -287,9 +449,15 @@ def leakage_rule_record(rule: str) -> dict:
         "min_coverage": LEAKAGE_MIN_COV,
         "coverage_of": LEAKAGE_RULE_COVERAGE_OF[rule],
         "coverage_definition": "aligned span / chain length, gaps included",
-        "evalue": "mmseqs easy-search default (1e-3), test chains as target DB",
-        "stage2_search": "mmseqs easy-search training (query) vs test (target) "
-        + " ".join(leakage_search_options()),
+        "min_bits": LEAKAGE_MIN_BITS,
+        "significance": f"bit score >= {LEAKAGE_MIN_BITS:g} (independent of the "
+        "search direction and the database size); mmseqs -e "
+        f"{LEAKAGE_SEARCH_EVALUE:g} only so that every such alignment is reported",
+        "directions": "both: training chains as queries against the test chains, "
+        "and test chains as queries against the training chains; a pair counts "
+        "when either search meets the criterion",
+        "stage2_search": "mmseqs easy-search training (query) vs test (target) and "
+        "test (query) vs training (target) " + " ".join(leakage_search_options()),
         "stage1_cluster": "mmseqs easy-cluster --min-seq-id 0.3 -c 0.8 "
         + " ".join(COMMON)
         + " (training + test together; unchanged by the rule)",
