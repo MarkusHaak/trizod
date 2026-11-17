@@ -7,8 +7,10 @@ Usage:
 
 Writes ``<baseline-dir>/<tier>.json`` for each stringency tier plus a
 ``PROVENANCE.json`` recording the scoring-code version and git revision that
-produced them. ``tests/test_full_dataset_regression.py`` reads that stamp and
-fails with a pointer back here when the baselines no longer match the code.
+produced them (``trizod.provenance.baseline_staleness`` reads that stamp).
+``tests/test_full_dataset_regression.py`` no longer needs these baselines: since
+the 2026-11-17b re-audit it compares a seeded, rule-aware subset against a named
+build's own ``scores.json`` (``TRIZOD_REGRESSION_BUILD``).
 
 This exists because the baselines are large, uncommitted, hand-regenerated
 artifacts read only by a test that is deselected by default: without a

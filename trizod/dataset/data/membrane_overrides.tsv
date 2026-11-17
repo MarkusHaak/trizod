@@ -1,9 +1,12 @@
 # Membrane-mimetic samples the class rule of trizod/bmrb/membrane.py cannot see:
 # no _Sample_component, _Sample.Type, _Sample.Details, _Sample.Solvent_system or
 # _Sample.Name of the chain's samples names the mimetic; only the entry title (or
-# the assembly name, the sample-condition details or the structure keywords) does.
+# the assembly name, the entry details, the sample-condition details, the
+# citation, the structure keywords, or a shift list's name or values) does.
 # Each row was reviewed against the raw NMR-STAR file of the 2026-11-11 snapshot
-# (release audit C8, 2026-11-17). Titles are never matched automatically.
+# (release audit C8, 2026-11-17; re-audit 2026-11-17b: 52446, 18557, 26857,
+# 15305_2_1_1, 51798_2_1_1 and the LPS rows). Titles are never matched
+# automatically.
 # id:     a BMRB entry ID (every chain of the entry) or a chain ID
 #         <entry>_<shift table>_<entity assembly>_<entity> (that chain only)
 # class:  a MIMETIC_CLASSES label of trizod/bmrb/membrane.py
@@ -17,45 +20,82 @@
 # 17720, 19713, 30180 (a keyword only, samples in buffer); and every title that
 # names a protein (lipid-transfer/-binding proteins, StAR lipid-transfer
 # domains, Sds3, lipid-free apoE).
+#
+# LPS policy (re-audit 2026-11-17b, item 4): lipopolysaccharide micelles and
+# bilayers are membrane mimetics, everywhere and consistently. An LPS sample
+# component, _Sample.Type or sample text is classified by the rule (class LPS in
+# trizod/bmrb/membrane.py), so no override is kept for it (20060, component
+# "YI12FF+LPS", was removed). The rows of class LPS below are LPS samples named
+# only outside the sample (title, assembly name, citation): peptide structures
+# from transferred-NOE (trNOESY) or bound-state spectra recorded on the one
+# deposited sample, which therefore holds the LPS.
+# Reviewed for LPS and NOT listed: 34778 (sample in 50 % TFE, no LPS), 11539
+# ("Tachyplesin I in water"), 18350 (citation only, aqueous sample), 4643 (TFE),
+# the anti-lipopolysaccharide factors (15622, 18363) and the Lpt LPS-transport
+# proteins (34699, 34716, 34720, 34773, 34802, 35025): proteins named after LPS.
 id	class	reason
+23	DPC	title: "Glucagon Bound to Perdeuterated Dodecylphosphocholine Micelles"
 1343	micelle	title: "Mitochondrial Signal Peptide Bound to a Micelle"; no sample component deposited
+2249	DPC	title: "Epidermal Growth Factor Bound to Perdeuterated Dodecylphosphocholine Micelles"
+6857_3_1_1	DPC	shift list 3 is recorded under sample conditions "conditions of FF2 in DPC" (study "MBP immunodomiant peptide in 100mM DPC-d38"), though its experiment cites the aqueous sample 1
+15305_2_1_1	DPC	shift list 2 cites experiment 1 (aqueous sample 1), but its shifts match the micelle lists: mean |dH| 0.027 ppm to list 3 (sample 3, 50 mM DPC) against 0.071 ppm to list 1; sample 2 is "CTX_A3_in_SGC_DPC_micelle" (45 mM DPC, 5 mM sulfatide)
+15413	LPS	title: "High resolution NMR structure of YW12D in the presence of Lipopolysaccharide (LPS)"; experiment "TOCSY, transferred-NOESY" on the one sample
+15460	LPS	title: "High resolution structure of AK12 in the presence of Lipopolysaccharide (LPS)"; trNOESY on the one sample
 15564	LPPG	title: "subunit c of E. coli F1F0 ATP synthase in LPPG micelles"
+15583	LPS	title: "Solution structure of N-terminal Fowlicidin-1 in the presence of LPS"; trNOESY on the one sample
+15667	LPS	title: "Solution structure of Fowlicidin-1 (LK19) in the presence of LPS"; trNOESY on the one sample
+15827	LPS	title: "MSI-594 ... in the presence of LPS"; citation: "Helical hairpin structure of a potent antimicrobial peptide MSI-594 in lipopolysaccharide micelles"; transferred NOESY on the one sample
 15921	micelle	assembly name: "a monomeric form in presence of detergent micelles"
 15933	DPC	title: "NOGO66 in DPC."; keyword "DPC micelle"
+15978	LPS	title: "Lipopolysaccharide Bound Structures of the Active Fragments of Fowlicidin-1"; keywords "LPS", "trNOE"
+15979	LPS	title: "Lipopolysaccharide Bound Structures of the Active Fragments of Fowlicidin-1"; keywords "LPS", "trNOE", "STD"
+15980	LPS	title: "Lipopolysaccharide Bound Structures of the Active Fragments of Fowlicidin-1"; keywords "LPS", "trNOE", "STD"
 16012	micelle	title: "BNIP3 transmembrane peptide dimer in detergent micelles"
 16074	micelle	title: "Solution structure of micelle-bound kalata B2"
 16726	bicelle	title: "in membrane bound form"; sample conditions: "membrane(15%) prepared from mixture of DMPC and DHPC in the ratio of 3:1"
 17424	micelle	title: "Integrin 1 in Detergent Micelles"; keyword "Detergent micelle"
+18557	OG	sample-condition details: "20 mM HEPES, 50 mM NaCl, 30 mM octyl-glucoside, pH 6.5" (above the 18 mM OG CMC); no sample component lists it
 18796	nanodisc	title and assembly name: "OmpX in phopspholipid nanodiscs"
 18817	micelle	title: "intact KCNE2 in detergent micelles"; keyword "detergent micelle"
 18958	bicelle	title: "The Integrin L Transmembrane Domain in Bicelles"
-19334	micelle	title and assembly name: "Temporin-1 Ta in lipopolysaccharide micelles"
+19334	LPS	title and assembly name: "Temporin-1 Ta in lipopolysaccharide micelles"
 19597	SDS	assembly name: "Ctrr_sds"; title: "model membrane interactions of Ctriporin"
 19941	DPC	title: "TM domain of LAMP-2A in DPC micelles"
 20044	SDS	title: "Interleukin-8 C-terminal domain in solution with SDS micelles"; keyword "micelle"
-20059	membrane	title: "designed peptide, YI12WY in the presence of LPS bilayer"
-20060	membrane	title: "designed peptide, YI12FF in the presence of LPS bilayer"; component "YI12FF+LPS"
+20057	LPS	title: "designed peptide, YI12WF in the presence of Lipopolysaccharide"; trNOESY on the one sample
+20058	LPS	title: "designed peptide, YI12WW in the presence of Lipopolysaccharide"; trNOESY on the one sample
+20059	LPS	title: "designed peptide, YI12WY in the presence of LPS bilayer"
 20124	DPC	keywords "Dodecylphosphocholine", "Micelles"; title: "lipid interactions of an Apolipoprotein J peptide"
 20125	DPC	title: "DPC micelle bound VK22"; assembly name "VK22 in DPC micelles"
 21019	DPC	keyword "Peptide/DPC"; title: "localization and vesicle fusion of Chikungunya Virus Fusion Peptide"
-2249	DPC	title: "Epidermal Growth Factor Bound to Perdeuterated Dodecylphosphocholine Micelles"
-23	DPC	title: "Glucagon Bound to Perdeuterated Dodecylphosphocholine Micelles"
+25335	LPS	title and assembly name: "VG16KRKP, an antimicrobial peptide in LPS"
 25684	DPC	title: "LIPID DROPLET ANCHORING PEPTIDE OF CGI-58 BOUND TO DPC MICELLES"
 25729	DPC	title: "EGFR transmembrane and juxtamembrane domains in DPC micelles"; keyword "micelles"
-26036	micelle	title: "KYE21 structure in LPS micelles"
-26037	micelle	assembly name: "RWS21 in LPS micelles"
+25749	LPS	citation: "... Structural insights into lipopolysaccharide binding"; trNOESY on the one sample (C4VG16KRKP)
+25751	LPS	citation: "... Structural insights into lipopolysaccharide binding"; trNOESY on the one sample (VG16KRKP dimer)
+25769	LPS	title: "Esculentin-1a[Esc(1-21)NH2] in Lipopolysaccharide"; citation: "NMR structure and binding of esculentin-1a (1-21)NH2 ... to lipopolysaccharide"
+25877	LPS	title: "Solution structure of cecropin P1 with LPS"; assembly name "cecropin P1 with LPS"; citation: "Lipopolysaccharide-bound structure of the antimicrobial peptide cecropin P1"
+25946	LPS	title: "Structural insights into interaction of KYE28 and lipopolysachharide" (sic); assembly name "KYE28 and lipopolysachharide"
+25947	LPS	title and assembly name: "KYE28A in lipopolysachharide" (sic)
+26036	LPS	title: "KYE21 structure in LPS micelles"
+26037	LPS	assembly name: "RWS21 in LPS micelles"
+26038	LPS	title: "WWWKYE21 structure in LPS"; assembly name "WWWKYE21 in LPS"; same sample composition as 26036 ("KYE21 structure in LPS micelles")
 26049	liposome	title and assembly name: "DK17 IN GM1 LUVS"
 26050	liposome	title and assembly name: "DK17 IN POPC:POPG:CHOLESTEROL:GM1 LUVS"
 26554	SDS	title: "K2 dehydrin in the presence of SDS micelles"
+26857	bicelle	integral membrane protein LspA (lipoprotein signal peptidase) with globomycin; citation: "From Nanodiscs to Isotropic Bicelles: A Procedure for Solution NMR Studies of Detergent-Sensitive Integral Membrane Proteins"; the deposited sample lists protein and acetate buffer only (probable)
 27107	DPC	title: "complexin-1 CTD in the presence of dodecylphosphocholine micelles"; sample conditions: "with ~55 mM dodecylphosphocholine (DPC)"
 30761	DPC	title: "NMR structure of Ost4 in DPC micelles"
 30834	DPC	title: "Nav1.5 DIV S3b-S4a paddle motif in DPC micelle"
 34645	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
 34646	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
 34647	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
+36149	LPS	title: "LPS bound solution structure of WS2-KG18"; trNOESY on the one sample
+36150	LPS	title: "LPS bound solution NMR structure of WS2-VR18"; trNOESY on the one sample
 36347	SDS	title: "VV14 peptide in the presence of Deuterated SDS micelle"; keyword "SDS micelle"
 36384	DPC	title: "NERP-2 in a DPC solution"
 36450	bicelle	title and assembly name: "Escherichia coli Total Lipid Extract Bicelle bound VR18 Antimicrobial Peptide"
-36451	bicelle	title and assembly name: "Pseudomonas aeruginosa Lipopolysaccharide (LPS) Bicelle bound VR18"
+36451	LPS	title and assembly name: "Pseudomonas aeruginosa Lipopolysaccharide (LPS) Bicelle bound VR18"
 50744	nanodisc	title: "Nanodisc reconstitution of flavin mononucleotide binding domain"; assembly name "Protein-lipid-nanodisc"
-6857_3_1_1	DPC	shift list 3 is recorded under sample conditions "conditions of FF2 in DPC" (study "MBP immunodomiant peptide in 100mM DPC-d38"), though its experiment cites the aqueous sample 1
+51798_2_1_1	SDS	shift list 2 is named "N-terminal disordered domain of Tetrahymena telomerase protein p65 with SDS", like sample 2 (25 mM SDS), but its experiments cite only sample 1
+52446	DPC	_Entry.Details: "1H 13C 15N Backbone assignment and 19F-Phe assignment of the SARS-CoV-2 Fusion Domain mutant K825A in DPC micelle at pH5.0"; the samples list no DPC

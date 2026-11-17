@@ -639,3 +639,107 @@ def test_a_crashing_frame_generator_leaves_no_truncated_parquet(tmp_path):
         write_shift_parquet(frames(), out, mad_reference=MAD_REFERENCE)
     assert not out.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+# --------------------------------------------------------------------------- #
+# counts computed from the data, and the release restamp (audit 2026-11-17b)
+# --------------------------------------------------------------------------- #
+
+#: TOY_SHIFTS plus a phosphoserine (excluded) and a partial-occupancy pair
+#: (two values for LEU 2 CD1) and a same-value repeat under another code.
+TOY_SHIFTS_EXTRA = [
+    *TOY_SHIFTS,
+    ("1", "1", "3", "SEP", "CA", "C", "56.00", "0.10", "1"),
+    ("1", "1", "2", "LEU", "CD1", "C", "24.90", "0.20", "1"),
+    ("1", "1", "3", "PHE", "N", "N", "120.40", "0.20", "2"),
+]
+
+
+def test_shift_stats_count_exclusions_and_repeated_keys():
+    from trizod.shifts import ShiftTableStats
+
+    stats = ShiftTableStats()
+    stats.add_raw("1_1_1_1", TOY_SHIFTS_EXTRA)
+    df = annotate_mad(
+        annotate_offsets(
+            get_deposited_shifts(TOY_SHIFTS_EXTRA, TOY_SEQ), chain_offsets(TOY_RECORD)
+        ),
+        MAD_REFERENCE,
+    )
+    stats.add_frame("1_1_1_1", df)
+    c = stats.counts()
+    assert c["rows"] == len(df) == len(TOY_SHIFTS_EXTRA) - 1  # SEP excluded
+    assert c["chains"] == 1
+    assert c["backbone_rows"] + c["sidechain_rows"] == c["rows"]
+    assert c["not_covered"]["values"] == 1
+    assert c["not_covered"]["deposited_values"] == len(TOY_SHIFTS_EXTRA)
+    assert c["not_covered"]["most_frequent"] == {"SEP": 1}
+    dup = c["duplicate_keys"]
+    assert dup["same_value"] == 1 and dup["different_value"] == 1
+    assert dup["different_value_by_chain"] == {"1_1_1_1": 1}
+    meta = stats.metadata()
+    assert f"1 of the {len(TOY_SHIFTS_EXTRA)} deposited values" in meta["not_covered"]
+    assert "most often SEP" in meta["not_covered"]
+    ku = meta["key_uniqueness"]
+    assert "1 keys repeat the same value" in ku and "1 keys carry two" in ku
+    assert "partial-occupancy" in ku and "1_1_1_1" in ku
+
+
+def test_static_metadata_admits_both_kinds_of_repeated_keys():
+    from trizod.shifts import PARQUET_METADATA
+
+    ku = PARQUET_METADATA[b"key_uniqueness"].decode()
+    assert "partial-occupancy" in ku and "different Ambiguity_codes" in ku
+    nc = PARQUET_METADATA[b"not_covered"].decode()
+    assert not any(ch.isdigit() for ch in nc), "no typed count in not_covered"
+
+
+def test_restamp_adds_release_keys_and_counts_and_keeps_the_data(tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    import json
+
+    from trizod.shifts import (
+        RELEASE_KEYS,
+        ShiftTableStats,
+        iter_file_frames,
+        restamp_shift_parquet,
+        write_shift_parquet,
+    )
+    from trizod.shifts.parquet import data_fingerprint_streamed
+
+    frames = [(f"{i}_1_1_1", _toy_table()) for i in range(1000, 1007)]
+    stats = ShiftTableStats()
+    path, n_rows = write_shift_parquet(
+        frames,
+        tmp_path / "s.parquet",
+        batch_rows=40,  # several row groups, chains spanning two of them
+        compression_level=1,
+        mad_reference=MAD_REFERENCE,
+        stats=stats,
+    )
+    assert pq.ParquetFile(path).num_row_groups > 1
+    before = data_fingerprint_streamed(path)
+    # the counts read back from the file equal those accumulated while writing
+    again = ShiftTableStats()
+    seen = []
+    for cid, df in iter_file_frames(path):
+        again.add_frame(cid, df)
+        seen.append(cid)
+    assert seen == [cid for cid, _ in frames]
+    assert again.counts()["rows"] == stats.counts()["rows"] == n_rows
+    assert again.counts()["offset_source"] == stats.counts()["offset_source"]
+
+    release = {
+        "dataset_version": "0.4.0",
+        "license": "CC BY 4.0",
+        "code_commit": json.dumps({"commit": "c" * 40}),
+        "bmrb_snapshot": json.dumps({"name": "snap"}),
+    }
+    restamp_shift_parquet(path, {**release, **stats.metadata()})
+    meta = pq.read_schema(path).metadata
+    for key in RELEASE_KEYS:
+        assert key.encode() in meta, key
+    assert json.loads(meta[b"counts"])["rows"] == n_rows
+    assert b"correction_formula" in meta and b"mad_reference" in meta
+    assert (pq.read_schema(path).field("val_ppm").metadata or {})[b"unit"] == b"ppm"
+    assert data_fingerprint_streamed(path) == before

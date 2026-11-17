@@ -128,6 +128,7 @@ Two more reasons retire a chain that is still strict (release audit
 | `not_strict` | the pinned sequence is no longer in the strict pool (above) |
 | `chezod117_overlap` | the chain meets the leakage criterion (§4: ≥ 30 % identity over ≥ 80 % of either chain, ≥ 27 bits, either search direction) against a CheZOD117 sequence — a released CheZOD117 chain or one of the 117 original sequences (§4). `19481_1_1_1` contains CheZOD117 `19482` as an exact 91-residue substring, so the two test sets overlapped |
 | `within_test_duplicate` | the remaining test chains are searched against each other at ≥ 50 % identity over ≥ 80 % of **either** chain (the coverage the release uses everywhere else; until 2026-11-17 within-test redundancy was controlled only at both-chain coverage by the 50 %/80 % recluster of the draw). Of every such pair the shorter chain is retired — the contained one for an exact substring (`6439_1_1_1` inside `6440_1_1_1`), the lower entry ID kept on a tie — greedily from the longest chain down, so no two remaining test chains form a pair and no chain is retired for a partner that is itself retired |
+| `shared_construct` | a reviewed decision, not a rule (re-audit 2026-11-17b, E26): the chain meets no leakage criterion on its deposited sequence but is a near-copy of training chains once its expression tag or fusion partner is set aside, so its labels are largely training labels. The chains, their training partners and the evidence are listed in `trizod/dataset/data/test_retirements.tsv` |
 
 Every retired chain, whatever the reason, stays a leakage target; the test set
 only shrinks. The per-chain hits are recorded in `build_test_set_summary.json`
@@ -331,16 +332,36 @@ and the shift table; the deploy FASTA, regenerated from the bundle; the UdonPred
 v2 JSONL view and the test-set crosswalk, generated from the Parquet; the test
 FASTAs (including the retired chains and the 117 original CheZOD117 sequences)
 with the labels table and the pin provenance; `class_balance.tsv`;
-`bmrb_files.sha256` (the SHA-256 of every snapshot entry file); the README,
+`known_issues.tsv` (one row per chain and issue: `chain_id`, `issue`,
+`evidence`); `bmrb_files.sha256` (the SHA-256 of every snapshot entry file);
+`VALIDATION.json` of the final audit when given (`--validation`); the README,
 datasheet and CHANGELOG rendered from the templates in `docs/dataset/` with the
 build's own counts; `columns.md`, `LICENSE.md`, `CITATION.cff` and
 `zenodo.json`; and one `MANIFEST.json` over every file (SHA-256, size, row and
-chain counts, version, licence, build and finalize commits, snapshot and
-cross-reference-source hashes, cuts, calibration and threshold-framework commit,
-leakage rule) plus `SHA256SUMS`. It refuses a Parquet without calibration, test
-FASTAs that disagree with the Parquet, and a snapshot whose file count differs
-from the one the Parquet names; the same inputs and output path give
-byte-identical files.
+chain counts, version and version DOI, licence, the scoring commit apart from
+the build and finalize commits, snapshot and cross-reference-source hashes,
+cuts, calibration and threshold-framework commit, leakage rule, known-issue
+counts; `total_bytes` covers every file but `MANIFEST.json` and `SHA256SUMS`)
+plus `SHA256SUMS`.
+
+The CHANGELOG's changes and known issues and `known_issues.tsv` are computed
+(`trizod.dataset.known_issues`), never typed: tier moves by rule, the 273 K
+re-score statistics and sequence changes against the previous build
+(`--previous-build <its package bundle>`); pH* / pD readings, temperatures
+read as Celsius or Fahrenheit and pressures without a unit from the build's
+`BmrbEntry` pickles (`--pkl-dir`); snapshot drift and construct caveats from
+the audit's tables (`--snapshot-drift`, `--construct-caveats`); the pin's
+trimmed chains from its provenance; the reviewed chains of
+`docs/dataset/known_issues_reviewed.tsv` (each checked to be in the release).
+A missing input renders as "not assessed".
+
+Finalize refuses a Parquet without calibration, test FASTAs that disagree with
+the Parquet, a Parquet whose scoring commit differs from the bundle's, a
+snapshot whose file count differs from the one the Parquet names, and any
+shipped file that still names an absolute path of the build machine (the deploy
+summary, crosswalk and UdonPred export summary record deposit-, bundle- or
+repo-relative paths after finalize rewrites them). The same inputs give
+byte-identical files in any output folder.
 
 ## 7. How training is separated from the test sets
 
@@ -416,8 +437,24 @@ uv run --with pyarrow python scripts/build_parquet_dataset.py \
     --bmrb-dir <snapshot> --xref-sources <xref dir> --calibration <framework dir>
 uv run --with pyarrow trizod dataset finalize --parquet <trizod_dataset.parquet> \
     --shifts <trizod_shifts.parquet> --bundle <bundle> --bmrb-dir <snapshot> \
-    --out <release dir> --crosswalk-root <checkout holding data/>
+    --out <release dir> --crosswalk-root <checkout holding data/> \
+    --previous-build <previous build's bundle> --pkl-dir <the build's tmp/bmrb_entries> \
+    [--snapshot-drift <TSV>] [--construct-caveats <TSV>] [--validation <VALIDATION.json>] \
+    [--calibration-input <the Parquet the framework calibrated on>]
+# refresh an existing shift table's metadata (release keys, counts) without rebuilding it
+uv run --with pyarrow python scripts/build_parquet_dataset.py --in-bundle <bundle> \
+    --restamp-shifts <trizod_shifts.parquet> --pkl-dir <the build's tmp/bmrb_entries> \
+    --bmrb-dir <snapshot>
 ```
+
+The test gate is `uv run --with pyarrow python -m pytest tests/`. Keep the
+`python -m`: with uv 0.13.8 a bare `uv run --with pyarrow pytest` skipped the
+Parquet tests silently (release audit 2026-11-17b, A2). The
+data-backed tests read `TRIZOD_DATA_ROOT` (a checkout holding `data/`) and
+`TRIZOD_BMRB_DIR` (the snapshot); `tests/test_full_dataset_regression.py`
+(`-m slow`, `TRIZOD_REGRESSION_BUILD=<a build under data/interim>`) re-scores a
+seeded, rule-aware subset of that build's snapshot and compares every field
+with the build's `scores.json`.
 
 `scripts/build_mad_reference.py` regenerates the far-outlier reference from a
 shift table. It is **not** part of a routine build: the committed reference is

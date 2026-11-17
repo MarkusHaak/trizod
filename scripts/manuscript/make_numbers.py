@@ -1947,6 +1947,12 @@ def sec_test_sets(C):
             "against a CheZOD117 sequence",
         ),
         (
+            "nRetiredSharedConstruct",
+            "shared_construct",
+            "shares its labelled construct with a training chain once tags are removed "
+            "(reviewed table trizod/dataset/data/test_retirements.tsv)",
+        ),
+        (
             "nRetiredWithinTestDuplicate",
             "within_test_duplicate",
             "the shorter of two TriZOD test chains at >= 50 % identity over >= 80 % of "

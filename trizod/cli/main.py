@@ -526,11 +526,21 @@ def _dataset_testset(
             "every released version and with anything already trained on them."
         ),
     ),
+    retirements: str | None = typer.Option(
+        None,
+        "--retirements",
+        help=(
+            "Reviewed retirement table: pinned test chains retired by decision "
+            "(default: the committed trizod/dataset/data/test_retirements.tsv)."
+        ),
+    ),
 ):
     """Emit the pinned TriZOD test set (-> testset/); --redraw re-establishes the pin."""
     from trizod.dataset import testset
 
     argv = _wd_argv(work_dir, root)
+    if retirements is not None:
+        argv += ["--retirements", retirements]
     if redraw:
         argv.append("--redraw")
     # Without this the guard in testset.main() is unreachable from the supported
@@ -637,7 +647,10 @@ def _dataset_export_jsonl(
     valid_fraction: float | None = typer.Option(
         None,
         "--valid-fraction",
-        help="Fraction of each tier's clusters drawn into valid (default: 0.10).",
+        help=(
+            "Fraction of each tier's homology components drawn into valid "
+            "(default: 0.10)."
+        ),
     ),
     seed: int | None = typer.Option(
         None, "--seed", help="Seed of the valid draw (default: 42)."
@@ -723,9 +736,48 @@ def _dataset_finalize(
         "(dry runs only).",
     ),
     force: bool = typer.Option(False, "--force", help="Replace a non-empty --out."),
+    previous_build: str | None = typer.Option(
+        None,
+        "--previous-build",
+        help="Previous build's package bundle: tier moves, re-score statistics "
+        "and sequence changes against it.",
+    ),
+    previous_label: str | None = typer.Option(
+        None, "--previous-label", help="How the CHANGELOG names --previous-build."
+    ),
+    pkl_dir: str | None = typer.Option(
+        None,
+        "--pkl-dir",
+        help="The build's BmrbEntry pickle cache: pH*/pD, temperature and "
+        "pressure-unit issues per chain.",
+    ),
+    snapshot_drift: str | None = typer.Option(
+        None, "--snapshot-drift", help="Snapshot-drift table of the release audit."
+    ),
+    construct_caveats: str | None = typer.Option(
+        None,
+        "--construct-caveats",
+        help="Construct / sample caveat table of the release audit (class, id).",
+    ),
+    ionic_drivers: str | None = typer.Option(
+        None,
+        "--ionic-drivers",
+        help="Ionic-strength driver log of the release audit.",
+    ),
+    scoring_commit: str | None = typer.Option(
+        None,
+        "--scoring-commit",
+        help="Commit that scored the entries (default: the bundle's pipeline_version).",
+    ),
+    calibration_input: str | None = typer.Option(
+        None,
+        "--calibration-input",
+        help="The Parquet the threshold framework calibrated on.",
+    ),
 ):
     """Assemble the deposit: Parquet, views, crosswalk, test FASTAs, rendered
-    docs, class balance, snapshot hashes, MANIFEST.json and SHA256SUMS."""
+    docs, class balance, known issues, snapshot hashes, MANIFEST.json and
+    SHA256SUMS."""
     from trizod.dataset import finalize
 
     argv = [
@@ -752,4 +804,16 @@ def _dataset_finalize(
         argv.append("--allow-calibration-mismatch")
     if force:
         argv.append("--force")
+    for flag, value in (
+        ("--previous-build", previous_build),
+        ("--previous-label", previous_label),
+        ("--pkl-dir", pkl_dir),
+        ("--snapshot-drift", snapshot_drift),
+        ("--construct-caveats", construct_caveats),
+        ("--ionic-drivers", ionic_drivers),
+        ("--scoring-commit", scoring_commit),
+        ("--calibration-input", calibration_input),
+    ):
+        if value is not None:
+            argv += [flag, value]
     finalize.main(argv)

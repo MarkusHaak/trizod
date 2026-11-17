@@ -6,7 +6,11 @@ of the entry if it references none) meets one of three conditions:
 
 (a) **bilayer** -- a bilayer-forming phospholipid or bilayer assembly, at any
     concentration: diacyl or ether PC, PG, PE, PS or PA with chains >= C10,
-    cardiolipin, lipid extracts, bicelles, nanodiscs/MSP, liposomes/vesicles;
+    cardiolipin, lipid extracts, bicelles, nanodiscs/MSP, liposomes/vesicles,
+    and lipopolysaccharide (LPS) micelles and bilayers, the outer-membrane
+    mimetics of the antimicrobial-peptide depositions (re-audit 2026-11-17b,
+    C8: one LPS policy, by rule; overrides only where the LPS is named outside
+    the sample);
 (b) **micelle** -- a dedicated micelle former, at any concentration: SDS,
     alkylphosphocholines (DPC, FC-10/12/14/16), lysophospholipids (LMPG, LPPG,
     lyso-PC), short-chain phospholipids (DHPC 06:0, 07:0, 08:0), LDAO, lauroyl
@@ -30,7 +34,9 @@ sample also holds an n-alkanol, or is of ``_Sample.Type`` "liquid crystal"
 without any phospholipid.
 
 Not mimetics, whatever the name suggests: bile-acid ligands (cholate,
-glycochenodeoxycholate), acyl-CoA, lysozyme, lipid II, sarcosine itself. A
+glycochenodeoxycholate), acyl-CoA, lysozyme, lipid II, sarcosine itself,
+anti-lipopolysaccharide factors and proteins of LPS binding, transport,
+export or assembly (LBP, LptA, LptD). A
 mixture deposited as one component name ("DMPC/DHPC", "DMPC+CHAPS") is
 classified part by part; each part is assigned the first class of
 ``MIMETIC_CLASSES`` whose pattern it matches.
@@ -113,6 +119,13 @@ class MimeticClass:
 _NOT_AFTER = r"(?<![a-z])"
 _NOT_BEFORE = r"(?![a-z])"
 _PHOSPHOCHOLINE = r"[\s-]*phos(?:pho-?ryl|pho|ph)?-?c(?:h)?olin"
+#: Lipopolysaccharide, also as the acronym glued to a peptide name ("WR17_LPS",
+#: "YI12FF+LPS", "CDT-LPS"), but not an anti-LPS factor or a protein of LPS
+#: binding, transport, export or assembly (LBP, the Lpt machinery).
+_LPS = (
+    r"(?<![a-z])(?<!anti-)(?<!anti )(?:lps|lipopolysacch?arides?)(?![a-z0-9])"
+    r"(?![\s_-]*(?:binding|transport|export|assembly|sensing))"
+)
 
 #: THE class table: regex -> (label, kind, CMC in water, molar mass). Order is
 #: precedence -- the first pattern that matches a component name decides its
@@ -285,6 +298,11 @@ MIMETIC_CLASSES: tuple[MimeticClass, ...] = (
         rf"liposom|vesicle|{_NOT_AFTER}[sl]uvs?{_NOT_BEFORE}",
     ),
     MimeticClass("amphipol", BILAYER, None, None, r"amphipol"),
+    # Lipopolysaccharide micelles and bilayers, the outer-membrane mimetics of
+    # the antimicrobial-peptide depositions (re-audit 2026-11-17b, C8): any
+    # concentration, like every bilayer lipid. After the assemblies, so "LPS
+    # micelles" and "lipopolysaccharide bicelle" keep their assembly label.
+    MimeticClass("LPS", BILAYER, None, None, _LPS),
     # A name (or a _Sample.Type) that is just a membrane: "membrane", "lipid
     # membranes", "oriented membrane film". Anchored, so "outer membrane
     # protein A" or a "membrane protein" sample type are not one.
@@ -353,6 +371,7 @@ EXPLICIT_MIMETIC = re.compile(
     r"|(?:dodecyl|lauryl)[\s-]*sul[fp]"
     rf"|dodec[a-z]*{_PHOSPHOCHOLINE}"
     r"|(?<![a-z0-9])(?:d(?:m|p|l|o|s|ph)|po|so)p[cges](?![a-z0-9])"
+    rf"|{_LPS}"
 )
 
 #: A reverse micelle encapsulates a protein in its water pool (calmodulin in

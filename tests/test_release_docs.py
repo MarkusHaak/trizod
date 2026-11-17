@@ -122,3 +122,38 @@ def test_package_and_cli_default_to_the_dataset_version():
     assert package_release.DEFAULT_VERSION == ri.DATASET_VERSION
     src = (ROOT / "trizod" / "cli" / "main.py").read_text()
     assert '"2026-07"' not in src
+
+
+def test_citation_cff_matches_zenodo_and_lists_every_version_doi():
+    """Re-audit 2026-11-17b, G36: CITATION.cff describes the dataset, points to
+    the deposit's LICENSE.md, lists the version DOIs and agrees with
+    .zenodo.json on the title and the affiliations."""
+    text = (ROOT / "CITATION.cff").read_text()
+    zen = json.loads((ROOT / ".zenodo.json").read_text())
+    assert f'title: "{zen["title"]}"' in text
+    assert "LICENSE.md" in text and "see LICENSE)" not in text
+    assert "the code in this repository" not in text
+    for creator in zen["creators"]:
+        assert f'affiliation: "{creator["affiliation"]}"' in text, creator["name"]
+    assert finalize.version_doi(text, "0.2.0") == "10.5281/zenodo.21309964"
+    assert finalize.version_doi(text, "0.3.0") == "10.5281/zenodo.21381698"
+    # v0.4.0: the placeholder until the Zenodo draft reserves the DOI
+    doi = finalize.version_doi(text, ri.DATASET_VERSION)
+    assert doi is None or doi.startswith("10.5281/zenodo.")
+
+
+def test_readme_states_the_current_version_and_the_test_gate():
+    text = (ROOT / "README.md").read_text()
+    assert f"v{ri.DATASET_VERSION}" in text
+    assert "is v0.3.0" not in text and "latest version v0.3.0" not in text
+    assert "uv run --with pyarrow python -m pytest tests/" in text
+
+
+def test_docs_type_no_tier_counts_of_a_build():
+    """docs/filtering.md states no tier sizes (they live in each release's
+    CHANGELOG), and nothing says the build-internal scores.json holds nulls."""
+    filtering = (ROOT / "docs" / "filtering.md").read_text()
+    assert "11,305 → 10,811" not in filtering and "4,245 → 3,957" not in filtering
+    for path in [*TEMPLATES, DOCS / "columns.md"]:
+        assert "null in scores.json" not in path.read_text(), path
+        assert "null in `scores.json`" not in path.read_text(), path

@@ -1,10 +1,11 @@
 cff-version: 1.2.0
-title: "TriZOD: Re-referenced BMRB chemical shift dataset and disorder scoring pipeline"
+title: "TriZOD — Re-referenced BMRB chemical-shift dataset for protein disorder"
 message: >-
-  If you use the TriZOD dataset, please cite it as below. The dataset is
-  licensed CC BY 4.0; the code in this repository is MIT (see LICENSE).
-  The data derive from BMRB entries (https://bmrb.io); please also
-  acknowledge the BMRB.
+  If you use the TriZOD dataset, please cite it as below, with the version DOI
+  of the record you downloaded. The dataset is licensed CC BY 4.0 (see
+  LICENSE.md in the deposit); the code that builds it is MIT
+  (https://github.com/tsenoner/trizod). The data derive from BMRB entries
+  (https://bmrb.io); please also acknowledge the BMRB.
 type: dataset
 abstract: >-
   Per-residue protein-disorder labels (the continuous TriZOD G-score) from
@@ -35,7 +36,7 @@ authors:
     affiliation: "TUM School of Computation, Information and Technology, Technical University of Munich, Germany"
   - family-names: Alderson
     given-names: Reid
-    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany"
+    affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany; Bavarian NMR Center, Technical University of Munich, Garching, Germany"
 repository-code: "https://github.com/tsenoner/trizod"
 url: "https://doi.org/10.5281/zenodo.21309963"
 doi: 10.5281/zenodo.21309963
@@ -46,6 +47,15 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.21309964
     description: "TriZOD dataset v0.2.0"
+  - type: doi
+    value: 10.5281/zenodo.21381698
+    description: "TriZOD dataset v0.3.0"
+  # v0.4.0: replace the placeholder below with the version DOI reserved on the
+  # Zenodo draft, then re-run `trizod dataset finalize` (it warns while the
+  # placeholder is here and records no version DOI in MANIFEST.json)
+  - type: doi
+    value: 10.5281/zenodo.RESERVE-AT-DRAFT
+    description: "TriZOD dataset v0.4.0 (placeholder until the Zenodo draft reserves its DOI)"
 license: CC-BY-4.0
 version: "0.4.0"
 keywords:

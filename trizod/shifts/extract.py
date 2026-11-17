@@ -78,14 +78,19 @@ def iter_chains(ids, pkl_dir, bmrb_dir=None, progress_every=2000):
                 yield (cid, *chains[cid])
 
 
-def iter_shift_frames(ids, pkl_dir, bmrb_dir=None, progress_every=2000):
+def iter_shift_frames(ids, pkl_dir, bmrb_dir=None, progress_every=2000, stats=None):
     """Yield ``(chain_id, DataFrame)`` for ``ids``, in sorted ``id`` order.
 
     Chains whose table fails a sequence-consistency guard are skipped, so the
     released table has no empty groups (it still joins into the main table).
+    ``stats`` (a :class:`trizod.shifts.parquet.ShiftTableStats`) counts the raw
+    values of every yielded chain, among them those on non-canonical residues
+    that the extraction excludes.
     """
     for cid, seq, shifts in iter_chains(ids, pkl_dir, bmrb_dir, progress_every):
         df = get_deposited_shifts(shifts, seq)
         if df is None or df.empty:
             continue
+        if stats is not None:
+            stats.add_raw(cid, shifts)
         yield cid, df

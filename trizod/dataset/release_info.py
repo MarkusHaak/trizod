@@ -132,6 +132,53 @@ def cut_label(c: float) -> str:
 # --------------------------------------------------------------------------- #
 
 
+#: What each ``retired_reason`` means. A reason the build emits that is not
+#: listed here is still counted and named everywhere (README, CHANGELOG,
+#: metadata); it is only explained as undescribed until an entry is added.
+RETIRED_REASONS = {
+    "not_strict": (
+        "it no longer meets the strict tier (mostly the 2026-11 condition rules)"
+    ),
+    "chezod117_overlap": (
+        "it meets the leakage criterion against a CheZOD117 sequence, so the two "
+        "test sets would overlap"
+    ),
+    "within_test_duplicate": (
+        "it is the shorter chain of a pair of test chains at >= 50 % identity "
+        "over >= 80 % of either chain"
+    ),
+    "shared_construct": (
+        "a reviewed decision, not a rule: it meets no leakage criterion on its "
+        "deposited sequence, but is a near-copy of training chains once its "
+        "expression tag or fusion partner is set aside, so its labels are "
+        "largely training labels (trizod/dataset/data/test_retirements.tsv of "
+        "the code repository lists the chains, partners and evidence)"
+    ),
+}
+
+
+def describe_retired_reason(reason: str) -> str:
+    """The meaning of one ``retired_reason`` (:data:`RETIRED_REASONS`)."""
+    return RETIRED_REASONS.get(
+        reason, "no description recorded in trizod.dataset.release_info"
+    )
+
+
+def retired_semantics(reasons=None) -> str:
+    """The ``test_retired_semantics`` text, explaining every reason in
+    ``reasons`` (default: :data:`RETIRED_REASONS`) and any other it is given."""
+    names = list(RETIRED_REASONS)
+    names += [r for r in (reasons or ()) if r not in RETIRED_REASONS]
+    explained = "; ".join(f"{r} ({describe_retired_reason(r)})" for r in names)
+    return (
+        "split test_retired: a pinned TriZOD test chain that is no longer tested "
+        f"on, for the reason in retired_reason: {explained}. It is not in the "
+        "TriZOD test set, but it stays a leakage target, so it and its homologues "
+        "are excluded from every training set exactly as with the full pin; the "
+        "test set only shrinks"
+    )
+
+
 def testset_label(n_test: int, n_retired: int) -> str:
     """``TriZOD-test v1.0 (n = 405; 47 retired chains)``."""
     return f"{TEST_SET_NAME} (n = {n_test}; {n_retired} retired chains)"
@@ -204,6 +251,76 @@ def code_commit(repo=None, path: str | None = None) -> dict | None:
     if not commit:
         return None
     return {"commit": commit, "dirty": bool(dirty)}
+
+
+#: What the scoring commit did. The release has two commits: the one that
+#: scored the entries and ran the dataset chain into the package bundle
+#: (recorded there as ``pipeline_version``), and the one that built the Parquet
+#: and assembled the deposit (``code_commit``, ``code.finalize``).
+SCORING_SCOPE = (
+    "scored every BMRB entry of the snapshot (trizod score, all four tiers) "
+    "and ran the dataset chain (trizod dataset build, test-set, redundancy, "
+    "representatives, package) that wrote the package bundle the release is "
+    "built from: the labels, tiers, splits and the shift table's offsets come "
+    "from it"
+)
+
+
+def scoring_block(pipeline_version: str | None, repo=None) -> dict:
+    """The scoring commit of a package bundle, from its ``pipeline_version``
+    (``trizod-<short sha>[-dirty]``) or an explicit commit: the full SHA when
+    this checkout knows the commit, the label as recorded, and the scope."""
+    label = (pipeline_version or "").strip()
+    short = label.removeprefix("trizod-")
+    dirty = short.endswith("-dirty")
+    short = short.removesuffix("-dirty")
+    full = None
+    if short:
+        if repo is None:
+            repo = Path(__file__).resolve().parents[2]
+        try:
+            full = _git(repo, "rev-parse", "--verify", "--quiet", f"{short}^{{commit}}")
+        except (OSError, subprocess.CalledProcessError):
+            full = None
+    return {
+        "commit": full or (short or None),
+        "dirty": dirty if short else None,
+        "pipeline_version": label or None,
+        "scope": SCORING_SCOPE,
+    }
+
+
+def bundle_pipeline_version(bundle) -> str | None:
+    """``pipeline_version`` of a package bundle's ``MANIFEST.json``, or None."""
+    try:
+        return json.loads((Path(bundle) / "MANIFEST.json").read_text()).get(
+            "pipeline_version"
+        )
+    except (OSError, ValueError):
+        return None
+
+
+def portable_path(path, roots=()) -> str | None:
+    """``path`` without the machine it was built on: relative to the first of
+    ``roots`` that contains it, else its file name. A root is a directory or a
+    ``(directory, label)`` pair whose label prefixes the relative path (e.g.
+    ``"<package bundle>/"``). None stays None; a relative path is returned
+    unchanged."""
+    if path is None:
+        return None
+    p = Path(str(path))
+    if not p.is_absolute():
+        return p.as_posix()
+    for root in roots:
+        root, label = root if isinstance(root, tuple) else (root, "")
+        if root is None:
+            continue
+        try:
+            rel = p.resolve().relative_to(Path(root).resolve()).as_posix()
+        except ValueError:
+            continue
+        return label + rel
+    return p.name
 
 
 SNAPSHOT_MANIFEST = "BMRB_SNAPSHOT.json"
@@ -327,7 +444,10 @@ def read_calibration(path, framework_commit: dict | None = None) -> dict:
         "framework_commit": framework_commit,
         "results_json": results.parent.name + "/" + results.name,
         "results_json_sha256": sha256_file(results),
-        "input_parquet": R.get("inputs", {}).get("release"),
+        # repo-relative (or the file name), never this machine's absolute path
+        "input_parquet": portable_path(
+            R.get("inputs", {}).get("release"), _data_roots()
+        ),
         "input_parquet_sha256": R.get("input_sha256", {}).get("release"),
         "rule": settings.get("rule"),
         "estimator": est,
@@ -349,6 +469,14 @@ def read_calibration(path, framework_commit: dict | None = None) -> dict:
         "replicate_agreement_by_k": replicates,
         "lr_curve": curve,
     }
+
+
+def _data_roots() -> list[Path]:
+    """Where a recorded input path may be made relative: the data root
+    (``$TRIZOD_DATA_ROOT``) and this checkout."""
+    from trizod import paths
+
+    return [paths.data_root(), paths.repo_root()]
 
 
 def read_lr_curve(path, estimator: str = "interp") -> dict | None:

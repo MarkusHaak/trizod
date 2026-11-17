@@ -40,7 +40,18 @@ chains as queries against the test chains, and test chains as queries against
 the training chains. The alignment score is symmetric, but the aligned span is
 not always: 26357_1_1_1 ~ CheZOD117 19135 covers 76 % of the training chain with
 the training chain as query and 80 % the other way round. A pair counts when
-either search meets the criterion. The same search serves the stage-2 removal
+either search meets the criterion.
+
+The criterion is applied to EVERY alignment mmseqs reports for a pair, not
+only to the best-scoring one: the search runs with ``--alt-ali``
+(``LEAKAGE_ALT_ALI``, up to 10 alternative alignments per pair besides the
+best). A repeat or a tandem construct can hold a second alignment that meets
+the rule while the best one does not (release re-audit 2026-11-17b, E20/E22:
+51068_1_1_1 ~ test 51080_1_1_1, best alignment 61.5 % over 49 % of 51068,
+second 43.1 % over 84 %; 4029_1_1_1 ~ 19298_1_1_1; 6280_1_1_1 ~ retired
+34124_1_1_1). mmseqs finds an alternative alignment after masking the target
+span of the previous one, so a pair can need either direction for its second
+alignment too. The same search serves the stage-2 removal
 in :mod:`trizod.dataset.redundancy`, the release gate in
 :mod:`trizod.dataset.package_release`, the test-set checks in
 :mod:`trizod.dataset.testset` and the CheZOD-overlap flags of the Parquet. The
@@ -119,6 +130,10 @@ FORWARD, REVERSE = "forward", "reverse"
 #: The within-test near-duplicate check (release audit E24): 50 % identity over
 #: 80 % of either chain, same search, same bit floor.
 WITHIN_TEST_MIN_SEQ_ID = 0.5
+#: mmseqs --alt-ali: alternative alignments reported per pair besides the best
+#: one; the criterion is applied to every reported alignment (re-audit
+#: 2026-11-17b, decision 1a). 10 is what the audit searched with.
+LEAKAGE_ALT_ALI = 10
 # No k-mer prefilter: at -s 7.5 it misses weak homologs (30-50 % identity) that
 # meet the criterion. Aligning every training x test pair costs seconds here.
 LEAKAGE_PREFILTER_MODE = 2
@@ -167,7 +182,8 @@ def describe_rule(rule: str) -> str:
     return (
         f">= {LEAKAGE_MIN_SEQ_ID * 100:g} % identity over "
         f">= {LEAKAGE_MIN_TEST_COV * 100:g} % of {LEAKAGE_RULE_COVERAGE_OF[rule]}"
-        f", >= {LEAKAGE_MIN_BITS:g} bits, either search direction"
+        f", >= {LEAKAGE_MIN_BITS:g} bits, either search direction, "
+        f"every reported alignment (--alt-ali {LEAKAGE_ALT_ALI})"
     )
 
 
@@ -206,11 +222,13 @@ def leakage_search_cmd(
 
     The forward search has the training chains as ``query_fa`` and the test
     chains as ``target_fa``; :func:`search_both_directions` adds the reverse.
-    ``--min-seq-id 0.3``, ``--cov-mode 1 -c 0`` and a permissive ``-e``; every
-    other option is the shared ``COMMON`` block. mmseqs gets no coverage
-    threshold, so it aligns every pair whatever the length ratio; the >= 80 %
-    coverage of the chosen rule and the bit floor are applied to the parsed
-    hits (:func:`is_leak`). The command is the same for every rule.
+    ``--min-seq-id 0.3``, ``--cov-mode 1 -c 0``, a permissive ``-e`` and
+    ``--alt-ali 10`` (every alternative alignment of a pair is reported, not
+    only the best); every other option is the shared ``COMMON`` block. mmseqs
+    gets no coverage threshold, so it aligns every pair whatever the length
+    ratio; the >= 80 % coverage of the chosen rule and the bit floor are
+    applied to every parsed alignment (:func:`is_leak`). The command is the
+    same for every rule.
     """
     return [
         "mmseqs",
@@ -223,8 +241,12 @@ def leakage_search_cmd(
     ]
 
 
-def leakage_search_options(min_seq_id: float = LEAKAGE_MIN_SEQ_ID) -> list[str]:
-    """The options of :func:`leakage_search_cmd` (everything after the paths)."""
+def leakage_search_options(
+    min_seq_id: float = LEAKAGE_MIN_SEQ_ID, alt_ali: int = LEAKAGE_ALT_ALI
+) -> list[str]:
+    """The options of :func:`leakage_search_cmd` (everything after the paths).
+    ``alt_ali=0`` drops ``--alt-ali`` (best alignment per pair only): for a
+    control, never for the release."""
     return [
         "--min-seq-id",
         str(min_seq_id),
@@ -235,6 +257,7 @@ def leakage_search_options(min_seq_id: float = LEAKAGE_MIN_SEQ_ID) -> list[str]:
         str(LEAKAGE_PREFILTER_MODE),
         "-e",
         f"{LEAKAGE_SEARCH_EVALUE:g}",
+        *(["--alt-ali", str(alt_ali)] if alt_ali else []),
         # amino acids, never auto-detected: a FASTA of a few short chains that
         # happen to hold only A/C/G/T (GAGA... peptides) reads as nucleotides
         "--dbtype",
@@ -395,8 +418,9 @@ def search_both_directions(
 
 
 def strongest_per_pair(hits) -> list[LeakageHit]:
-    """One hit per (training, test) pair -- the forward one when both searches
-    report it -- in first-seen order."""
+    """One hit per (training, test) pair, the first seen: the forward one when
+    both searches report it, and within a search the best-scoring of the
+    pair's alignments (mmseqs lists them best first)."""
     best: dict[tuple[str, str], LeakageHit] = {}
     for h in hits:
         best.setdefault((h.train_id, h.test_id), h)
@@ -412,13 +436,41 @@ def find_leaks(
     rule: str = DEFAULT_LEAKAGE_RULE,
     min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
 ) -> list[LeakageHit]:
-    """Every training/test pair that meets the leakage criterion of ``rule`` in
-    either search direction, one hit per pair (the forward one when both
-    searches qualify). ``out_tsv`` (forward) and its ``_reverse`` sibling keep
-    every alignment mmseqs reported, including those below the thresholds."""
+    """Every training/test pair with at least one reported alignment -- the
+    best or an alternative one, in either search direction -- that meets the
+    leakage criterion of ``rule``; one hit per pair, the first qualifying
+    alignment (forward before reverse, best-scoring first). ``out_tsv``
+    (forward) and its ``_reverse`` sibling keep every alignment mmseqs
+    reported, including those below the thresholds."""
     check_rule(rule)
     hits = search_both_directions(train_fa, test_fa, out_tsv, tmp, log, min_seq_id)
     return strongest_per_pair(h for h in hits if is_leak(h, rule))
+
+
+def find_self_leaks(
+    fa: Path,
+    out_tsv: Path,
+    tmp: Path,
+    log: Path,
+    rule: str = DEFAULT_LEAKAGE_RULE,
+    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
+) -> list[LeakageHit]:
+    """All-vs-all: every pair of distinct chains of ``fa`` with a reported
+    alignment -- the best or an alternative one -- that meets the leakage
+    criterion of ``rule``, one hit per unordered pair (the first qualifying
+    alignment). One search covers both directions: every chain is a query and
+    a target. In a hit the query is ``train_id`` and the target ``test_id``.
+    Used to keep the UdonPred validation split apart from training
+    (:mod:`trizod.dataset.export_jsonl`)."""
+    check_rule(rule)
+    Path(tmp).mkdir(parents=True, exist_ok=True)
+    run(leakage_search_cmd(fa, fa, out_tsv, tmp, min_seq_id), log)
+    check_evalue_headroom(out_tsv, fa)
+    pairs: dict[frozenset, LeakageHit] = {}
+    for h in parse_leakage_hits(out_tsv):
+        if h.train_id != h.test_id and is_leak(h, rule):
+            pairs.setdefault(frozenset((h.train_id, h.test_id)), h)
+    return list(pairs.values())
 
 
 def find_test_coverage_leaks(
@@ -456,6 +508,10 @@ def leakage_rule_record(rule: str) -> dict:
         "directions": "both: training chains as queries against the test chains, "
         "and test chains as queries against the training chains; a pair counts "
         "when either search meets the criterion",
+        "alignments": "every reported alignment of a pair, the best one and up to "
+        f"{LEAKAGE_ALT_ALI} alternative ones (mmseqs --alt-ali {LEAKAGE_ALT_ALI}); "
+        "a pair counts when any of them meets the criterion",
+        "alt_alignments": LEAKAGE_ALT_ALI,
         "stage2_search": "mmseqs easy-search training (query) vs test (target) and "
         "test (query) vs training (target) " + " ".join(leakage_search_options()),
         "stage1_cluster": "mmseqs easy-cluster --min-seq-id 0.3 -c 0.8 "

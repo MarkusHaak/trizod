@@ -15,7 +15,9 @@ the continuous TriZOD **G-score** (0–1, higher = more disordered) per residue.
 - **Licence:** data {{data_license}}; code {{code_license}} ({{repository}})
 - **Source:** BMRB snapshot `{{snapshot_name}}` ({{snapshot_n_entries}} entries,
   retrieved {{snapshot_retrieved}})
-- **Code:** `{{code_commit}}` ({{pipeline_version}})
+- **Code:** scored by `{{scoring_commit}}` ({{scoring_pipeline_version}}: every
+  entry scored, the dataset chain run into the package bundle); Parquet built
+  and deposit assembled by `{{code_commit}}` ({{pipeline_version}})
 - **Cite:** `CITATION.cff`; concept DOI {{concept_doi}} (all versions)
 
 ## Files
@@ -29,12 +31,14 @@ the continuous TriZOD **G-score** (0–1, higher = more disordered) per residue.
 | `test/` | The test sets as FASTA: `TriZOD_test_set.fasta` ({{test_set_name}}), `TriZOD_test_retired.fasta` (retired chains, leakage targets only), `CheZOD117_test_set.fasta`, `CheZOD117_original_sequences.fasta` (the 117 sequences as SETH published them); `TriZOD_test_set_labels.tsv`; the pin provenance |
 | `crosswalk/` | Every TriZOD test set since 2024 and the status of its sequences in this release (`test_set_crosswalk.tsv`/`.json`, `test_set_overlap.tsv`) |
 | `class_balance.tsv` | Label distribution per split (table below, unrounded) |
+| `known_issues.tsv` | Every chain with a known issue or a change named in the CHANGELOG: `chain_id`, `issue`, `evidence` ({{n_known_issues}} rows) |
 | `columns.md` | Column dictionary: name, Arrow type, nullability, meaning, null/NaN rule |
 | `datasheet.md` | Datasheet: motivation, composition, collection, preprocessing, uses, limitations |
 | `CHANGELOG.md` | Changes since v{{previous_version}}, and the known issues |
 | `bmrb_files.sha256` | SHA-256 of every BMRB entry file of the snapshot (`sha256sum -c` format) |
 | `MANIFEST.json`, `SHA256SUMS` | SHA-256, size and row/chain counts of every file; version, licence, commits, snapshot and cross-reference-source hashes, cuts, calibration, leakage rule |
 | `LICENSE.md`, `CITATION.cff`, `zenodo.json` | Licence, citation, deposit metadata |
+{{validation_row}}
 
 Check the download with `sha256sum -c SHA256SUMS`.
 
@@ -66,8 +70,8 @@ seq, g, mask, k = row["sequence"], row["gscores"], row["mask"], row["k"]
   metadata (`cuts`, `cut_rule`), never as label columns.
 - **Mask on `mask`, not on `k`.** `mask[i]` is true exactly where residue *i* is
   scored, i.e. where G is finite. G and Z are NaN where it is false in the
-  Parquet, null in `scores.json`, and 999 in the UdonPred view and the deploy
-  FASTA. A residue can have shifts (`k > 0`) and still no score.
+  Parquet, and 999 in the UdonPred view and the deploy FASTA. A residue can
+  have shifts (`k > 0`) and still no score.
 - **Cuts:** ordered G < {{cut_ordered}}; disordered (the binary call)
   G ≥ {{cut_disordered}}; confidently disordered G ≥ {{cut_confident}}. Rule:
   {{cut_rule}}.
@@ -134,8 +138,8 @@ The TriZOD test set has been redrawn or trimmed several times, and each change
 turned former test chains into training data. Comparisons against
 **UdonPred's published Trizod348 results**, against the **v0.2.0** and
 **v{{previous_version}}** test sets, and on the **chains trimmed from the
-460-chain pin of August 2026** (some are now unfiltered-tier training data) are
-therefore not valid on this release. `crosswalk/` lists every earlier set and
+pin of August 2026** (`known_issues.tsv`, issue `pin_trimmed`, gives each
+one's split now) are therefore not valid on this release. `crosswalk/` lists every earlier set and
 where its sequences are now (exact sequence match, a lower bound on overlap):
 
 {{crosswalk_table}}
@@ -180,7 +184,7 @@ order and every provenance key.
   link every chain to UniProt and the PDB, each link labelled by its evidence
   (`exact`, `author`, `sifts`, `unspecified`, `blast`).
 - The table is sorted by `(entry_id, id)` in string order in 500-row groups, so
-  a filter on `entry_id` reads one row group.
+  a filter on `entry_id` reads {{row_group_note}}.
 
 ## Chemical shifts (`trizod_shifts.parquet`)
 
@@ -197,9 +201,11 @@ in the field and table metadata; the datasheet explains the three regimes.
 ## Provenance and licence
 
 Built from BMRB snapshot `{{snapshot_name}}` (entry-list SHA-256
-`{{entry_list_sha256}}`; per-file hashes in `bmrb_files.sha256`) by TriZOD
-`{{code_commit}}`. Data: {{data_license}} ({{data_license_url}}). Code:
+`{{entry_list_sha256}}`; per-file hashes in `bmrb_files.sha256`). TriZOD
+`{{scoring_commit}}` scored the entries and ran the tier, redundancy and
+test-set chain; TriZOD `{{code_commit}}` built the Parquet and assembled this
+deposit (MANIFEST `code`). Data: {{data_license}} ({{data_license_url}}). Code:
 {{code_license}}. {{bmrb_acknowledgement}}
 
 What changed since v{{previous_version}} ({{previous_version_date}}), and the
-known issues, are in `CHANGELOG.md`.
+known issues, are in `CHANGELOG.md`; `known_issues.tsv` lists the chains.

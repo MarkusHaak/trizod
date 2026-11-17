@@ -331,8 +331,9 @@ def run(sets, release_rows, out, release_source: dict) -> dict:
             "redundant": "in a training pool, clustered (50 %/80 %) under a "
             "training representative (release_cluster_repr)",
             "retired": "split == test_retired: pinned test chain retired "
-            "(retired_reason: not_strict, chezod117_overlap or "
-            "within_test_duplicate); neither test nor training, still a "
+            "(retired_reason: not_strict, chezod117_overlap, "
+            "shared_construct or within_test_duplicate); neither test nor "
+            "training, still a "
             "leakage target",
             "excluded": "scored but in no tier's training pool",
             "absent": "no release row has this exact sequence",

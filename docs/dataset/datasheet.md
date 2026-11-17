@@ -46,8 +46,7 @@ BMRB-mapped chains of the 117) is the external benchmark. CheZOD117 chains are
 not filtered on sample conditions (known issues).
 
 **Labels and missing values.** A residue is scored where `mask` is true; G and
-Z are NaN where it is false (null in `scores.json`, 999 in the UdonPred view and
-the deploy FASTA). Terminal residues, residues without enough backbone shifts,
+Z are NaN where it is false (999 in the UdonPred view and the deploy FASTA). Terminal residues, residues without enough backbone shifts,
 and residues whose atom types an offset rejected are unscored. A shift count
 `k > 0` does not imply a score. {{share_k_lt_10}} of the {{scored_residues}}
 scored residues have k < 10.
@@ -141,16 +140,19 @@ denaturants, high pressure or in membrane mimetics.
 ## 6. Limitations
 
 - Labels depend on the deposited sample conditions and metadata, which carry
-  errors (CHANGELOG, known issues): pH* and pD stored as pH, Celsius entered as
-  kelvin, pressure unit errors, ionic strength contradicting the sample.
+  errors (CHANGELOG known issues; `known_issues.tsv` lists the chains): pH*
+  readings are used as is and pD readings converted to pD − 0.4, Celsius
+  entered as kelvin is corrected where detected, pressures without a unit read
+  as not recorded, and ionic strengths are used as deposited even where the
+  sample's own components contradict them.
 - Z-scores grow with `k`; prefer G.
 - Homo-oligomers are retained; `n_copies` is a conservative bound, not a
   stoichiometry.
 - `membrane_mimetic_sample` is false also when no sample component could be
   read; recall is limited by what the deposition states.
-- About a sixth of the training residues come from uniformly ²H-labelled
-  protein, whose isotope shifts are not corrected; some labelled residues lie
-  outside the UniProt-aligned span (tags).
+- Construct and sample caveats: uniformly ²H-labelled protein (isotope shifts
+  not corrected), labelled residues outside the UniProt-aligned span (tags),
+  paramagnetic samples and non-standard residues. {{construct_caveats}}
 - Homology between training and test is controlled at {{leakage_rule}}, not
   eliminated; nearly every sequence is in the corpora protein language models are
   pretrained on.
@@ -177,7 +179,9 @@ downloaded; `CITATION.cff`). Data: {{data_license}} ({{data_license_url}}).
 Code: {{code_license}}, {{repository}}. {{bmrb_acknowledgement}}
 
 Integrity: `MANIFEST.json` lists every file with SHA-256, size and counts;
-`sha256sum -c SHA256SUMS` checks a download. Built by TriZOD `{{code_commit}}`.
+`sha256sum -c SHA256SUMS` checks a download. Scored by TriZOD
+`{{scoring_commit}}`; Parquet built and deposit assembled by TriZOD
+`{{code_commit}}`.
 
 ## 8. Maintenance
 

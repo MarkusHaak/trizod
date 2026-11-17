@@ -234,12 +234,11 @@ PARQUET_METADATA = {
     ),
     b"not_covered": (
         b"Shifts assigned to a NON-CANONICAL residue or group are excluded, "
-        b"because seq_id would not index the released sequence: about 0.14 % "
-        b"of the deposited values (measured on the 2026-08 build), on some 290 "
-        b"distinct Comp_IDs -- the PTMs (SEP, TPO, PTR, TYS, HYP, ALY, MLY, "
-        b"M3L), the non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA, MLE, "
-        b"DAL) and the terminal/lipid groups (ACE, NH2, MYR). Read those from "
-        b"the BMRB entry directly."
+        b"because seq_id would not index the released sequence: the PTMs, the "
+        b"non-standard residues and the terminal or lipid groups. Read those "
+        b"from the BMRB entry directly. How many values of this release that "
+        b"is, on which Comp_IDs and how many chains: the not_covered block of "
+        b"the counts key, computed by the build."
     ),
     b"correction_formula": _CORRECTION_FORMULA.encode(),
     b"offset_source_values": _OFFSET_SOURCE_VALUES.encode(),
@@ -264,11 +263,18 @@ PARQUET_METADATA = {
     ),
     b"far_outlier_rule": _FAR_OUTLIER_RULE.encode(),
     b"key_uniqueness": (
-        b"(id, seq_id, atom_id) is unique except where a deposition states the "
-        b"same value twice under different Ambiguity_codes; those rows are kept "
-        b"as deposited"
+        b"(id, seq_id, atom_id) is unique except where a deposition states one "
+        b"atom twice: the same value under different Ambiguity_codes, or two "
+        b"different values (a partial-occupancy or two-state pair, e.g. both "
+        b"conformers of a side chain). Both rows are kept as deposited; filter "
+        b"or average them yourself. Which keys repeat, by kind and chain: the "
+        b"duplicate_keys block of the counts key, computed by the build."
     ),
 }
+
+#: Table-metadata keys a release build adds on top of :data:`PARQUET_METADATA`
+#: (:func:`restamp_shift_parquet`): the release identity and the counts.
+RELEASE_KEYS = ("dataset_version", "license", "code_commit", "bmrb_snapshot")
 
 
 def import_pyarrow():
@@ -317,6 +323,7 @@ def write_shift_parquet(
     batch_rows: int = 500_000,
     *,
     mad_reference: MadReference,
+    stats: ShiftTableStats | None = None,
 ):
     """Stream ``(chain_id, DataFrame)`` pairs into the released shift Parquet.
 
@@ -331,6 +338,10 @@ def write_shift_parquet(
     (:func:`trizod.shifts.outliers.annotate_mad`). Pass the same
     ``mad_reference`` the frames were annotated with: it is embedded in the
     table metadata, and a file must describe the reference its ``mad_z`` uses.
+
+    ``stats`` (a :class:`ShiftTableStats`) accumulates the counts of every
+    frame written; a release build then restamps the file with them
+    (:func:`restamp_shift_parquet`).
 
     Written to a sibling temp file and promoted only on success. ``frames`` is a
     lazy generator doing unguarded per-chain work, and closing a ParquetWriter
@@ -377,6 +388,8 @@ def write_shift_parquet(
                     raise ValueError(
                         f"frame {cid!r} is missing columns {sorted(missing)}"
                     )
+                if stats is not None:
+                    stats.add_frame(cid, df)
                 df = df.copy()
                 df.insert(0, "id", cid)
                 buffered.append(df[SHIFT_PARQUET_COLUMNS])
@@ -391,3 +404,225 @@ def write_shift_parquet(
         # promote above has moved the file.
         tmp_path.unlink(missing_ok=True)
     return out_path, n_rows
+
+
+# --------------------------------------------------------------------------- #
+# counts computed from the data, and the release restamp
+# --------------------------------------------------------------------------- #
+
+#: How many of the most frequent excluded Comp_IDs ``not_covered`` names.
+TOP_NOT_COVERED = 12
+
+
+class ShiftTableStats:
+    """Counts of a shift table, accumulated chain by chain while it is written
+    (:meth:`add_frame`) and, for the values it excludes, while the raw shifts
+    are read (:meth:`add_raw`). :meth:`metadata` renders them as the table's
+    ``counts`` key and the computed ``not_covered`` / ``key_uniqueness`` text,
+    so no count in the file is typed by hand.
+    """
+
+    def __init__(self):
+        from collections import Counter
+
+        self.rows = 0
+        self.chains = 0
+        self.backbone_rows = 0
+        self.corrected_rows = 0
+        self.offset_source = Counter()
+        self.far_assessed = 0
+        self.far_flagged = 0
+        self.far_chains = 0
+        self.dup_same_value = Counter()  # chain -> keys repeating one value
+        self.dup_different_value = Counter()  # chain -> keys with two values
+        self.raw_chains = 0
+        self.raw_values = 0
+        self.not_covered_values = 0
+        self.not_covered_comp_ids = Counter()
+        self.not_covered_chains = 0
+
+    def add_raw(self, cid: str, shifts) -> None:
+        """One chain's raw ``ShiftTable.shifts`` tuples (comp_id at index 3),
+        for a chain whose table the extraction accepted."""
+        from trizod.constants import AA3TO1
+
+        self.raw_chains += 1
+        self.raw_values += len(shifts)
+        excluded = [row[3] for row in shifts if row[3] not in AA3TO1]
+        if excluded:
+            self.not_covered_chains += 1
+            self.not_covered_values += len(excluded)
+            self.not_covered_comp_ids.update(excluded)
+
+    def add_frame(self, cid: str, df: pd.DataFrame) -> None:
+        """One chain's annotated frame, as written."""
+        if df.empty:
+            return
+        self.chains += 1
+        self.rows += len(df)
+        self.backbone_rows += int(df["is_backbone"].sum())
+        self.corrected_rows += int(df["val_corrected_ppm"].notna().sum())
+        self.offset_source.update(df["offset_source"].astype(str).tolist())
+        flags = df["is_far_outlier"]
+        assessed = flags.notna()
+        self.far_assessed += int(assessed.sum())
+        flagged = int(flags[assessed].astype(bool).sum())
+        self.far_flagged += flagged
+        self.far_chains += flagged > 0
+        keys = df[["seq_id", "atom_id"]]
+        dup = keys.duplicated(keep=False)
+        if dup.any():
+            for _, group in df[dup].groupby(["seq_id", "atom_id"], sort=True):
+                same = group["val_ppm"].nunique(dropna=False) == 1
+                (self.dup_same_value if same else self.dup_different_value)[cid] += 1
+
+    def counts(self) -> dict:
+        """Every count, JSON-ready."""
+        dep = self.raw_values
+        top = self.not_covered_comp_ids.most_common(TOP_NOT_COVERED)
+        return {
+            "rows": self.rows,
+            "chains": self.chains,
+            "backbone_rows": self.backbone_rows,
+            "sidechain_rows": self.rows - self.backbone_rows,
+            "corrected_rows": self.corrected_rows,
+            "offset_source": dict(sorted(self.offset_source.items())),
+            "far_outlier": {
+                "assessed": self.far_assessed,
+                "flagged": self.far_flagged,
+                "chains": self.far_chains,
+            },
+            "duplicate_keys": {
+                "same_value": sum(self.dup_same_value.values()),
+                "different_value": sum(self.dup_different_value.values()),
+                "same_value_by_chain": dict(sorted(self.dup_same_value.items())),
+                "different_value_by_chain": dict(
+                    sorted(self.dup_different_value.items())
+                ),
+            },
+            "not_covered": (
+                {
+                    "values": self.not_covered_values,
+                    "deposited_values": dep,
+                    "share": round(self.not_covered_values / dep, 6) if dep else None,
+                    "comp_ids": len(self.not_covered_comp_ids),
+                    "chains": self.not_covered_chains,
+                    "of_chains": self.raw_chains,
+                    "most_frequent": dict(top),
+                }
+                if self.raw_chains
+                else "not counted: the raw shifts were not read"
+            ),
+        }
+
+    def metadata(self) -> dict[str, str]:
+        """``counts`` plus the ``not_covered`` and ``key_uniqueness`` text with
+        this table's numbers."""
+        import json
+
+        c = self.counts()
+        meta = {"counts": json.dumps(c, sort_keys=True)}
+        nc = c["not_covered"]
+        if isinstance(nc, dict):
+            pct = f"{100 * nc['share']:.3f} %" if nc["share"] is not None else "–"
+            meta["not_covered"] = (
+                "Shifts assigned to a NON-CANONICAL residue or group are excluded, "
+                "because seq_id would not index the released sequence: "
+                f"{nc['values']:,} of the {nc['deposited_values']:,} deposited "
+                f"values ({pct}) of the released chains, on {nc['comp_ids']:,} "
+                f"distinct Comp_IDs across {nc['chains']:,} of the "
+                f"{nc['of_chains']:,} chains, most often "
+                + ", ".join(nc["most_frequent"])
+                + " (the PTMs, non-standard residues and terminal or lipid "
+                "groups). Read those from the BMRB entry directly. Per-Comp_ID "
+                "counts: counts.not_covered"
+            )
+        d = c["duplicate_keys"]
+        chains = sorted(
+            set(d["same_value_by_chain"]) | set(d["different_value_by_chain"])
+        )
+        meta["key_uniqueness"] = (
+            "(id, seq_id, atom_id) is unique except where a deposition states one "
+            f"atom twice: {d['same_value']} keys repeat the same value under "
+            f"different Ambiguity_codes and {d['different_value']} keys carry two "
+            "different values (a partial-occupancy or two-state pair, e.g. both "
+            "conformers of a side chain), in "
+            + (", ".join(chains) if chains else "no chain")
+            + ". Both rows are kept as deposited; filter or average them "
+            "yourself. Per chain: counts.duplicate_keys"
+        )
+        return meta
+
+
+def iter_file_frames(path, columns=None):
+    """``(chain_id, DataFrame)`` of an existing shift Parquet, chain by chain in
+    file order (a chain may span two row groups)."""
+    _, pq = import_pyarrow()
+    pf = pq.ParquetFile(path)
+    carry = None
+    for i in range(pf.num_row_groups):
+        df = pf.read_row_group(i, columns=columns).to_pandas()
+        if carry is not None:
+            df = pd.concat([carry, df], ignore_index=True)
+        if df.empty:
+            continue
+        last = df["id"].iloc[-1]
+        tail = df["id"] == last
+        carry = df[tail]
+        for cid, group in df[~tail].groupby("id", sort=False):
+            yield cid, group.reset_index(drop=True)
+    if carry is not None and not carry.empty:
+        yield carry["id"].iloc[0], carry.reset_index(drop=True)
+
+
+def data_fingerprint_streamed(path) -> str:
+    """SHA-256 of a Parquet's data alone: every row group's record batches as
+    Arrow IPC messages, table and field metadata dropped. A metadata-only
+    restamp (:func:`restamp_shift_parquet`) leaves it unchanged."""
+    import hashlib
+
+    pa, pq = import_pyarrow()
+    pf = pq.ParquetFile(path)
+    bare = pa.schema([f.remove_metadata() for f in pf.schema_arrow])
+    h = hashlib.sha256()
+    for i in range(pf.num_row_groups):
+        table = pf.read_row_group(i).cast(bare)
+        for batch in table.to_batches():
+            h.update(batch.serialize().to_pybytes())
+    return h.hexdigest()
+
+
+def restamp_shift_parquet(
+    path, metadata: dict, out_path=None, compression_level: int = 19
+) -> Path:
+    """Rewrite a shift Parquet with its table metadata updated by ``metadata``
+    (str -> str; field metadata, data and row-group layout unchanged), into
+    ``out_path`` (default: in place, through a sibling temp file).
+
+    The Parquet footer cannot be edited in place, and metadata a writer adds
+    after its schema is fixed is not what ``pyarrow.parquet.read_schema``
+    returns, so the row groups are re-encoded under the new schema. The data
+    are checked unchanged (:func:`data_fingerprint_streamed`) before the file
+    is promoted.
+    """
+    _, pq = import_pyarrow()
+    path = Path(path)
+    out_path = Path(out_path) if out_path is not None else path
+    pf = pq.ParquetFile(path)
+    merged = dict(pf.schema_arrow.metadata or {})
+    merged.update({k.encode(): str(v).encode() for k, v in metadata.items()})
+    schema = pf.schema_arrow.with_metadata(merged)
+    tmp_path = out_path.with_name(out_path.name + ".restamp")
+    try:
+        with pq.ParquetWriter(
+            tmp_path, schema, compression="zstd", compression_level=compression_level
+        ) as writer:
+            for i in range(pf.num_row_groups):
+                group = pf.read_row_group(i).replace_schema_metadata(merged)
+                writer.write_table(group, row_group_size=max(group.num_rows, 1))
+        if data_fingerprint_streamed(tmp_path) != data_fingerprint_streamed(path):
+            raise RuntimeError(f"restamping {path} changed its data; not promoted")
+        tmp_path.replace(out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return out_path

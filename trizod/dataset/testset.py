@@ -30,8 +30,8 @@ why the committed pin is NOT trimmed when chains leave strict: the full pin is
 what defines the retired set. Only a pinned sequence absent from the retire
 pool too (e.g. a withdrawn entry with no live twin) is dropped outright.
 
-Two more reasons retire a chain that is still strict (release audit
-2026-11-17), in this order:
+Three more reasons retire a chain that is still strict (release audits
+2026-11-17 and 2026-11-17b), in this order:
 
 * ``chezod117_overlap`` (E23): the chain meets the leakage criterion of
   ``trizod.dataset.mmseqs`` (>= 30 % identity over >= 80 % of either chain,
@@ -39,6 +39,15 @@ Two more reasons retire a chain that is still strict (release audit
   released CheZOD117 chain or one of the 117 original sequences SETH published
   (two of which, "hmbdi" and "6078", are no release chain). 19481_1_1_1
   contains CheZOD117 19482 as an exact 91-residue substring.
+* ``shared_construct`` (re-audit 2026-11-17b, item 9 / E26) -- a reviewed
+  decision, not a rule: the chain meets no leakage criterion on its deposited
+  sequence, but is a near-copy of training chains once its expression tag or
+  fusion partner is set aside (52047_1_1_1, a GB1 + N-myc TAD fusion whose
+  N-myc part is 97.6 % identical to training 52066_1_1_1). Such chains are
+  listed, with the evidence, in the committed table
+  ``trizod/dataset/data/test_retirements.tsv`` (:data:`TEST_RETIREMENTS_TSV`,
+  :func:`load_test_retirements`), matched to the resolved pin by sequence
+  (:func:`match_test_retirements`). The pin itself is never edited for them.
 * ``within_test_duplicate`` (E24): the remaining test chains are searched
   against each other at 50 % identity over 80 % of EITHER chain (the coverage
   the release uses everywhere else; the 50 % is the test set's own clustering
@@ -48,7 +57,7 @@ Two more reasons retire a chain that is still strict (release audit
   (:func:`select_within_test_duplicates`), so no two remaining test chains
   form a pair and no chain is retired for a partner that is itself retired.
 
-Both checks run mmseqs and need the original CheZOD117 FASTA.
+The two automatic checks run mmseqs and need the original CheZOD117 FASTA.
 
 ``--redraw`` mode (requires ``--confirm-redraw``): reproduces the original
 TriZOD test-set recipe (Senoner & Heinzinger, 2024) on the *current* dataset
@@ -77,7 +86,8 @@ Outputs (``<work-dir>/testset/``):
                              whether the ID was substituted, label_tier,
                              status (test / retired) and the retire reason
                              (not_strict / chezod117_overlap /
-                             within_test_duplicate; empty for a test chain) —
+                             shared_construct / within_test_duplicate;
+                             empty for a test chain) —
                              this file *is* the released-ID mapping table
   build_test_set_summary.json
   (``--redraw`` additionally writes TriZOD_test_set_clu.tsv: 50/80 cluster
@@ -93,9 +103,12 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import random
+import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from trizod.dataset import mmseqs as mm
@@ -119,6 +132,19 @@ UNKNOWN_TIER = "unknown"
 # Retire reasons beside f"not_{resolve tier}" (release audit 2026-11-17).
 CHEZOD117_OVERLAP = "chezod117_overlap"
 WITHIN_TEST_DUPLICATE = "within_test_duplicate"
+# A reviewed decision (re-audit 2026-11-17b, item 9): see TEST_RETIREMENTS_TSV.
+SHARED_CONSTRUCT = "shared_construct"
+
+#: The committed, reviewed table of pinned test chains retired by decision
+#: rather than by a rule (:func:`load_test_retirements`).
+TEST_RETIREMENTS_TSV = Path(__file__).resolve().parent / "data" / "test_retirements.tsv"
+RETIREMENT_COLUMNS = ("id", "sequence", "reason", "partners", "evidence")
+#: Reasons the table may give.
+TABLE_REASONS = (SHARED_CONSTRUCT,)
+#: The code checkout (``trizod/dataset/testset.py`` -> ``parents[2]``).
+_CODE_ROOT = Path(__file__).resolve().parents[2]
+_CHAIN_ID = re.compile(r"^\d+_\d+_\d+_\d+$")
+_SEQUENCE = re.compile(r"^[A-Z]+$")
 
 REDRAW_WARNING = """\
 !! --redraw DESTROYS COMPARABILITY WITH EVERY PUBLISHED TriZOD RELEASE !!
@@ -434,6 +460,142 @@ def retire_chains(
     info["label_tier_counts"] = _label_tier_counts(info["label_tiers"].values())
 
 
+# --------------------------------------------------------------------------- #
+# reviewed retirements (re-audit 2026-11-17b, item 9)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class ReviewedRetirement:
+    """One row of the reviewed retirement table: the pinned chain ``id`` with
+    ``sequence`` is retired for ``reason``; ``partners`` are the training
+    chains it nearly copies, ``evidence`` says how."""
+
+    id: str
+    sequence: str
+    reason: str
+    partners: tuple[str, ...]
+    evidence: str
+
+
+def _display_path(path: Path) -> str:
+    """``path`` relative to the code checkout when inside it (the committed
+    table), else as given: no absolute home path in a build record."""
+    try:
+        return Path(path).resolve().relative_to(_CODE_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def load_test_retirements(path=None) -> list[ReviewedRetirement]:
+    """The rows of the reviewed retirement table (default
+    :data:`TEST_RETIREMENTS_TSV`), in file order. ``#`` lines and blank lines
+    are comments. Raises ``ValueError`` on a wrong header or field count, a
+    malformed chain ID or sequence, an unknown reason, a row without partners
+    or evidence, or a repeated ID."""
+    path = Path(TEST_RETIREMENTS_TSV if path is None else path)
+    rows: list[ReviewedRetirement] = []
+    header = None
+    for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
+        if not raw.strip() or raw.startswith("#"):
+            continue
+        fields = [f.strip() for f in raw.split("\t")]
+        where = f"{path}:{lineno}"
+        if header is None:
+            if tuple(fields) != RETIREMENT_COLUMNS:
+                raise ValueError(
+                    f"{where}: header must be {RETIREMENT_COLUMNS}, got {fields}"
+                )
+            header = fields
+            continue
+        if len(fields) != len(RETIREMENT_COLUMNS):
+            raise ValueError(
+                f"{where}: expected {len(RETIREMENT_COLUMNS)} fields, got {fields}"
+            )
+        rid, seq, reason, partners, evidence = fields
+        if not _CHAIN_ID.match(rid):
+            raise ValueError(f"{where}: {rid!r} is no chain ID")
+        if not _SEQUENCE.match(seq):
+            raise ValueError(f"{where}: {rid}: malformed sequence")
+        if reason not in TABLE_REASONS:
+            raise ValueError(f"{where}: {rid}: unknown reason {reason!r}")
+        partner_ids = tuple(p.strip() for p in partners.split(",") if p.strip())
+        if not partner_ids:
+            raise ValueError(f"{where}: {rid}: no training partner given")
+        if not evidence:
+            raise ValueError(f"{where}: {rid}: no evidence given")
+        if any(r.id == rid for r in rows):
+            raise ValueError(f"{where}: duplicate id {rid}")
+        rows.append(ReviewedRetirement(rid, seq, reason, partner_ids, evidence))
+    if header is None:
+        raise ValueError(f"{path}: no header {RETIREMENT_COLUMNS}")
+    return rows
+
+
+def match_test_retirements(
+    pinned: dict[str, str], info: dict, retired_info: dict, rows
+) -> tuple[dict[str, ReviewedRetirement], dict]:
+    """Match the reviewed rows to the resolved pin (``pinned``, the
+    test chains' ``info`` and the retired chains' ``retired_info``, as
+    :func:`resolve_pinned_testset` and :func:`retire_chains` leave them), by
+    sequence.
+
+    Returns ``({test ID: row}`` of the test chains to retire now, ``report)``.
+    A row applies to the pinned chain with its sequence, under its pinned ID or
+    the ID it resolved to. The report lists the rows ``applied``, those whose
+    chain is ``already_retired`` (an earlier reason wins and is kept), those
+    whose chain was ``dropped`` (in no pool) and those ``not_in_pin`` (a row
+    for another pin: neither its ID nor its sequence is pinned). A row whose ID
+    is pinned with another sequence, or whose sequence is pinned under an ID
+    the row does not name, raises ``ValueError``: table and pin disagree."""
+    pid_of_seq = {seq: pid for pid, seq in pinned.items()}
+    resolved = {row["pinned_id"]: row["test_id"] for row in info["id_map"]}
+    retired = {
+        row["pinned_id"]: (row["test_id"], row.get("reason"))
+        for row in retired_info["id_map"]
+    }
+    apply: dict[str, ReviewedRetirement] = {}
+    report: dict[str, list] = {
+        "applied": [],
+        "already_retired": [],
+        "dropped": [],
+        "not_in_pin": [],
+    }
+    for row in rows:
+        if row.id in pinned and pinned[row.id] != row.sequence:
+            raise ValueError(
+                f"reviewed retirement {row.id}: the pin holds another sequence "
+                "under this ID; the table and the pin disagree"
+            )
+        pid = pid_of_seq.get(row.sequence)
+        if pid is None:
+            report["not_in_pin"].append(row.id)
+            continue
+        names = {pid, resolved.get(pid), retired.get(pid, (None,))[0]}
+        if row.id not in names:
+            raise ValueError(
+                f"reviewed retirement {row.id}: its sequence is pinned as {pid}, "
+                "which the row does not name"
+            )
+        entry = {
+            "pinned_id": pid,
+            "reason": row.reason,
+            "partners": list(row.partners),
+            "evidence": row.evidence,
+        }
+        if pid in resolved:
+            apply[resolved[pid]] = row
+            report["applied"].append({"test_id": resolved[pid], **entry})
+        elif pid in retired:
+            test_id, reason = retired[pid]
+            report["already_retired"].append(
+                {"test_id": test_id, "pinned_id": pid, "reason": reason}
+            )
+        else:
+            report["dropped"].append(pid)
+    return apply, report
+
+
 def find_chezod117_overlaps(
     test_recs: dict[str, str], chezod117: dict[str, str], work: Path
 ) -> list[mm.LeakageHit]:
@@ -602,6 +764,13 @@ def main(argv=None) -> None:
         f"retired against: kept as a leakage target in {RETIRED_FASTA} "
         f"(default: {RETIRE_TIER}; no retiring unless looser than --resolve-tier)",
     )
+    ap.add_argument(
+        "--retirements",
+        type=Path,
+        default=None,
+        help="reviewed retirement table (default: the committed "
+        "trizod/dataset/data/test_retirements.tsv)",
+    )
     args = ap.parse_args(argv)
     paths = resolve_paths(args.work_dir, args.root)
     out = paths.testset
@@ -685,6 +854,21 @@ def main(argv=None) -> None:
         {h.train_id for h in overlaps},
         CHEZOD117_OVERLAP,
     )
+    # Reviewed retirements (re-audit 2026-11-17b, item 9), before the
+    # within-test check, which then runs on the chains that stay test chains.
+    table = Path(args.retirements or TEST_RETIREMENTS_TSV)
+    reviewed, reviewed_report = match_test_retirements(
+        pinned, info, retired_info, load_test_retirements(table)
+    )
+    for reason in sorted({row.reason for row in reviewed.values()}):
+        retire_chains(
+            test_recs,
+            info,
+            retired_recs,
+            retired_info,
+            {tid for tid, row in reviewed.items() if row.reason == reason},
+            reason,
+        )
     pair_hits = find_within_test_pairs(test_recs, work)
     duplicates = select_within_test_duplicates(
         test_recs, [(h.train_id, h.test_id) for h in pair_hits]
@@ -726,6 +910,11 @@ def main(argv=None) -> None:
             }
             for h in first_overlap.values()
         ],
+        "reviewed_retirements": {
+            "table": _display_path(table),
+            "sha256": hashlib.sha256(table.read_bytes()).hexdigest(),
+            **reviewed_report,
+        },
         "within_test_criterion": (
             f">= {mm.WITHIN_TEST_MIN_SEQ_ID * 100:g} % identity over >= "
             f"{mm.LEAKAGE_MIN_COV * 100:g} % of either chain, >= "
@@ -745,6 +934,11 @@ def main(argv=None) -> None:
             f"so they and their homologues stay out of training. Do not trim "
             f"them from the pin. By reason: "
             + "; ".join(f"{r}: {len(ids)} {ids}" for r, ids in by_reason.items())
+        )
+    if reviewed_report["not_in_pin"]:
+        print(
+            f"NOTE: {len(reviewed_report['not_in_pin'])} rows of {table} name no "
+            f"chain of this pin and were not applied: {reviewed_report['not_in_pin']}"
         )
     if info["dropped"]:
         print(

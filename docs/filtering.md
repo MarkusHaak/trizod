@@ -430,9 +430,11 @@ Four rules added for the 2026-11 rebuild. They are four different kinds of
 decision: pressure and membrane mimetics remove labels that describe a perturbed
 ensemble, the ionic-strength cap is a stated convention, and the 273 K rule repairs
 bad metadata. Each leaves a provenance column, so a chain that drops to a looser tier
-stays identifiable. Impact on the 2026-11-11 rebuild (recounted with these
-definitions): moderate 11,305 → 10,811 chains (−494), strict 4,245 → 3,957 (−288);
-every lost chain stays in the release at a looser tier.
+stays identifiable, and every lost chain stays in the release at a looser tier. The
+tier sizes these rules produce are not typed here: each release's `CHANGELOG.md`
+states its tier counts and the tier moves against the previous build by rule, computed
+by `trizod dataset finalize` (`--previous-build`), and its `known_issues.tsv` lists
+every moved chain.
 
 ### High pressure — `max-pressure-bar` (tolerant, moderate, strict: 400 bar)
 
@@ -588,7 +590,7 @@ is imputed). The rule lives in `SampleConditions.get_temperature()`, so it chang
 
 ## Measured Impact
 
-The tables below predate the 2026-11 condition rules (see above for their impact).
+The tables below are dated measurements (the 2026-08 build against v0.3.0, and the pre-filter frame of that time); they predate the 2026-11 condition rules and are not the tier sizes of any later release, which each release's `CHANGELOG.md` states.
 
 Two different populations are counted below; mixing them up is the commonest way to
 misread these numbers.

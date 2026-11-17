@@ -12,8 +12,8 @@ membership:
 
   * ``split``       one of train / redundant / test_chezod117 / test_trizod /
                     test_retired / excluded (test_retired: a pinned TriZOD
-                    test chain retired as not_strict, chezod117_overlap or
-                    within_test_duplicate, see ``retired_reason`` -- not tested
+                    test chain retired for the reason in ``retired_reason``
+                    (``release_info.RETIRED_REASONS``) -- not tested
                     on, still a leakage target, so never train or redundant)
   * ``train_tier``  strictest tier at which the chain is a training representative
   * ``pool_tier``   strictest tier whose redundancy-reduction pool contains the chain
@@ -65,12 +65,18 @@ the C1b/C3/C4 annotations came to stop one step short of the Parquet.
 ``tests/test_column_dictionary.py`` fails when the two disagree.
 
 The table metadata (:func:`table_metadata`) carries the release identity
-(``trizod.dataset.release_info``): ``dataset_version``, the data and code
-licences, ``code_commit``, the ``bmrb_snapshot`` (name, n_entries,
+(``trizod.dataset.release_info``, :func:`release_keys`): ``dataset_version``,
+the data and code licences, ``code_commit`` (the commit that built the file),
+``scoring_commit`` (the commit that scored the entries and wrote the package
+bundle, from its ``pipeline_version`` or ``--scoring-commit``), the
+``bmrb_snapshot`` (name, n_entries,
 entry_list_sha256), the ``test_set`` name and counts, the ``cuts`` with their
 rule and the k >= 10 note, and -- with ``--calibration`` -- the threshold
 framework's ``calibration`` summary (prevalence, likelihood ratios at the cuts,
-per-split prevalence, framework commit, results.json SHA-256).
+per-split prevalence, framework commit, results.json SHA-256). The shift
+table gets the same release keys plus ``counts`` computed from its rows
+(:class:`trizod.shifts.ShiftTableStats`); ``--restamp-shifts`` refreshes the
+metadata of an existing shift table without rebuilding it.
 
 Usage:
     uv run --with pyarrow python scripts/build_parquet_dataset.py \
@@ -78,7 +84,13 @@ Usage:
         --out           <path to trizod_dataset.parquet> \
         [--composition-csv <path to _composition_cache.csv>] \
         [--shifts-out <path to trizod_shifts.parquet>] \
-        [--calibration <threshold-framework output dir with results.json>]
+        [--calibration <threshold-framework output dir with results.json>] \
+        [--scoring-commit <sha>]
+
+    uv run --with pyarrow python scripts/build_parquet_dataset.py \
+        --in-bundle <bundle> --restamp-shifts <trizod_shifts.parquet> \
+        --pkl-dir <the build's tmp/bmrb_entries> --bmrb-dir <snapshot> \
+        [--shifts-out <restamped copy>]
 
     uv run python scripts/build_parquet_dataset.py \
         --write-column-dictionary docs/dataset/columns.md
@@ -99,7 +111,11 @@ from pathlib import Path
 from trizod import paths
 from trizod.bmrb import xref_sources as xs
 from trizod.bmrb import xrefs as xr
-from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS, HIGH_PRESSURE_BAR
+from trizod.bmrb.bmrb import (
+    BB_EXTRA_ATOM_IDS,
+    HIGH_PRESSURE_BAR,
+    PD_TO_PH_STAR_OFFSET,
+)
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.dataset import chezod_overlap as co
 from trizod.dataset import release_info as ri
@@ -121,11 +137,15 @@ from trizod.offsets import (
 )
 from trizod.provenance import pipeline_version
 from trizod.shifts import (
+    PARQUET_METADATA,
+    ShiftTableStats,
     annotate_mad,
     annotate_offsets,
     chain_offsets,
+    iter_file_frames,
     iter_shift_frames,
     load_mad_reference,
+    restamp_shift_parquet,
     write_shift_parquet,
 )
 from trizod.shifts.parquet import import_pyarrow
@@ -164,11 +184,18 @@ OFFSET_COLUMNS_DOC = (
     "AND lacs_off_A_ppm TOGETHER IS A UNIT ERROR worth up to 21.2 ppm. "
     "REFINED_WEIGHTS (ppm) = "
     + ", ".join(f"{a}:{REFINED_WEIGHTS[a]:g}" for a in BACKBONE)
-    + ". A null offset means it was never computed for that atom, or was "
-    "rejected by --max-offset -- never a zero. Per-value corrected shifts, "
-    "including the side-chain transfer policy, are published in "
-    "trizod_shifts.parquet (val_ppm / val_corrected_ppm / offset_applied_ppm / "
-    "offset_source)."
+    + ". ZERO AND NULL: 0.0 means no offset was applied for that atom -- the "
+    "estimator returned zero (LACS needs enough observations and does not "
+    "correct every atom), or the chain has no shift of that atom at all, in "
+    "which case all three of its columns read 0.0 (nothing to correct, not a "
+    "measured zero). lacs_off_A_ppm is never null for a scored chain. "
+    "off_A_sigma and total_off_A_ppm are null together, with lacs_off_A_ppm "
+    "still set, where the row's record (label_tier_source tolerant, which "
+    "combines --max-offset with --reject-shift-type-only) rejected atom type A "
+    "by --max-offset and masked it out of the score; see the label_source key. "
+    "Per-value corrected shifts, including the side-chain transfer policy, are "
+    "published in trizod_shifts.parquet (val_ppm / val_corrected_ppm / "
+    "offset_applied_ppm / offset_source)."
 )
 
 # pyarrow is deliberately NOT a project dependency (nothing in the pipeline or
@@ -184,15 +211,39 @@ SORT_KEYS = [("entry_id", "ascending"), ("id", "ascending")]
 ROW_GROUP_SIZE = 500
 
 
-def sort_order_doc(row_group_size: int) -> str:
-    """The ``sort_order`` table metadata: the layout, in the consumer's terms."""
+def straddling_entries(cols: dict, row_group_size: int) -> list[str]:
+    """Entry IDs whose rows cross a row-group boundary of the sorted table
+    (``SORT_KEYS``; Python's string order equals Arrow's byte order here)."""
+    keys = sorted(zip(*(cols[name] for name, _ in SORT_KEYS)))
+    return sorted(
+        {
+            keys[i][0]
+            for i in range(row_group_size, len(keys), row_group_size)
+            if keys[i][0] == keys[i - 1][0]
+        }
+    )
+
+
+def sort_order_doc(row_group_size: int, straddling: list[str] | None = None) -> str:
+    """The ``sort_order`` table metadata: the layout, in the consumer's terms.
+    ``straddling`` (:func:`straddling_entries`) names the entries whose rows
+    cross a row-group boundary; None when not computed."""
     keys = ",".join(name for name, _ in SORT_KEYS)
     first = SORT_KEYS[0][0]
+    if straddling is None:
+        groups = "one row group, or two where the entry crosses a group boundary"
+    elif straddling:
+        groups = (
+            f"one row group, except the {len(straddling)} entries whose rows "
+            f"cross a group boundary ({', '.join(straddling)}), which touch two"
+        )
+    else:
+        groups = "one row group (no entry crosses a group boundary)"
     return (
         f"{keys} ascending, in string (byte) order: {first} is a string, so "
         f"'10001' sorts before '979'. Written in row groups of {row_group_size} "
         f"rows with min/max statistics on every column, so a filter on {first} "
-        f"touches one row group. id is sorted within each entry but is not "
+        f"touches {groups}. id is sorted within each entry but is not "
         f"globally monotone ('1000_1_1_1' follows '10000_1_1_1'), so filter on "
         f"{first} when pruning matters."
     )
@@ -580,8 +631,8 @@ COLUMNS: list[Column] = [
         )
         for name in co.CHEZOD_SETS
     ],
-    # Why a test_retired chain was retired (not_strict, chezod117_overlap,
-    # within_test_duplicate), from the retired FASTA header; null elsewhere.
+    # Why a test_retired chain was retired (release_info.RETIRED_REASONS), from
+    # the retired FASTA header; null elsewhere.
     Column(
         "retired_reason", "string", origin="testset", source="reason", convert=clean_str
     ),
@@ -638,24 +689,35 @@ def _offset_docs() -> dict[str, ColumnDoc]:
     docs = {}
     for a in BACKBONE:
         atom = f"{_ATOM_NAMES[a]} ({a})"
+        no_shift = (
+            f"0.0 where no offset was applied, including every chain without a "
+            f"{a} shift (nothing to correct, not a measured zero)"
+        )
+        rejected = (
+            f"null where the row's record (`label_tier_source` tolerant) rejected "
+            f"atom type {a} by `--max-offset` and masked it out of the score; "
+            f"`lacs_off_{a}_ppm` is still set there"
+        )
         docs[off_sigma_col(a)] = _doc(
             f"POTENCI/AIC residual referencing offset of the {atom} shifts, in "
             f"multiples of the per-atom POTENCI RMSD REFINED_WEIGHTS[{a}] = "
             f"{REFINED_WEIGHTS[a]:g} ppm -- NOT ppm. `--max-offset` is compared "
-            "against it",
-            "null when not computed for this atom or rejected by --max-offset "
-            "(never a zero)",
+            f"against it. {no_shift}",
+            rejected,
         )
         docs[lacs_off_ppm_col(a)] = _doc(
-            f"LACS referencing offset of the {atom} shifts, in ppm",
-            "null when LACS did not run for this atom",
+            f"LACS referencing offset of the {atom} shifts, in ppm. 0.0 where "
+            "LACS applied none: too few observations, an atom it does not "
+            f"correct, or no {a} shift in the chain",
+            "never null for a scored chain (null only if the build's scores.json "
+            "record lacks the field)",
         )
         docs[total_off_ppm_col(a)] = _doc(
             f"Total referencing offset of the {atom} shifts in ppm: "
             f"`lacs_off_{a}_ppm + off_{a}_sigma × {REFINED_WEIGHTS[a]:g}`. "
             "Subtract it from a deposited shift to get the shift TriZOD scored "
-            "(never add the other two columns: different units)",
-            "null when neither offset was computed",
+            f"(never add the other two columns: different units). {no_shift}",
+            f"null exactly where `off_{a}_sigma` is: {rejected}",
         )
     return docs
 
@@ -719,9 +781,8 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
     ),
     "mask": _doc(
         "Per-residue: true iff the residue is scored, i.e. its G (and Z) is "
-        "finite. Where false, G and Z are NaN here, null in scores.json and "
-        "999 in the UdonPred view and the deploy FASTA. Mask on this column, "
-        "not on k",
+        "finite. Where false, G and Z are NaN here and 999 in the UdonPred "
+        "view and the deploy FASTA. Mask on this column, not on k",
         f"{_PER_RESIDUE}; elements never null",
         nullable=False,
     ),
@@ -756,9 +817,11 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
         "null when the entry does not declare it (about a quarter of BMRB)",
     ),
     "ph": _doc(
-        "Sample pH from the shift list's sample condition list (pD and pH* "
-        "read as deposited, see the known issues); 7.0 imputed where none was "
-        "deposited, except at strict, which requires it",
+        "Sample pH from the shift list's sample condition list. A pH* (meter) "
+        "reading is used as is; a pD is converted to "
+        f"pD − {PD_TO_PH_STAR_OFFSET:g} (`known_issues.tsv` lists the chains). "
+        "7.0 imputed where none was deposited, except at strict, which "
+        "requires it",
         "null when not deposited and not imputed, or outside the valid range",
     ),
     "temperature": _doc(
@@ -859,8 +922,9 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
         _COMP_NULL,
     ),
     "label_tier": _doc(
-        "Strictest tier whose pool still contains the pinned test sequence "
-        "(strict for every test_trizod row)",
+        "Strictest tier whose pool still contains the pinned test sequence: "
+        "strict for every test_trizod row; for a test_retired row any tier, "
+        "strict where it was retired for another reason than not_strict",
         "null unless `split` is test_trizod or test_retired",
     ),
     "pressure_bar": _doc(
@@ -895,23 +959,25 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
         "Class-rule verdict: the chain's sample is a membrane mimetic "
         "(metadata `membrane_mimetic_sample_semantics`); excluded from moderate "
         "and strict. False also when no sample component could be read",
-        "null only when the scores.json record lacks the field",
+        "null only if the build's scores.json record lacks the field",
     ),
     "temperature_placeholder": _doc(
         "The deposited temperature was exactly 273 K with no stated 0 °C and "
         "was read as not deposited: the chain is scored at the 298 K default "
         "and strict excludes it",
-        "null only when the scores.json record lacks the field",
+        "null only if the build's scores.json record lacks the field",
     ),
     "high_pressure": _doc(
         "`pressure_bar >= 400`: the ceiling of the tolerant, moderate and strict tiers",
-        "null when no pressure was recorded (passes as ambient): filter with "
-        "`high_pressure IS NOT TRUE`, not `== False`",
+        "null when no pressure was recorded or its unit is missing or unknown "
+        "(passes as ambient): filter with `high_pressure IS NOT TRUE`, not "
+        "`== False`",
     ),
     **_overlap_docs(),
     "retired_reason": _doc(
-        "Why a pinned test chain was retired: not_strict, chezod117_overlap or "
-        "within_test_duplicate",
+        "Why a pinned test chain was retired: "
+        + "; ".join(f"{k}: {v}" for k, v in ri.RETIRED_REASONS.items())
+        + " (metadata `test_retired_semantics`)",
         "null unless `split == 'test_retired'`",
     ),
 }
@@ -945,13 +1011,15 @@ def column_dictionary_markdown() -> str:
         f"`trizod_dataset.parquet` has {len(COLUMNS)} columns, one row per "
         "scored protein chain, in this order. Per-residue columns are lists "
         "aligned 1:1 to `sequence`. A residue is scored where `mask` is true; "
-        "`gscores` and `zscores` are NaN exactly where it is false (null in "
-        "scores.json, 999 in the UdonPred view and the deploy FASTA). A shift "
+        "`gscores` and `zscores` are NaN exactly where it is false (999 in "
+        "the UdonPred view and the deploy FASTA). A shift "
         "count k > 0 does not imply a score. Null means unknown or not "
         "recorded, never a default. *Nullable* says whether a null can occur "
         "in the release (every Arrow field is declared nullable). The table "
         "metadata (`pyarrow.parquet.read_schema(path).metadata`) restates the "
-        "semantics of the flag columns, the cuts and the provenance.",
+        "semantics of the flag columns, the cuts and the provenance. "
+        "*scores.json* below is the build-internal per-tier score file each "
+        "row was read from (`label_tier_source`); it is not shipped.",
         "",
         "| # | Column | Arrow type | Nullable | Meaning | Null / NaN rule |",
         "|--:|---|---|---|---|---|",
@@ -1261,6 +1329,54 @@ def print_xref_coverage(cols: dict) -> None:
     print(f"  uniprot_ids by source: {cov['uniprot_source']}")
 
 
+def _null_note(cols: dict, name: str) -> str:
+    """How many rows of ``name`` are null in this build, in words."""
+    n = sum(1 for v in cols[name] if v is None)
+    if n == 0:
+        return "Never null in this release"
+    return f"Null on {n} rows, whose scores.json record lacks the field"
+
+
+def release_keys(
+    version: str = ri.DATASET_VERSION,
+    snapshot: dict | None = None,
+    commit: dict | None = None,
+    scoring: dict | None = None,
+) -> dict[str, str]:
+    """The release identity both Parquet files carry: version, licences, the
+    commit that wrote the file (``code_commit``), the commit that scored the
+    entries and wrote the package bundle (``scoring_commit``) and the BMRB
+    snapshot. ``commit`` defaults to this checkout's."""
+    if commit is None:
+        commit = ri.code_commit()
+    return {
+        "dataset_version": version,
+        "license": ri.LICENSE_STATEMENT,
+        "data_license": ri.DATA_LICENSE,
+        "code_license": ri.CODE_LICENSE,
+        "code_commit": json.dumps(
+            {
+                **(commit or {"commit": "unknown", "dirty": None}),
+                "pipeline_version": pipeline_version(),
+                "repository": ri.REPOSITORY,
+                "scope": "built this file from the package bundle "
+                "(scripts/build_parquet_dataset.py)",
+            },
+            sort_keys=True,
+        ),
+        "scoring_commit": (
+            json.dumps(scoring, sort_keys=True)
+            if scoring is not None
+            else "not recorded: the package bundle states no pipeline_version"
+        ),
+        "bmrb_snapshot": (
+            json.dumps(snapshot, sort_keys=True)
+            if snapshot is not None
+            else "not recorded: no BMRB_SNAPSHOT.json in the snapshot directory"
+        ),
+    }
+
+
 def table_metadata(
     cols: dict,
     row_group_size: int = ROW_GROUP_SIZE,
@@ -1272,27 +1388,29 @@ def table_metadata(
     snapshot: dict | None = None,
     calibration: dict | None = None,
     commit: dict | None = None,
+    scoring: dict | None = None,
 ) -> dict[bytes, bytes]:
     """The Parquet key-value metadata for the collected ``cols``.
 
     Pure Python (no pyarrow), so every key is testable without the optional
     extra. ``snapshot`` is :func:`trizod.dataset.release_info.snapshot_block`
     of the BMRB snapshot, ``calibration`` :func:`~trizod.dataset.release_info.
-    read_calibration` of a threshold-framework run and ``commit``
+    read_calibration` of a threshold-framework run, ``commit``
     :func:`~trizod.dataset.release_info.code_commit` of this checkout (default:
-    looked up). A missing snapshot or calibration is recorded as such, never
+    looked up) and ``scoring`` :func:`~trizod.dataset.release_info.
+    scoring_block` of the commit that scored the entries and wrote the bundle.
+    A missing snapshot, calibration or scoring commit is recorded as such, never
     left out silently.
     """
-    if commit is None:
-        commit = ri.code_commit()
     test_set = ri.testset_block(cols["split"], cols["retired_reason"])
+    reasons = sorted({r for r in cols["retired_reason"] if r})
     metadata = {
         b"dataset": b"TriZOD",
         b"description": b"Per-residue protein-disorder labels from re-referenced BMRB NMR backbone chemical shifts. One row per scored chain; per-residue arrays aligned 1:1 to sequence.",
         b"tier_order_loose_to_strict": b"unfiltered,tolerant,moderate,strict",
         b"split_values": b"train,redundant,test_chezod117,test_trizod,test_retired,excluded",
-        b"test_retired_semantics": b"split test_retired: a pinned TriZOD test chain that is no longer tested on, for the reason in retired_reason: not_strict (it no longer meets the strict tier, e.g. after the 2026-11 condition rules), chezod117_overlap (it meets the leakage criterion against a CheZOD117 sequence, so the two test sets would overlap) or within_test_duplicate (it is the shorter chain of a pair of test chains at >= 50 % identity over >= 80 % of either chain). It is not in the TriZOD test set, but it stays a leakage target, so it and its homologues are excluded from every training set exactly as with the full pin; the test set only shrinks",
-        b"mask_semantics": b"mask[i] is true iff residue i is scored, i.e. gscores[i] (and zscores[i]) is finite; they are NaN exactly where mask is false (null in scores.json, 999 in the UdonPred view and the deploy FASTA). A shift count k[i] > 0 does not imply a score: mask on mask, never on k",
+        b"test_retired_semantics": ri.retired_semantics(reasons).encode(),
+        b"mask_semantics": b"mask[i] is true iff residue i is scored, i.e. gscores[i] (and zscores[i]) is finite; they are NaN exactly where mask is false (999 in the UdonPred view and the deploy FASTA). A shift count k[i] > 0 does not imply a score: mask on mask, never on k",
         b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null; train_tier is null unless split is train; pool_tier, cluster_repr and quality are null for a chain in no tier's pool; label_tier is null for every row that is neither test_trizod nor test_retired, retired_reason for every row but test_retired, and the <set>_overlap flags when the overlap was not computed. Per-row rules: the column dictionary",
         b"sequence_alphabet": b"sequence holds the 20 standard residues plus X (unknown or non-standard; also an internal non-letter of the deposited sequence), U (selenocysteine) and Z (Glx). A trailing non-letter of the deposited sequence (a translation-stop '*', a typed apostrophe) is no residue and is not part of the chain; the per-residue arrays are aligned 1:1 to sequence",
         b"chezod_overlap_semantics": (
@@ -1311,14 +1429,21 @@ def table_metadata(
         b"composition_list_columns": b"metal_comp_ids, ligand_comp_ids and ligand_names are list<string>; an empty list is a measured absence, null is an unclassified entry",
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
         b"membrane_mimetic_semantics": b"';'-joined membrane-mimetic classes (trizod.bmrb.membrane: phospholipid, bicelle, nanodisc, liposome, membrane, SDS, DPC, DHPC, LMPG, LDAO, CHAPS, DDM, ...) recognised in the samples the scored shift table references -- among their components (a non-polymer one by the whole class table, one linked to a polymer entity only by an explicit mimetic name), in _Sample.Type, or as explicit mimetic words in _Sample.Details / Solvent_system / Name -- or set by the reviewed override table trizod/dataset/data/membrane_overrides.tsv; counted or not (a sub-CMC CHAPS is named), null when none. Descriptive; the moderate/strict filter reads membrane_mimetic_sample",
-        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a component that is a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always), CnEm/n-alkanol alignment media not counted; or a sample whose _Sample.Type (micelle, bicelle, liposome, membrane, nanodisc; not reverse micelle) or free text (Details, Solvent_system, Name) names an explicit mimetic, unless it serves only anisotropic (RDC alignment) experiments; or an entry/chain listed, after review of its raw file, in trizod/dataset/data/membrane_overrides.tsv (title-only evidence). Excluded from the moderate and strict tiers; null when the record predates the rule",
-        b"temperature_placeholder_semantics": b"true when the deposited temperature was exactly 273 K (the text '273' or '273.0', unit K or none) with no statement of 0 C in the entry's own text, and was read as not deposited: temperature then holds the 298 K default and the strict tier excludes the chain. Null when the record predates the rule",
-        b"high_pressure_semantics": b"pressure_bar >= 400 bar, the ceiling of the tolerant, moderate and strict tiers; null when no pressure was recorded (an unrecorded pressure passes as ambient)",
-        b"label_tier_semantics": b"test_trizod and test_retired rows only: strictest tier whose pool still contains the pinned test sequence (strict for every test_trizod row; moderate/tolerant for a test_retired row)",
-        b"label_source": LABEL_SOURCE_RULE.encode(),
+        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a component that is a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always), CnEm/n-alkanol alignment media not counted; or a sample whose _Sample.Type (micelle, bicelle, liposome, membrane, nanodisc; not reverse micelle) or free text (Details, Solvent_system, Name) names an explicit mimetic, unless it serves only anisotropic (RDC alignment) experiments; or an entry/chain listed, after review of its raw file, in trizod/dataset/data/membrane_overrides.tsv (title-only evidence). Excluded from the moderate and strict tiers. "
+        + _null_note(cols, "membrane_mimetic_sample").encode(),
+        b"temperature_placeholder_semantics": b"true when the deposited temperature was exactly 273 K (the text '273' or '273.0', unit K or none) with no statement of 0 C in the entry's own text, and was read as not deposited: temperature then holds the 298 K default and the strict tier excludes the chain. "
+        + _null_note(cols, "temperature_placeholder").encode(),
+        b"high_pressure_semantics": b"pressure_bar >= 400 bar, the ceiling of the tolerant, moderate and strict tiers; null when pressure_bar is null: no pressure was recorded, or it was deposited without a unit or in an unknown one (a bare '1' is not read as 1 bar). An unrecorded pressure passes as ambient, so filter with high_pressure IS NOT TRUE, not == False",
+        b"label_tier_semantics": b"test_trizod and test_retired rows only: strictest tier whose pool still contains the pinned test sequence. strict for every test_trizod row; for a test_retired row any tier: strict where it was retired for another reason than not_strict (e.g. chezod117_overlap, within_test_duplicate), moderate or tolerant where it no longer meets strict",
+        b"label_source": (
+            LABEL_SOURCE_RULE + " (scores.json: the build-internal per-tier score "
+            "file each row is read from; it is not shipped.)"
+        ).encode(),
         b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm; 900-1100 deposited as 'bar' is read as hPa); null when not recorded or the unit is missing/unknown. The tolerant, moderate and strict tiers exclude >= 400 bar (high_pressure); an unrecorded pressure passes as ambient",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
-        b"sort_order": sort_order_doc(row_group_size).encode(),
+        b"sort_order": sort_order_doc(
+            row_group_size, straddling_entries(cols, row_group_size)
+        ).encode(),
         b"xrefs_semantics": XREFS_DOC.encode(),
         b"xrefs_snapshot": (
             (xrefs_snapshot or "unknown") if xrefs is not None else "not read"
@@ -1330,23 +1455,7 @@ def table_metadata(
         ).encode(),
     }
     release = {
-        "dataset_version": version,
-        "license": ri.LICENSE_STATEMENT,
-        "data_license": ri.DATA_LICENSE,
-        "code_license": ri.CODE_LICENSE,
-        "code_commit": json.dumps(
-            {
-                **(commit or {"commit": "unknown", "dirty": None}),
-                "pipeline_version": pipeline_version(),
-                "repository": ri.REPOSITORY,
-            },
-            sort_keys=True,
-        ),
-        "bmrb_snapshot": (
-            json.dumps(snapshot, sort_keys=True)
-            if snapshot is not None
-            else "not recorded: no BMRB_SNAPSHOT.json in the snapshot directory"
-        ),
+        **release_keys(version, snapshot, commit, scoring),
         "test_set": json.dumps(test_set, sort_keys=True),
         "cuts": json.dumps(ri.cut_block(), sort_keys=True),
         "cut_rule": ri.CUT_RULE,
@@ -1377,7 +1486,10 @@ def build(
     snapshot: dict | None = None,
     calibration: dict | None = None,
     commit: dict | None = None,
+    scoring: dict | None = None,
 ) -> None:
+    if scoring is None:
+        scoring = ri.scoring_block(ri.bundle_pipeline_version(in_bundle))
     cols = collect_columns(
         in_bundle,
         composition_csv,
@@ -1402,6 +1514,7 @@ def build(
         snapshot=snapshot,
         calibration=calibration,
         commit=commit,
+        scoring=scoring,
     )
     table = table.replace_schema_metadata(metadata)
 
@@ -1432,11 +1545,21 @@ def build(
     print("train_tier counts (strictest):", dict(tier_counts))
 
 
+def shift_release_metadata(stats, release: dict[str, str]) -> dict[str, str]:
+    """Every table-metadata key a release shift table gets on top of the
+    writer's: the current static text (:data:`trizod.shifts.PARQUET_METADATA`,
+    so a restamp also refreshes it), the release identity ``release``
+    (:func:`release_keys`) and the counts of ``stats``."""
+    static = {k.decode(): v.decode() for k, v in PARQUET_METADATA.items()}
+    return {**static, **release, **stats.metadata()}
+
+
 def build_shifts(
     in_bundle: Path,
     out_path: Path,
     pkl_dir: Path,
     labelled: dict[str, tuple[str, dict]] | None = None,
+    release: dict[str, str] | None = None,
 ) -> None:
     """Write the chemical-shift table for the bundle's chains.
 
@@ -1451,9 +1574,19 @@ def build_shifts(
     chain of the main table is enumerated, so the two join on ``id`` with no
     orphans on either side. ``labelled`` is ``label_records(in_bundle)``, when
     already loaded.
+
+    The table is streamed out with a fast codec while its counts accumulate
+    (:class:`trizod.shifts.ShiftTableStats`), then restamped at zstd-19 with the
+    release keys ``release`` (:func:`release_keys`; default: this checkout and
+    the bundle's scoring commit) and the counts, so no number in its metadata
+    is typed by hand.
     """
     if labelled is None:
         labelled = label_records(in_bundle)
+    if release is None:
+        release = release_keys(
+            scoring=ri.scoring_block(ri.bundle_pipeline_version(in_bundle))
+        )
     offsets = {rid: chain_offsets(rec) for rid, (_, rec) in labelled.items()}
     print(f"\nbuilding shift table for {len(offsets)} chains from {pkl_dir} ...")
     if not pkl_dir.is_dir():
@@ -1470,44 +1603,75 @@ def build_shifts(
             "silently unassessed. Regenerate it with scripts/build_mad_reference.py."
         )
     print(f"far-outlier reference: {reference.source}")
+    stats = ShiftTableStats()
     frames = (
         (cid, annotate_mad(annotate_offsets(df, offsets.get(cid)), reference))
-        for cid, df in iter_shift_frames(list(offsets), pkl_dir)
+        for cid, df in iter_shift_frames(list(offsets), pkl_dir, stats=stats)
     )
-    path, n_rows = write_shift_parquet(frames, out_path, mad_reference=reference)
-
-    _, pq = import_pyarrow()
-    # Aggregate inside Arrow. `.to_pylist()` on the two string columns would
-    # allocate ~12 M Python str objects each -- ~1 GB of transient heap for four
-    # print lines, in the one function that streams its output precisely so the
-    # whole table is never resident.
-    import pyarrow.compute as pc
-
-    table = pq.read_table(
-        path, columns=["id", "is_backbone", "offset_source", "is_far_outlier"]
+    path, n_rows = write_shift_parquet(
+        frames, out_path, compression_level=1, mad_reference=reference, stats=stats
     )
-    n_chains = pc.count_distinct(table.column("id")).as_py()
-    n_bb = pc.sum(table.column("is_backbone")).as_py()
-    flags = table.column("is_far_outlier")
-    n_assessed = len(flags) - flags.null_count
-    n_flagged = pc.sum(flags).as_py() or 0
-    flagged_chains = pc.count_distinct(
-        table.filter(pc.fill_null(flags, False)).column("id")
-    ).as_py()
-    source_counts = {
-        row["values"]: row["counts"]
-        for row in table.column("offset_source").value_counts().to_pylist()
-    }
-    withheld = source_counts.get("not_transferable", 0)
+    restamp_shift_parquet(path, shift_release_metadata(stats, release))
+    print_shift_counts(path, stats, len(offsets))
+
+
+def print_shift_counts(path: Path, stats, n_chains_released: int) -> None:
+    c = stats.counts()
     print(f"wrote {path}  ({path.stat().st_size / 1e6:.2f} MB)")
-    print(f"rows: {n_rows}   chains: {n_chains} / {len(offsets)}")
-    print(f"  backbone: {n_bb}   side chain: {n_rows - n_bb}")
-    print(f"  corrected: {n_rows - withheld}   raw only (NULL): {withheld}")
-    print("  offset_source:", source_counts)
+    print(f"rows: {c['rows']}   chains: {c['chains']} / {n_chains_released}")
+    print(f"  backbone: {c['backbone_rows']}   side chain: {c['sidechain_rows']}")
     print(
-        f"  far outliers: {n_flagged} of {n_assessed} assessed shifts "
-        f"in {flagged_chains} chains"
+        f"  corrected: {c['corrected_rows']}   raw only (NULL): "
+        f"{c['rows'] - c['corrected_rows']}"
     )
+    print("  offset_source:", c["offset_source"])
+    far = c["far_outlier"]
+    print(
+        f"  far outliers: {far['flagged']} of {far['assessed']} assessed shifts "
+        f"in {far['chains']} chains"
+    )
+    dup = c["duplicate_keys"]
+    print(
+        f"  repeated keys: {dup['same_value']} same value, "
+        f"{dup['different_value']} two values"
+    )
+    nc = c["not_covered"]
+    if isinstance(nc, dict):
+        print(
+            f"  not covered: {nc['values']} of {nc['deposited_values']} values "
+            f"on {nc['comp_ids']} Comp_IDs in {nc['chains']} chains"
+        )
+
+
+def restamp_shifts(
+    shifts_in: Path,
+    out_path: Path,
+    pkl_dir: Path | None,
+    release: dict[str, str],
+) -> None:
+    """Restamp an existing shift table's metadata (release keys, counts, the
+    current static text) without rebuilding it: the counts come from the file
+    itself, the excluded non-canonical values from the raw shifts of its
+    chains in ``pkl_dir`` (counted as not read when None). The data are
+    checked unchanged (:func:`trizod.shifts.restamp_shift_parquet`)."""
+    from trizod.shifts.extract import iter_chains
+
+    stats = ShiftTableStats()
+    ids = []
+    for cid, df in iter_file_frames(shifts_in):
+        stats.add_frame(cid, df)
+        ids.append(cid)
+    print(f"read {stats.rows} rows over {stats.chains} chains from {shifts_in}")
+    if pkl_dir is not None:
+        if not pkl_dir.is_dir():
+            raise SystemExit(f"BMRB pickle cache not found: {pkl_dir}")
+        logging.getLogger("trizod.bmrb").setLevel(logging.CRITICAL)
+        for cid, _seq, shifts in iter_chains(ids, pkl_dir):
+            stats.add_raw(cid, shifts)
+    restamp_shift_parquet(
+        shifts_in, shift_release_metadata(stats, release), out_path=out_path
+    )
+    print_shift_counts(out_path, stats, len(ids))
 
 
 def snapshot_label(bmrb_dir: Path) -> str:
@@ -1597,7 +1761,25 @@ def main(argv=None) -> None:
         "--pkl-dir",
         type=Path,
         default=paths.PKL_DIR,
-        help="BMRB pickle cache read by --shifts-out (default: tmp/bmrb_entries)",
+        help="BMRB pickle cache read by --shifts-out and --restamp-shifts "
+        "(default: tmp/bmrb_entries)",
+    )
+    ap.add_argument(
+        "--restamp-shifts",
+        type=Path,
+        default=None,
+        metavar="SHIFTS_PARQUET",
+        help="restamp an existing trizod_shifts.parquet instead of rebuilding it: "
+        "release keys, counts (from the file; the excluded non-canonical values "
+        "from --pkl-dir) and the current metadata text; written to --shifts-out "
+        "(default: in place). The data are checked unchanged",
+    )
+    ap.add_argument(
+        "--scoring-commit",
+        default=None,
+        help="commit (or trizod-<sha> pipeline_version) that scored the entries "
+        "and wrote the package bundle (default: the bundle MANIFEST's "
+        "pipeline_version)",
     )
     ap.add_argument(
         "--version",
@@ -1647,9 +1829,29 @@ def main(argv=None) -> None:
             return
     if args.in_bundle is None:
         ap.error("--in-bundle is required to build")
-    if not args.out and not args.shifts_out:
-        ap.error("nothing to do: pass --out and/or --shifts-out")
+    if not args.out and not args.shifts_out and not args.restamp_shifts:
+        ap.error("nothing to do: pass --out, --shifts-out and/or --restamp-shifts")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    scoring = ri.scoring_block(
+        args.scoring_commit or ri.bundle_pipeline_version(args.in_bundle)
+    )
+    print(f"scoring commit: {scoring['commit']} ({scoring['pipeline_version']})")
+    snapshot = ri.snapshot_block(args.snapshot_dir or args.bmrb_dir)
+    if snapshot is None:
+        print(
+            "  WARNING: no BMRB_SNAPSHOT.json in "
+            f"{args.snapshot_dir or args.bmrb_dir} -- the bmrb_snapshot "
+            "metadata will say 'not recorded'"
+        )
+    if args.restamp_shifts:
+        restamp_shifts(
+            args.restamp_shifts,
+            args.shifts_out or args.restamp_shifts,
+            args.pkl_dir,
+            release_keys(args.version, snapshot, scoring=scoring),
+        )
+        if not args.out:
+            return
     composition_csv = None
     if args.out:
         # The composition cache lives in the build work dir, not in the bundle
@@ -1711,13 +1913,6 @@ def main(argv=None) -> None:
                 overlaps = co.chezod_overlaps(chains, sets, Path(td))
             for name, ids in overlaps.items():
                 print(f"  {co.overlap_column(name)}: {len(ids)} chains")
-        snapshot = ri.snapshot_block(args.snapshot_dir or args.bmrb_dir)
-        if snapshot is None:
-            print(
-                "  WARNING: no BMRB_SNAPSHOT.json in "
-                f"{args.snapshot_dir or args.bmrb_dir} -- the bmrb_snapshot "
-                "metadata will say 'not recorded'"
-            )
         calibration = None
         if args.calibration is not None:
             fw_commit = (
@@ -1745,9 +1940,16 @@ def main(argv=None) -> None:
             version=args.version,
             snapshot=snapshot,
             calibration=calibration,
+            scoring=scoring,
         )
-    if args.shifts_out:
-        build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)
+    if args.shifts_out and not args.restamp_shifts:
+        build_shifts(
+            args.in_bundle,
+            args.shifts_out,
+            args.pkl_dir,
+            labelled,
+            release=release_keys(args.version, snapshot, scoring=scoring),
+        )
 
 
 if __name__ == "__main__":

@@ -4,13 +4,13 @@
 - Package manager: `uv`
 - Install: `uv sync --group dev`
 - Run CLI: `uv run trizod --help`
-- Run tests: `uv run pytest tests/ -v`
+- Run tests: `uv run --with pyarrow python -m pytest tests/ -v` (keep `python -m`: a bare `uv run --with pyarrow pytest` skipped the Parquet tests silently under uv 0.13.8)
 - Lint: `uv run ruff check trizod/` and `uv run ruff format --check trizod/`
 
 ## Before Every Commit
 1. `uv run ruff check trizod/ tests/`
 2. `uv run ruff format --check trizod/ tests/`
-3. `uv run pytest tests/ -v`
+3. `uv run --with pyarrow python -m pytest tests/ -v`
 All three must pass.
 
 ## Architecture
@@ -119,7 +119,7 @@ criterion below; never claim zero leakage) is built by a chain of subcommands
 - `tests/test_sequence_alphabet.py` — trailing non-letters stripped, internal ones mapped to X
 - `tests/test_chezod_equality.py` — CheZOD reproduction regression
 - `tests/test_full_dataset_regression.py` — full-dataset regression (requires data/)
-- Pipeline/regression tests require BMRB data in `data/raw/bmrb_entries/`
+- Pipeline/regression tests require BMRB data in `data/raw/bmrb_entries/`, or `TRIZOD_DATA_ROOT=<checkout holding data/>` (a worktree has no `data/`) and `TRIZOD_BMRB_DIR=<snapshot>`; `tests/test_full_dataset_regression.py` (`-m slow`) needs `TRIZOD_REGRESSION_BUILD=<build under data/interim>`
 
 ## Documentation
 - `docs/pipeline.md` / `docs/pipeline-overview.md` — pipeline walkthrough + overview

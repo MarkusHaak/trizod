@@ -35,14 +35,23 @@ Membership (by the Parquet's ``split`` / ``train_tier`` / ``cluster_repr``):
 * train + valid -- the tier's training representatives: ``split == "train"``
   with ``train_tier`` at or stricter than the tier (``TIER_ORDER``). Redundant
   cluster members are never exported.
-* valid -- a seeded draw of whole clusters (``cluster_repr``) from those
-  representatives: ``round(fraction * n_clusters)`` clusters, drawn with
-  ``random.Random(seed).sample`` from the naturally sorted cluster IDs.
-  UdonPred v2 ships pre-split files and states no fraction in code (v1 used
-  5-fold CV), so the default is 10 %. In the release every training
-  representative heads its own 50 %/80 % mmseqs cluster, so the draw is per
-  cluster by construction; grouping by ``cluster_repr`` keeps it so if a
-  release ever lists several representatives per cluster.
+* valid -- a seeded draw of whole HOMOLOGY COMPONENTS of those
+  representatives (re-audit 2026-11-17b, item 3 / G37). An all-vs-all mmseqs
+  search of the training representatives under the leakage rule
+  (:func:`training_leakage_pairs`: >= 30 % identity over >= 80 % of either
+  chain, >= 27 bits, every reported alignment, both directions -- the search
+  of :func:`trizod.dataset.mmseqs.find_self_leaks`) links two
+  representatives that meet it; a tier's components are the connected
+  components of its representatives under those links (and under a shared
+  ``cluster_repr``), each named after its naturally smallest member.
+  ``round(fraction * n_components)`` components are drawn with
+  ``random.Random(seed).sample`` from the naturally sorted component IDs, so
+  no training chain meets the rule against a valid chain. UdonPred v2 ships
+  pre-split files and states no fraction in code (v1 used 5-fold CV), so the
+  default is 10 % of the components. (Before, valid was drawn by whole
+  50 %/80 % clusters; every representative heads its own, so that was a random
+  10 % of representatives, 235 of 488 tolerant valid chains with a training
+  homolog at the rule.)
 * test -- ``split == "test_trizod"`` only. ``test_retired`` (pinned test chains
   retired because they no longer meet strict, overlap CheZOD117 or duplicate
   another test chain; column ``retired_reason``) is neither test nor training
@@ -69,7 +78,9 @@ import json
 import math
 import random
 import re
+import shutil
 import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -77,8 +88,10 @@ import numpy as np
 
 from trizod import paths
 from trizod.dataset import class_balance as cb
+from trizod.dataset import mmseqs as mm
 from trizod.dataset import release_info as ri
 from trizod.dataset.tiers import LABEL_SOURCE_RULE, TIER_ORDER
+from trizod.io.fasta import write_fasta
 
 #: UdonPred's per-residue mask value (``flatten_and_mask(..., mask_value=999)``).
 MASK_VALUE = 999.0
@@ -88,6 +101,8 @@ RECORD_FIELDS = ("id", "x_0", "y")
 DEFAULT_TIERS = ("tolerant", "moderate", "strict")
 DEFAULT_VALID_FRACTION = 0.10
 DEFAULT_SEED = 42
+#: The leakage rule that keeps valid apart from train (the release's rule).
+VALID_RULE = "either"
 
 TRAIN_SPLIT = "train"
 TEST_SPLIT = "test_trizod"
@@ -192,15 +207,84 @@ def training_representatives(rows, tier: str) -> list[dict]:
 
 
 def cluster_key(row: dict) -> str:
-    """The cluster a training representative is drawn by (``cluster_repr``)."""
+    """The 50 %/80 % cluster of a training representative (``cluster_repr``)."""
     return row.get("cluster_repr") or row["id"]
 
 
-def draw_valid_clusters(reps, fraction: float, seed: int) -> set[str]:
-    """Seeded draw of ``round(fraction * n_clusters)`` whole clusters."""
-    clusters = sorted({cluster_key(r) for r in reps}, key=natural_key)
-    k = round(fraction * len(clusters))
-    return set(random.Random(seed).sample(clusters, k))
+def training_leakage_pairs(reps) -> list[tuple[str, str]]:
+    """``(a, b)`` ID pairs (``a < b``, sorted) of training representatives
+    that meet the leakage rule (:data:`VALID_RULE`) against each other: one
+    all-vs-all mmseqs search (:func:`trizod.dataset.mmseqs.find_self_leaks`,
+    every reported alignment, both directions). mmseqs scratch lives in a
+    temporary directory."""
+    seqs = {r["id"]: r["sequence"] for r in reps}
+    if len(seqs) < 2:
+        return []
+    if not shutil.which("mmseqs"):
+        raise SystemExit(
+            "mmseqs not found in PATH: the validation split is drawn over "
+            "homology components of the training representatives"
+        )
+    with tempfile.TemporaryDirectory(prefix="trizod_valid_") as td:
+        work = Path(td)
+        fa = work / "representatives.fasta"
+        write_fasta(seqs, fa)
+        hits = mm.find_self_leaks(
+            fa, work / "hits.tsv", work / "tmp", work / "search.log", rule=VALID_RULE
+        )
+    return sorted(
+        {tuple(sorted((h.train_id, h.test_id), key=natural_key)) for h in hits},
+        key=lambda p: (natural_key(p[0]), natural_key(p[1])),
+    )
+
+
+def leakage_components(ids, pairs) -> dict[str, str]:
+    """``{id: component ID}``: the connected components of ``ids`` under the
+    ``pairs`` with both ends in ``ids`` (others are ignored). A component is
+    named after its naturally smallest member."""
+    parent = {i: i for i in ids}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in pairs:
+        if a in parent and b in parent:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                # the root of a set is its naturally smallest member
+                parent[max(ra, rb, key=natural_key)] = min(ra, rb, key=natural_key)
+    return {i: find(i) for i in parent}
+
+
+def representative_components(reps, pairs) -> dict[str, str]:
+    """:func:`leakage_components` of the training representatives ``reps``,
+    with representatives that share a ``cluster_repr`` joined as well."""
+    by_cluster: dict[str, list[str]] = {}
+    for r in reps:
+        by_cluster.setdefault(cluster_key(r), []).append(r["id"])
+    same_cluster = [(g[0], other) for g in by_cluster.values() for other in g[1:]]
+    return leakage_components([r["id"] for r in reps], [*pairs, *same_cluster])
+
+
+def draw_valid_components(components: dict[str, str], fraction: float, seed: int):
+    """Seeded draw of ``round(fraction * n_components)`` component IDs from the
+    naturally sorted IDs of ``components`` (``{id: component ID}``)."""
+    ids = sorted(set(components.values()), key=natural_key)
+    k = round(fraction * len(ids))
+    return set(random.Random(seed).sample(ids, k))
+
+
+def crossing_pairs(train, valid, pairs) -> list[tuple[str, str]]:
+    """The ``pairs`` with one end in ``train`` and the other in ``valid``
+    (ID sets)."""
+    return [
+        (a, b)
+        for a, b in pairs
+        if (a in train and b in valid) or (a in valid and b in train)
+    ]
 
 
 def _exact_shared(a, b) -> int:
@@ -212,12 +296,21 @@ def build_views(
     tiers=DEFAULT_TIERS,
     valid_fraction: float = DEFAULT_VALID_FRACTION,
     seed: int = DEFAULT_SEED,
+    pairs=None,
+    components: dict | None = None,
 ) -> dict[str, dict[str, list[dict]]]:
     """``{folder: {split: [rows]}}`` for every tier folder plus ``chezod117``.
 
+    ``pairs`` are the leakage-rule pairs of training representatives
+    (:func:`training_leakage_pairs`; computed with mmseqs over the loosest
+    tier's representatives when None); ``valid`` is drawn over the components
+    they form (:func:`representative_components`). ``components``, when
+    given, is filled with ``{folder: {id: component ID}}``.
+
     Rows within a file are in natural ID order, so the output does not depend
-    on the Parquet's row order. Raises ValueError on duplicate IDs or when a
-    training sequence also occurs, exactly, in a test file.
+    on the Parquet's row order. Raises ValueError on duplicate IDs, when a
+    training sequence also occurs, exactly, in a test file, or when a pair
+    crosses train and valid.
     """
     if not 0.0 <= valid_fraction < 1.0:
         raise ValueError(f"valid fraction must be in [0, 1): {valid_fraction}")
@@ -227,16 +320,32 @@ def build_views(
         raise ValueError(f"{len(dup)} duplicate ids, e.g. {dup[:5]}")
     test = [r for r in ordered if r["split"] == TEST_SPLIT]
     chezod = [r for r in ordered if r["split"] == CHEZOD_SPLIT]
+    if pairs is None and tiers:
+        # the loosest tier's representatives hold every other tier's
+        loosest = min(tiers, key=TIER_ORDER.index)
+        pairs = training_leakage_pairs(training_representatives(ordered, loosest))
+    pairs = list(pairs or ())
 
     views: dict[str, dict[str, list[dict]]] = {}
     for tier in tiers:
         reps = training_representatives(ordered, tier)
-        valid = draw_valid_clusters(reps, valid_fraction, seed)
-        views[tier_folder(tier)] = {
-            "train": [r for r in reps if cluster_key(r) not in valid],
-            "valid": [r for r in reps if cluster_key(r) in valid],
+        comp = representative_components(reps, pairs)
+        valid = draw_valid_components(comp, valid_fraction, seed)
+        folder = tier_folder(tier)
+        views[folder] = {
+            "train": [r for r in reps if comp[r["id"]] not in valid],
+            "valid": [r for r in reps if comp[r["id"]] in valid],
             "test": test,
         }
+        if components is not None:
+            components[folder] = comp
+        crossing = crossing_pairs(
+            {r["id"] for r in views[folder]["train"]},
+            {r["id"] for r in views[folder]["valid"]},
+            pairs,
+        )
+        if crossing:  # cannot happen: valid holds whole components
+            raise ValueError(f"{tier}: {len(crossing)} pairs cross train and valid")
         for name, held in (("test_trizod", test), ("test_chezod117", chezod)):
             n = _exact_shared(reps, held)
             if n:
@@ -325,13 +434,16 @@ def write_views(views, out) -> dict[str, dict[str, dict]]:
     return stats
 
 
-def verify_views(out, rows, views) -> list[str]:
+def verify_views(out, rows, views, pairs=None) -> list[str]:
     """Check F29: the written files agree with the Parquet rows, by ``id``.
 
     Membership is re-derived from ``rows`` (not from ``views``) for every
     folder; every value is compared position by position: ``y == 999`` exactly
     where the Parquet masks the residue, ``float32(y) == gscores`` elsewhere.
-    Returns a list of problems (empty when the view is faithful).
+    With ``pairs`` (the leakage-rule pairs of training representatives), a
+    pair with one chain in a folder's train file and one in its valid file is
+    a problem too (G37). Returns a list of problems (empty when the view is
+    faithful).
     """
     out = Path(out)
     by_id = {r["id"]: r for r in rows}
@@ -386,6 +498,14 @@ def verify_views(out, rows, views) -> list[str]:
             got = seen.get("train", set()) | seen.get("valid", set())
             if got != reps or seen.get("train", set()) & seen.get("valid", set()):
                 problems.append(f"{folder}: train+valid != {tier} representatives")
+            crossing = crossing_pairs(
+                seen.get("train", set()), seen.get("valid", set()), pairs or ()
+            )
+            if crossing:
+                problems.append(
+                    f"{folder}: {len(crossing)} train/valid pairs meet the leakage "
+                    f"rule, e.g. {crossing[:3]}"
+                )
             want = {"test": want_test}
         if seen.get("test") != want["test"]:
             problems.append(f"{folder}: test membership differs from the Parquet")
@@ -459,7 +579,49 @@ def class_balance(rows, meta) -> list[dict] | None:
     return cb.compute(rows, cb.parse_calibration(meta.get("calibration")))
 
 
-def build_summary(parquet, rows, meta, views, stats, tiers, fraction, seed, problems):
+def component_summary(views, components, pairs) -> tuple[dict, dict]:
+    """``({folder: counts}, {folder: {component ID: [members]}})`` of the
+    valid draw: per tier folder the number of components, of singletons, the
+    largest component, the number of rule pairs inside the tier, of valid
+    components and chains, and of rule pairs across train and valid (0); and
+    the components drawn into valid with their members."""
+    stats, drawn = {}, {}
+    for folder, comp in components.items():
+        members: dict[str, list[str]] = {}
+        for rid, cid in comp.items():
+            members.setdefault(cid, []).append(rid)
+        valid_ids = {r["id"] for r in views[folder]["valid"]}
+        train_ids = {r["id"] for r in views[folder]["train"]}
+        valid_comps = sorted({comp[i] for i in valid_ids}, key=natural_key)
+        sizes = [len(m) for m in members.values()]
+        stats[folder] = {
+            "n_components": len(members),
+            "n_singletons": sum(s == 1 for s in sizes),
+            "largest": max(sizes, default=0),
+            "n_pairs": sum(a in comp and b in comp for a, b in pairs),
+            "n_valid_components": len(valid_comps),
+            "n_valid_chains": len(valid_ids),
+            "n_train_valid_pairs": len(crossing_pairs(train_ids, valid_ids, pairs)),
+        }
+        drawn[folder] = {
+            cid: sorted(members[cid], key=natural_key) for cid in valid_comps
+        }
+    return stats, drawn
+
+
+def build_summary(
+    parquet,
+    rows,
+    meta,
+    views,
+    stats,
+    tiers,
+    fraction,
+    seed,
+    problems,
+    components=None,
+    pairs=(),
+):
     files = {}
     for folder, splits in stats.items():
         for split, st in splits.items():
@@ -469,6 +631,7 @@ def build_summary(parquet, rows, meta, views, stats, tiers, fraction, seed, prob
             }
             files[f"{folder}/{split}.fasta"] = fasta
     split_counts = dict(sorted(Counter(r["split"] for r in rows).items()))
+    comp_stats, comp_drawn = component_summary(views, components or {}, pairs)
     return {
         "view": "UdonPred v2 JSONL",
         "schema": {
@@ -495,17 +658,22 @@ def build_summary(parquet, rows, meta, views, stats, tiers, fraction, seed, prob
         "tiers": list(tiers),
         "seed": seed,
         "valid_fraction": fraction,
-        "valid_unit": "cluster_repr; round(fraction * n_clusters) clusters per tier, "
-        "random.Random(seed).sample over naturally sorted cluster ids",
+        "valid_unit": "homology component: the connected components of the "
+        "tier's training representatives, two representatives joined when any "
+        "alignment between them meets the leakage rule (valid_rule) in one "
+        "all-vs-all mmseqs search, or when they share a cluster_repr; "
+        "round(fraction * n_components) components per tier, "
+        "random.Random(seed).sample over the naturally sorted component IDs (a "
+        "component's ID is its naturally smallest member)",
+        "valid_rule": mm.describe_rule(VALID_RULE),
+        "components": comp_stats,
+        "valid_components": comp_drawn,
         "test_definition": f"split == {TEST_SPLIT} only; {RETIRED_SPLIT} is never exported",
         "split_counts": split_counts,
         "not_exported": {
             s: split_counts.get(s, 0) for s in ("redundant", RETIRED_SPLIT, "excluded")
         },
         "train_equal_to_retired_sequences": _leakage_retired(views, rows),
-        "train_reps_head_own_cluster": all(
-            cluster_key(r) == r["id"] for r in rows if r["split"] == TRAIN_SPLIT
-        ),
         "files": files,
         "valid_ids": {
             f: [r["id"] for r in s["valid"]] for f, s in views.items() if "valid" in s
@@ -520,10 +688,11 @@ def render_readme(summary: dict) -> str:
     n_test = n[f"{tier_folder(summary['tiers'][0])}/test.jsonl"]
     n_chezod = n[f"{CHEZOD_FOLDER}/test.jsonl"]
     pct = round(summary["valid_fraction"] * 100)
-    own = (
-        "Each representative heads its own 50 %/80 % mmseqs cluster"
-        if summary["train_reps_head_own_cluster"]
-        else "Representatives sharing a `cluster_repr` stay on one side"
+    comps = summary.get("components") or {}
+    comp_counts = "; ".join(
+        f"`{folder}/`: {st['n_valid_components']} of {st['n_components']} "
+        f"components, {st['n_valid_chains']} chains"
+        for folder, st in comps.items()
     )
 
     def scope(tier):
@@ -585,10 +754,17 @@ def render_readme(summary: dict) -> str:
         '"train"` and `train_tier` at or stricter than the tier). Redundant '
         "cluster members are not exported. Tolerant is the default UdonPred "
         "trained on; moderate and strict are stricter, smaller subsets.",
-        f"- **valid**: {pct} % of the tier's clusters (`cluster_repr`), drawn "
-        f"with seed {summary['seed']}; whole clusters go to valid, so no cluster "
-        f"straddles train and valid. {own}; homologues below 50 % identity "
-        "can still fall on both sides.",
+        f"- **valid**: about {pct} % of the tier's homology components, drawn "
+        f"with seed {summary['seed']}. An all-vs-all search of the tier's "
+        "training representatives joins two of them into one component when "
+        "any alignment between them meets the leakage rule "
+        f"({summary['valid_rule']}), and whole components go to valid, so no "
+        "training chain meets the leakage rule against a valid chain"
+        + (f" ({comp_counts})" if comp_counts else "")
+        + ". Homologues below the rule (under 30 % identity, under 80 % "
+        "coverage of both chains, or under 27 bits) can still fall on both "
+        "sides; `export_summary.json` lists the valid components and their "
+        "members.",
         f"- **test**: the final TriZOD test set, {test_name}, "
         '`split == "test_trizod"`, identical in every tier folder. '
         "Retired test chains "
@@ -651,14 +827,41 @@ def export(
     valid_fraction: float = DEFAULT_VALID_FRACTION,
     seed: int = DEFAULT_SEED,
 ) -> dict:
-    """Read the Parquet, write every view, verify it (F29) and summarise."""
+    """Read the Parquet, write every view, verify it (F29, and that no
+    leakage-rule pair crosses train and valid) and summarise."""
     out = Path(out)
     rows, meta = read_release(parquet)
-    views = build_views(rows, tiers=tiers, valid_fraction=valid_fraction, seed=seed)
+    ordered = sorted(rows, key=lambda r: natural_key(r["id"]))
+    pairs = (
+        training_leakage_pairs(
+            training_representatives(ordered, min(tiers, key=TIER_ORDER.index))
+        )
+        if tiers
+        else []
+    )
+    components: dict[str, dict[str, str]] = {}
+    views = build_views(
+        rows,
+        tiers=tiers,
+        valid_fraction=valid_fraction,
+        seed=seed,
+        pairs=pairs,
+        components=components,
+    )
     stats = write_views(views, out)
-    problems = verify_views(out, rows, views)
+    problems = verify_views(out, rows, views, pairs=pairs)
     summary = build_summary(
-        parquet, rows, meta, views, stats, tiers, valid_fraction, seed, problems
+        parquet,
+        rows,
+        meta,
+        views,
+        stats,
+        tiers,
+        valid_fraction,
+        seed,
+        problems,
+        components=components,
+        pairs=pairs,
     )
     (out / "export_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (out / "README.md").write_text(render_readme(summary))
@@ -689,7 +892,8 @@ def main(argv=None) -> None:
         "--valid-fraction",
         type=float,
         default=DEFAULT_VALID_FRACTION,
-        help="fraction of each tier's clusters drawn into valid (default: %(default)s)",
+        help="fraction of each tier's homology components drawn into valid "
+        "(default: %(default)s)",
     )
     ap.add_argument(
         "--seed", type=int, default=DEFAULT_SEED, help="(default: %(default)s)"

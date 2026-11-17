@@ -15,8 +15,9 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
      no release chain, and none of which is identical to its release chain
      (release audit E23) -- the TriZOD test set and the RETIRED TriZOD test
      chains, ``testset/TriZOD_test_retired.fasta``: pinned test chains that
-     left the strict tier or were retired for a CheZOD117 overlap or as a
-     within-test duplicate, no longer tested on but still kept out of
+     left the strict tier or were retired for a CheZOD117 overlap, as a
+     reviewed shared construct (``trizod/dataset/data/test_retirements.tsv``)
+     or as a within-test duplicate, no longer tested on but still kept out of
      training, so training is what it would be with the full pin), in TWO
      stages
      (matching the manuscript redundancy-reduction figure):
@@ -25,7 +26,14 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
            coverage of BOTH sequences (--cov-mode 0) and drop every
            training sequence that shares a cluster with a test sequence
            (catches transitive leakage A~B~test that a direct search
-           misses).
+           misses). mmseqs' greedy set cover breaks ties by input order, so
+           the input is canonical: the training chains in sequence-ID order,
+           then every leakage target, the files merged and sorted by ID
+           (``build_combined_testset``, ``write_stage1_input``). Which file
+           a target comes from -- test, retired, CheZOD117 -- and the order of
+           the files no longer change the removed set (re-audit 2026-11-17b
+           dry run: moving four test chains to the retired file flipped
+           6514_1_1_1 and eight other chains).
        2b. stage-2 "search & remove": easy-search the training sequences
            against the test sets IN BOTH DIRECTIONS (training as query, and
            test as query; release audit E22) -- once, on the unfiltered
@@ -35,7 +43,11 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
            drop every TRAINING chain with an alignment of >= 30% identity and
            >= 27 bits over >= 80% of the TEST chain (``--leakage-rule test``)
            or of the test OR the training chain (``--leakage-rule either``,
-           the default, i.e. of the shorter chain; decision D2). A test chain
+           the default, i.e. of the shorter chain; decision D2). Any reported
+           alignment counts, the best one or one of up to 10 alternative
+           ones (``--alt-ali 10``; release re-audit 2026-11-17b: a repeat or
+           tandem construct can meet the rule on its second alignment only,
+           e.g. 51068_1_1_1 ~ test 51080_1_1_1). A test chain
            is never removed here. Coverage is the aligned span, gaps included
            (--cov-mode 1 -c 0 with the 80 % applied to the parsed spans, see
            ``trizod.dataset.mmseqs.leakage_search_cmd`` / ``is_leak``). This
@@ -164,28 +176,57 @@ def leakage_target_sources(
     return sources
 
 
+def canonical_id_key(rec_id: str) -> tuple:
+    """Natural sort key of a sequence ID (``9_1_1_1`` < ``100_1_1_1``; a name
+    such as the original CheZOD117 ``hmbdi`` sorts after the numbers of its
+    position), never comparing an int with a str."""
+    return tuple(
+        (0, int(p), "") if p.isdigit() else (1, 0, p) for p in rec_id.split("_")
+    )
+
+
 def build_combined_testset(sources: list[Path], out: Path) -> dict[str, str]:
-    """Concatenate the test-set FASTAs into `out`, de-duplicating by header
-    token and asserting no two test sets share a sequence ID. Returns the
-    {test_id: source_name} map of every retained test sequence."""
+    """Merge the leakage-target FASTAs into `out`, every record (header line
+    kept) in :func:`canonical_id_key` order, so the file depends on the
+    records alone, not on which source holds which or on the order of the
+    sources; no two sources may share a sequence ID. Returns the
+    {test_id: source_name} map of every target."""
     seen: dict[str, str] = {}
+    records: dict[str, list[str]] = {}
+    for src in sources:
+        lines = None
+        for line in open(src):
+            if line.startswith(">"):
+                tok = line[1:].split()[0]
+                if tok in seen:
+                    raise SystemExit(
+                        f"test-set ID collision: {tok} in both "
+                        f"{seen[tok]} and {src.name}"
+                    )
+                seen[tok] = src.name
+                lines = records[tok] = [line if line.endswith("\n") else line + "\n"]
+            elif lines is not None:
+                lines.append(line if line.endswith("\n") else line + "\n")
     with open(out, "w") as o:
-        for src in sources:
-            write_record = False
-            for line in open(src):
-                if line.startswith(">"):
-                    tok = line[1:].split()[0]
-                    if tok in seen:
-                        raise SystemExit(
-                            f"test-set ID collision: {tok} in both "
-                            f"{seen[tok]} and {src.name}"
-                        )
-                    seen[tok] = src.name
-                    write_record = True
-                    o.write(line)
-                elif write_record:
-                    o.write(line)
+        for tok in sorted(records, key=canonical_id_key):
+            o.writelines(records[tok])
     return seen
+
+
+def write_stage1_input(super_fa: Path, combined_test: Path, out: Path) -> Path:
+    """The stage-1 clustering input: every training chain of ``super_fa``, then
+    every target of ``combined_test`` tagged with ``TEST_PREFIX``, each block
+    in :func:`canonical_id_key` order and one ``>ID`` line per record, so the
+    input -- and with it mmseqs' tie-breaking -- depends on the records alone,
+    not on the order or grouping of the files they came from."""
+    train = read_fasta(super_fa)
+    test = read_fasta(combined_test)
+    with open(out, "w") as o:
+        for rid in sorted(train, key=canonical_id_key):
+            o.write(f">{rid}\n{train[rid]}\n")
+        for rid in sorted(test, key=canonical_id_key):
+            o.write(f">{TEST_PREFIX}{rid}\n{test[rid]}\n")
+    return out
 
 
 def stage1_cluster_member_removal(
@@ -200,12 +241,9 @@ def stage1_cluster_member_removal(
     and so a cluster's test-contact is detectable from the membership alone.
     """
     test_ids = set(fasta_ids(combined_test))
-    stage1_in = out / "stage1_cluster_input.fasta"
-    with open(stage1_in, "w") as o:
-        for line in open(super_fa):  # training superset, own headers
-            o.write(line)
-        for line in open(combined_test):  # test seqs, TESTSET__-prefixed
-            o.write((">" + TEST_PREFIX + line[1:]) if line.startswith(">") else line)
+    stage1_in = write_stage1_input(
+        super_fa, combined_test, out / "stage1_cluster_input.fasta"
+    )
 
     prefix = tmp / "stage1"
     run(
@@ -257,7 +295,9 @@ def stage2_search_removal(
     identity and >= ``LEAKAGE_MIN_BITS`` bits over >= 80 % of the TEST chain
     (rule ``"test"``) or of the test or the training chain (rule
     ``"either"``), found by either search direction (training as query, test
-    as query). The searches run without a coverage threshold inside mmseqs
+    as query) -- the best alignment of the pair or any alternative one
+    (``trizod.dataset.mmseqs.LEAKAGE_ALT_ALI``). The searches run without a
+    coverage threshold inside mmseqs
     (which would skip pairs by length ratio) and keep alignments whose span
     covers >= 80 % of the test chain, so a training chain that contains a
     test protein is caught however long it is, and a shorter one whose gapped

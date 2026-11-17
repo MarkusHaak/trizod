@@ -48,7 +48,9 @@ retired TriZOD test chains included --
 * meets the stage-2 criterion of ``trizod.dataset.redundancy`` under the rule
   the build used: >= 30 % identity and >= 27 bits over >= 80 % of the test
   chain (rule "test") or of the test or the training chain (rule "either"),
-  searched in both directions. This check runs mmseqs, which must be on PATH.
+  searched in both directions, on every alignment mmseqs reports for the pair
+  (the best one and up to 10 alternative ones, ``--alt-ali 10``; release
+  re-audit 2026-11-17b). This check runs mmseqs, which must be on PATH.
 
 Every offending pair is reported. The rule is read from
 ``<work-dir>/mmseqs/leakage_rule.json``, written by the redundancy step;

@@ -1,0 +1,6 @@
+chain_id	issue	evidence
+19377_1_1_1	cosolvent_evidence_from_protocol_text	cosolvent_evidence is true from the refolding-protocol text of the entry; the NMR sample itself names no cosolvent (reviewed in the 2026-11-17b release audit, D18), so the chain stays in the test set
+31134_1_1_1	membrane_class_alignment_medium	membrane_mimetic names CnEm, used as an alignment medium for anisotropic experiments; not counted by the membrane class rule (release audit 2026-11-17b, D18)
+51677_1_1_1	membrane_class_below_cmc	membrane_mimetic names CHAPSO below its critical micelle concentration; not counted by the membrane class rule (release audit 2026-11-17b, D18)
+6455_1_1_1	cosolvent_not_detected	crambin measured in acetone-water 3:1; acetone is not a cosolvent token, so cosolvent_evidence is false (aside of the 2026-11-17b release audit, stage C; not independently verified)
+19642_1_1_1	sequence_duplicated_segment	the deposited sequence carries a 57-residue duplicated segment without shifts, which defeats the containment rule: residues 3-93 of pinned test chain 53299_1_1_1 are identical to this chain (release audit 2026-11-17b, E26)

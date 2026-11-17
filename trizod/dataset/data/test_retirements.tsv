@@ -1,0 +1,38 @@
+# Pinned TriZOD test chains retired by a reviewed decision rather than a rule.
+# Read by trizod/dataset/testset.py (load_test_retirements, match_test_retirements);
+# the committed pin trizod/dataset/pinned/TriZOD_test_set.fasta is not edited.
+# A retired chain is neither test nor training: split test_retired, still a
+# leakage target, so its training homologues stay where they are and nothing
+# similar to it can enter training later.
+#
+# Decision: release re-audit 2026-11-17b, item 9 (check E26), 17 November 2026.
+# None of these chains meets the leakage rule (>= 30 % identity over >= 80 % of
+# either chain, >= 27 bits) on its deposited sequence, but each is a near-copy of
+# training chains once its expression tag or fusion partner is set aside, so its
+# labels are largely training labels. Retiring the test chain keeps it a leakage
+# target; the alternative, dropping the training partners, cannot clear the GB1
+# overlap (17 training GB1 fusions).
+#
+# id:        pinned chain ID; the row applies to the pinned chain with this sequence
+# sequence:  its pinned sequence (a row whose ID is pinned with another sequence fails)
+# reason:    shared_construct (the only reason so far)
+# partners:  training chains it nearly copies (comma-separated)
+# evidence:  the review, from the re-audit (stage_E e26/v7b/v9)
+#
+# Reviewed and KEPT as test chains (no retirement, recorded here as decided):
+# - 50148_1_1_1 ~ training 15057_1_1_1 (BET bromodomain): 51.8 % identity over
+#   83 % of 15057 (64 % of 50148) once the C-terminal His tag of 15057 is
+#   stripped; below the rule on the deposited sequences. Kept.
+# - 17306_1_1_1 ~ training 4224_1_1_1, 27747_1_1_1 and 53200_1_1_1: after
+#   stripping 17306's C-terminal His tag, 50.5 % over 84 % (4224), 46.1 % over
+#   90 % (27747) and 38.0 % over 87 % (53200) of 17306; below the rule on the
+#   deposited sequences. Kept.
+# - Known issue, kept: training 19642_1_1_1 (RBM39 RRM1) is deposited with a
+#   57-residue duplicated segment that has no shifts; the duplicate defeats the
+#   containment rule against test chain 53299_1_1_1, which is retired below.
+#   19642_1_1_1 itself stays a training chain.
+id	sequence	reason	partners	evidence
+52047_1_1_1	GAMAQYKLALNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTETSDLEFDSLQPSFYPDEDDFYFGGPDSTPPGEDIWKKFELLPTP	shared_construct	52066_1_1_1,53482_1_1_1,53483_1_1_1,16444_1_1_1,27601_1_1_1	GB1 + N-myc transactivation domain fusion. Without the GB1 tag its N-myc part is 97.6 % identical to training 52066_1_1_1, 53482_1_1_1 and 53483_1_1_1 over 89.4 % of the chain (98 bits); its GB1 part ("KLALNGK" variant) is identical to 17 training GB1 fusions. 92 of its 101 scored residues lie in exact 20-mers shared with training.
+27176_1_1_1	MGHVQLSLPVLQVRDHGRAPIKVESQEHKLVPRGSFQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTESGHHHHHH	shared_construct	16444_1_1_1,50680_1_1_1,51093_1_1_1,6280_1_1_1,27601_1_1_1	GB1 fusion: a 55-residue GB1 run identical to 14 training GB1 fusions (e.g. 16444_1_1_1, 50680_1_1_1, 51093_1_1_1, 6280_1_1_1); 55 of its 92 scored residues lie in exact 20-mers shared with training.
+10214_1_1_1	GSSGSSGLDSELELPAGWEKIEDPVYGIYYVDHINRKTQYENPVLEAKRKKQLESGPSSG	shared_construct	6086_1_1_1	MAGI-1 WW domain (RIKEN GSSGSSG/SGPSSG flanks): 100 % identical to training 6086_1_1_1 (MAGI-1 tandem WW domains) over 85 % of the flank-stripped chain; 40 of its 55 scored residues lie in a 40-residue run identical to 6086.
+53299_1_1_1	IDNLTPEERDARTVFCMQLAARIRPRDLEEFFSTVGKVRDVRMISDRNSRRSKGIAYVEFVDVSSVPLAIGLTGQRVLGVPIIVQASQAEKNRAAAMANNLQKGSAGPMRLYVGSLHFNITEDMLRGIFEPFGRIESIQLMMDSETGRSKGYGFITFSDSECAKKALEQLNGFELAGRPMKVGHVTERTDA	shared_construct	19642_1_1_1	RBM39 tandem RRM: residues 3-93 (91 aa, 48 % of its scored residues) are identical to training 19642_1_1_1 (RBM39 RRM1), whose deposited sequence carries a 57-residue duplicated segment without shifts that defeats the containment rule.

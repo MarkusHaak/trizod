@@ -47,6 +47,15 @@ def _row(rid, split, *, train_tier=None, cluster_repr=None, seq=None, g=None, m=
     }
 
 
+@pytest.fixture(autouse=True)
+def _no_homology_search(request, monkeypatch):
+    """The miniature release's 8-residue chains cannot reach the 27-bit floor,
+    so the all-vs-all search of the valid draw would find no pair: skip mmseqs
+    here (tests/test_export_valid_components.py runs it)."""
+    if request.node.name != "test_export_real_release":
+        monkeypatch.setattr(ex, "training_leakage_pairs", lambda reps: [])
+
+
 @pytest.fixture
 def rows():
     """A miniature release: 40 training reps over four tiers, their redundant

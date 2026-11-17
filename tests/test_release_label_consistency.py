@@ -677,6 +677,11 @@ def test_label_source_tier_rule():
 BUNDLE_NAME = "trizod-dataset-2026-10"
 #: Built from that bundle on 2026-10-30, before I-01 was fixed.
 PRE_FIX_DIR = Path("parquet-2026-10-simplify")
+#: I-01's counts, which hold for ONE bundle only: records whose tolerant
+#: label differs from the unfiltered run, and how many of them are training
+#: representatives -- keyed by the bundle MANIFEST's pipeline_version. Any other
+#: bundle (``TRIZOD_RELEASE_BUNDLE``) runs the label checks without them.
+I01_COUNTS = {"trizod-5b8147a": (1073, 478)}
 
 
 def _main_checkout_root() -> Path | None:
@@ -729,6 +734,17 @@ requires_release_bundle = pytest.mark.skipif(
 )
 
 
+def _i01_counts(bundle: Path | None) -> tuple[int, int] | None:
+    """:data:`I01_COUNTS` of ``bundle`` (by its MANIFEST pipeline_version)."""
+    if bundle is None:
+        return None
+    try:
+        version = json.loads((bundle / "MANIFEST.json").read_text())["pipeline_version"]
+    except (OSError, ValueError, KeyError):
+        return None
+    return I01_COUNTS.get(version)
+
+
 def _splits(table, ids):
     split = dict(zip(table["id"], table["split"]))
     out = defaultdict(int)
@@ -742,6 +758,11 @@ def test_release_parquet_built_before_the_fix_fails_the_check():
     """The check would have caught I-01: the 2026-10 Parquet ships unfiltered
     labels for the 478 tolerant-tier training representatives whose tolerant
     record masks an over-limit atom type (1,073 records in all)."""
+    counts = _i01_counts(REAL_BUNDLE)
+    if counts is None:
+        pytest.skip(
+            f"{REAL_BUNDLE} is not the bundle the pre-fix Parquet was built from"
+        )
     old = _pre_fix("trizod_dataset.parquet")
     if old is None:
         pytest.skip("pre-fix 2026-10 Parquet not on disk")
@@ -749,33 +770,44 @@ def test_release_parquet_built_before_the_fix_fails_the_check():
     bad = label_mismatches(REAL_BUNDLE, table)
     assert bad["label_tier_source"] == {"<column missing>"}
     wrong = set().union(*(v for k, v in bad.items() if k != "label_tier_source"))
-    assert len(wrong) == 1073
-    assert _splits(table, wrong)["train"] == 478
+    assert len(wrong) == counts[0]
+    assert _splits(table, wrong)["train"] == counts[1]
 
 
 @requires_release_bundle
 def test_shift_parquet_built_before_the_fix_fails_the_check():
     """...and its shift table applies offsets the tolerant tier rejected, e.g.
     every C shift of 51029_1_1_1 moved by -1.01 ppm."""
+    counts = _i01_counts(REAL_BUNDLE)
+    if counts is None:
+        pytest.skip(
+            f"{REAL_BUNDLE} is not the bundle the pre-fix Parquet was built from"
+        )
     old = _pre_fix("trizod_shifts.parquet")
     if old is None:
         pytest.skip("pre-fix 2026-10 shift Parquet not on disk")
     bad = shift_offset_mismatches(REAL_BUNDLE, old)
     assert "51029_1_1_1" in bad
-    assert len(bad) > 478
+    assert len(bad) > counts[1]
 
 
 @requires_release_bundle
 def test_rebuilt_release_labels_pass_the_check(tmp_path):
     """The fixed builder on the real bundle: every row is its selecting tier's
-    record, 1,073 of them (478 training) now differ from the unfiltered run, and
-    the deploy FASTA built from the same bundle agrees with the Parquet."""
+    record and the deploy FASTA built from the same bundle agrees with the
+    Parquet. On the 2026-10 bundle (:data:`I01_COUNTS`), 1,073 rows (478
+    training) differ from the unfiltered run; another bundle has its own count,
+    so only the check itself runs there."""
     cols = builder.collect_columns(REAL_BUNDLE, None)
     assert label_mismatches(REAL_BUNDLE, cols) == {}
-    unf = _jsonl(REAL_BUNDLE / "scores" / "unfiltered" / "scores.json")
-    moved = {cid for i, cid in enumerate(cols["id"]) if row_diffs(cols, i, unf[cid])}
-    assert len(moved) == 1073
-    assert _splits(cols, moved)["train"] == 478
+    counts = _i01_counts(REAL_BUNDLE)
+    if counts is not None:
+        unf = _jsonl(REAL_BUNDLE / "scores" / "unfiltered" / "scores.json")
+        moved = {
+            cid for i, cid in enumerate(cols["id"]) if row_diffs(cols, i, unf[cid])
+        }
+        assert len(moved) == counts[0]
+        assert _splits(cols, moved)["train"] == counts[1]
     out = _deploy(REAL_BUNDLE, tmp_path, "tolerant", "deploy.fasta")
     assert deploy_mismatches(out, cols) == set()
 

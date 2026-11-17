@@ -4,7 +4,11 @@
 into the deposit's CHANGELOG.md, which is also pasted into the Zenodo version
 notes. Every placeholder in double braces is filled from the release; type no
 counts of the current release into this file. Counts of earlier releases and
-of dated audit builds are historical and stated as such. -->
+of dated audit builds are historical and stated as such. The change and
+known-issue paragraphs come from trizod.dataset.known_issues (finalize
+--previous-build, --pkl-dir, --snapshot-drift, --construct-caveats and
+docs/dataset/known_issues_reviewed.tsv); a missing input renders as "not
+assessed". -->
 
 ## v{{version}}
 
@@ -23,22 +27,29 @@ below.
   is not tested on, and stays a leakage target with its homologues.
 - **History.** v{{previous_version}} tested on {{n_test_previous}} chains. The
   set was redrawn in August 2026 from the corrected strict pool by the original
-  seeded recipe (460 chains), trimmed in November 2026 to the 452 chains that
-  still resolved, and is now resolved against the strict tier of this build.
-  Retired: {{n_retired}} chains ({{retired_by_reason}}). `not_strict`: the chain
-  no longer meets strict (mostly the 2026-11 condition rules);
-  `chezod117_overlap`: it meets the leakage criterion against a CheZOD117
-  sequence; `within_test_duplicate`: the shorter of two test chains at ≥ 50 %
-  identity over ≥ 80 % of either chain.
+  seeded recipe, trimmed in November 2026 to the chains that still resolved,
+  and is now resolved against the strict tier of this build.
+  {{pin_trimmed}}
+- **Retired:** {{n_retired}} chains ({{retired_by_reason}}).
+  {{retired_reasons_explained}}.
 - **Earlier test sets are not comparable**: UdonPred's published Trizod348
-  results, v0.2.0, v{{previous_version}}, and the chains trimmed from the
-  460-chain pin (some are now unfiltered-tier training data). The new
-  `crosswalk/` lists every earlier set and where its sequences are now; the
-  README gives the overlap table and the clean-subset rule.
+  results, v0.2.0, v{{previous_version}}, and the chains trimmed from the pin
+  (now in training or other splits, see above). The new `crosswalk/` lists
+  every earlier set and where its sequences are now; the README gives the
+  overlap table and the clean-subset rule.
 
 ### Tiers
 
 {{changelog_tier_table}}
+
+**Tier moves against {{previous_build}}.** A chain's rule is read from its row in
+this release (`high_pressure`, `membrane_mimetic_sample`, `ionic_strength`
+above the strict cap, `temperature_placeholder`); "273 K re-score" is a chain
+whose re-score at 298 K moved it across an offset or quality limit, "sequence
+alphabet" one whose sequence changed. Every chain is in `known_issues.tsv`
+(`tier_move`).
+
+{{tier_moves_table}}
 
 ### Four condition rules (2026-11)
 
@@ -49,10 +60,10 @@ below.
 - **Re-scored chains.** A deposited temperature of exactly 273 K is read as not
   deposited ({{n_temperature_placeholder}} chains carry
   `temperature_placeholder`). Strict excludes them; the other tiers re-score them
-  at the 298 K default, which changes their labels. On the 2026-11-17 audit
-  build, 718 of the 720 such chains changed, with a per-chain maximum |ΔG| of
-  median 0.127, 90th percentile 0.305 and maximum 0.732, and 1.9 % of their
-  residues crossed G = 0.35.
+  at the 298 K default, which changes their labels. {{rescore_summary}}
+- **CheZOD117 placeholder chains.** {{chezod117_placeholders}} CheZOD117 is not
+  filtered on sample conditions, so these stay test chains with their new
+  labels.
 - Pressure ≥ 400 bar describes a deliberately perturbed ensemble; membrane
   mimetics change the ensemble a disorder label describes; the strict ionic cap
   is a convention that keeps the cleanest tier in dilute buffer.
@@ -87,8 +98,8 @@ reliability cut.
   and `chezod1174_overlap`; and `retired_reason`.
 - Rows are sorted by `(entry_id, id)` in 500-row groups for selective reads.
 - `columns.md` documents every column; the Parquet metadata now records the
-  version, licences, code commit, BMRB snapshot, test-set name, cuts and
-  calibration.
+  version, licences, code commit, scoring commit, BMRB snapshot, test-set
+  name, cuts and calibration.
 
 ### New files
 
@@ -100,8 +111,11 @@ reliability cut.
 - `crosswalk/`: the test-set crosswalk across every earlier test set.
 - `test/`: the test FASTAs, including `TriZOD_test_retired.fasta` and
   `CheZOD117_original_sequences.fasta`.
+- `known_issues.tsv`: every chain with a known issue or a change named here,
+  with its evidence.
 - `datasheet.md`, `columns.md`, `class_balance.tsv`, `bmrb_files.sha256`,
-  `MANIFEST.json` (now over every file) and `SHA256SUMS`.
+  `MANIFEST.json` (now over every file, with the scoring commit beside the
+  build commit) and `SHA256SUMS`.
 
 ### Fixes
 
@@ -117,7 +131,7 @@ reliability cut.
   text are read; reviewed title-only cases are listed in the code repository.
 - **Sequence alphabet**: a trailing stop codon or apostrophe of a deposited
   sequence is dropped, an internal non-letter becomes X. Sequences hold the 20
-  standard residues plus X, U and Z.
+  standard residues plus X, U and Z. {{alphabet_changes}}
 - **Filter corrections** after an external review of the filter code (Sandro
   Kuppel): keyword fields appended character by character, an empty regex
   alternative that matched everything, a `has_metal` flag that never fired,
@@ -131,35 +145,37 @@ reliability cut.
 ### Snapshot and licence
 
 - BMRB snapshot `{{snapshot_name}}` ({{snapshot_n_entries}} entries) replaces
-  the snapshot of 2025-12-01. Measured between the two: 680 entries added, 10
-  withdrawn, and a few deposited shift lists changed in place; BMRB serves only
-  the current file, so `bmrb_files.sha256` now records every file read.
+  the snapshot of 2025-12-01. Measured between the two by the 2026-11-17
+  release audit: 680 entries added, 10 withdrawn, and a few deposited shift
+  lists changed in place; BMRB serves only the current file, so
+  `bmrb_files.sha256` now records every file read. {{snapshot_drift_summary}}
 - The data are now licensed {{data_license}} (v{{previous_version}}: MIT); the
   code stays {{code_license}}. {{bmrb_acknowledgement}}
 
 ### Known issues
 
-The full list, with chain IDs, is in the Supplementary Information of the
-TriZOD paper ("Known issues"). In short:
+`known_issues.tsv` lists every affected chain, one row per chain and issue
+(`chain_id`, `issue`, `evidence`; {{n_known_issues}} rows: {{known_issue_counts}}).
+In short:
 
-- **Sample metadata**: pH* or pD stored as pH; Celsius values entered as kelvin
-  (corrected where detected); ionic strengths that contradict the sample's own
-  components (used as deposited); pressures deposited without a unit (read as
-  not recorded). The unfiltered tier has no pressure ceiling.
+- **Sample metadata.** {{ph_scale_summary}} {{temperature_summary}}
+  {{pressure_unit_summary}} {{ionic_drivers}} The unfiltered tier has no
+  pressure ceiling.
 - **Flags**: `membrane_mimetic_sample` is false also where no sample component
   could be read; `high_pressure` is null, not false, where no pressure was
   recorded (filter with `high_pressure IS NOT TRUE`). A few membrane-mimetic
   depositions named only in free text remain undetected.
-- **CheZOD117 is not filtered on conditions**: it contains cosolvent, bound and
-  273 K placeholder chains.
+- **CheZOD117.** {{chezod117_conditions}}
 - **Labels**: a residue with shifts can be unscored (mask on `mask`, not on
-  `k`); a residue with k < 10 is less reproducible; some training
-  representatives have fewer than 10 scored residues.
-- **Sample and construct**: uniformly ²H-labelled protein (no isotope-shift
-  correction), residues outside the UniProt-aligned span (tags), a few
-  paramagnetic samples; no flag column yet.
+  `k`); a residue with k < 10 is less reproducible; {{few_scored_training}}.
+- **Sample and construct.** {{construct_caveats}}
+- **Reviewed chains.** {{reviewed_issues}}
 - **Residual similarity**: homology is controlled at the 30 %/80 % rule, not
   eliminated; a profile search finds remote homologues of some test chains in
   training, and some test chains share a UniProt accession with a training
   chain (another construct).
-- **Shift table**: a few shift keys repeat for partial-occupancy pairs.
+- **Croissant**: no `croissant.json` (ML-dataset metadata) ships yet; it is
+  deferred to a later release.
+- **Shift table**: a few shift keys repeat, the same value under two
+  ambiguity codes or a partial-occupancy pair with two values; the
+  `trizod_shifts.parquet` metadata (`key_uniqueness`, `counts`) names them.

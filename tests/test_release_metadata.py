@@ -194,6 +194,7 @@ def test_metadata_round_trips_through_the_parquet(release):
         "data_license",
         "code_license",
         "code_commit",
+        "scoring_commit",
         "bmrb_snapshot",
         "test_set",
         "cuts",
@@ -205,3 +206,90 @@ def test_metadata_round_trips_through_the_parquet(release):
         assert key in meta, key
     assert json.loads(meta["test_set"])["n_chains"] == 2
     assert json.loads(meta["calibration"])["prevalence"]["value"] == 0.186
+
+
+# --------------------------------------------------------------------------- #
+# release audit 2026-11-17b: provenance and semantics keys (items 5 and 6)
+# --------------------------------------------------------------------------- #
+
+
+def test_scoring_commit_is_recorded_apart_from_the_build_commit(release):
+    """The commit that scored the entries and wrote the package bundle is not
+    the commit that built the Parquet (G35)."""
+    cols = builder.collect_columns(release["bundle"])
+    scoring = ri.scoring_block("trizod-bb177b2")
+    meta = builder.table_metadata(cols, commit=BUILD_COMMIT, scoring=scoring)
+    got = json.loads(meta[b"scoring_commit"])
+    assert got["pipeline_version"] == "trizod-bb177b2"
+    assert got["commit"].startswith("bb177b2")
+    assert "package bundle" in got["scope"]
+    assert "built this file" in _json(release["meta"], "code_commit")["scope"]
+    # the package bundle's own pipeline_version is the default
+    assert ri.bundle_pipeline_version(release["bundle"]) == "trizod-cccccc"
+
+
+def test_scoring_block_without_a_known_commit_keeps_the_label():
+    block = ri.scoring_block("trizod-0000000-dirty")
+    assert block["commit"] == "0000000" and block["dirty"] is True
+    assert ri.scoring_block(None)["commit"] is None
+
+
+def test_the_calibration_input_is_recorded_without_a_machine_path(tmp_path):
+    results = write_results(tmp_path / "fw", release=tmp_path / "x" / "in.parquet")
+    cal = ri.read_calibration(results, FRAMEWORK_COMMIT)
+    assert cal["input_parquet"] == "in.parquet"
+    assert ri.portable_path("/a/b/c.parquet", [Path("/a")]) == "b/c.parquet"
+    assert (
+        ri.portable_path("/a/b/c.parquet", [(Path("/a"), "<x>/")]) == "<x>/b/c.parquet"
+    )
+    assert ri.portable_path("rel/c.parquet") == "rel/c.parquet"
+
+
+def test_flag_semantics_state_their_nulls_from_the_data(release):
+    meta = release["meta"]
+    for key in (
+        "membrane_mimetic_sample_semantics",
+        "temperature_placeholder_semantics",
+    ):
+        assert "predates" not in meta[key], key
+        assert meta[key].endswith("Never null in this release"), key
+    hp = meta["high_pressure_semantics"]
+    assert "without a unit" in hp and "IS NOT TRUE" in hp
+    lt = meta["label_tier_semantics"]
+    assert "strict where it was retired for another reason than not_strict" in lt
+    assert "scores.json" not in meta["mask_semantics"]
+
+
+def test_retired_semantics_explains_every_known_reason(release):
+    text = release["meta"]["test_retired_semantics"]
+    for reason in ri.RETIRED_REASONS:
+        assert reason in text
+
+
+def test_offset_documentation_states_zero_and_null(release):
+    doc = release["meta"]["offset_columns"]
+    assert "all three of its columns read 0.0" in doc
+    assert "lacs_off_A_ppm is never null" in doc
+    assert "rejected atom type A by --max-offset" in doc
+    assert "never a zero" not in doc
+
+
+def test_sort_order_names_the_entries_crossing_a_row_group():
+    cols = {
+        "entry_id": ["1", "1", "2", "2", "3"],
+        "id": ["1_1", "1_2", "2_1", "2_2", "3_1"],
+    }
+    assert builder.straddling_entries(cols, 3) == ["2"]
+    assert builder.straddling_entries(cols, 2) == []
+    doc = builder.sort_order_doc(3, ["2"])
+    assert "except the 1 entries whose rows cross a group boundary (2)" in doc
+    assert "touches one row group (no entry" in builder.sort_order_doc(2, [])
+
+
+def test_ph_documentation_states_the_pd_conversion():
+    from trizod.bmrb.bmrb import PD_TO_PH_STAR_OFFSET
+
+    ph = builder.COLUMN_DOCS["ph"].meaning
+    assert "pH* (meter) reading is used as is" in ph
+    assert f"pD − {PD_TO_PH_STAR_OFFSET:g}" in ph
+    assert "read as deposited" not in ph

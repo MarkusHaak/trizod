@@ -20,7 +20,10 @@ package``), the shift table and the BMRB snapshot, and writes into ``--out``::
                                     sequences), the test-set labels table and
                                     the pin provenance
     class_balance.tsv               per-split label distribution (F33)
+    known_issues.tsv                per-chain known issues and changes
+                                    (chain_id, issue, evidence; G39)
     bmrb_files.sha256               per-file SHA-256 of the BMRB snapshot (B4)
+    VALIDATION.json                 the final audit's results (--validation)
     README.md, datasheet.md,        rendered from docs/dataset/ templates with
     CHANGELOG.md                    the counts of this build (G36, G39)
     columns.md                      the column dictionary (D14)
@@ -31,6 +34,23 @@ package``), the shift table and the BMRB snapshot, and writes into ``--out``::
                                     leakage rule (G35)
     SHA256SUMS                      ``sha256sum -c`` over every other file
 
+Two commits are recorded apart (G35, A2): the **scoring commit** scored the
+entries and ran the dataset chain into the package bundle (its
+``pipeline_version``, or ``--scoring-commit``), the **build/finalize commit**
+built the Parquet and assembled the deposit. No shipped file names a path of
+the machine it was built on: paths are deposit-, bundle- or repo-relative, or
+a file name, and finalize refuses to finish otherwise.
+
+The CHANGELOG's changes and known issues, and ``known_issues.tsv``, are computed
+(:mod:`trizod.dataset.known_issues`) from the release, the package bundle and,
+when given, the previous build's bundle (``--previous-build``: tier moves,
+re-score statistics, sequence changes), the build's BMRB pickle cache
+(``--pkl-dir``: pH* / pD, temperature and pressure units), an audit's
+snapshot-drift and construct-caveat tables (``--snapshot-drift``,
+``--construct-caveats``) and the reviewed table
+``docs/dataset/known_issues_reviewed.tsv``. A missing input is stated as not
+assessed, never silently left out.
+
 The step is deterministic: the same inputs and output path give byte-identical
 files. Nothing is uploaded.
 
@@ -40,6 +60,10 @@ Usage
         --parquet <trizod_dataset.parquet> --shifts <trizod_shifts.parquet> \\
         --bundle <work-dir>/release_bundle/trizod-dataset-<version> \\
         --bmrb-dir <data/raw/bmrb_entries_YYYY-MM-DD> --out <release dir> \\
+        [--previous-build <previous build's package bundle>] \\
+        [--pkl-dir <the build's tmp/bmrb_entries>] \\
+        [--snapshot-drift <TSV>] [--construct-caveats <TSV>] \\
+        [--scoring-commit <sha>] [--calibration-input <calibrated Parquet>] \\
         [--crosswalk-root <checkout holding data/>] [--set NAME=SPEC ...] \\
         [--validation <VALIDATION.json>] [--force]
 """
@@ -57,6 +81,7 @@ from pathlib import Path
 from trizod import paths as repo_paths
 from trizod.dataset import class_balance as cb
 from trizod.dataset import deploy_fasta, export_jsonl, testset_crosswalk
+from trizod.dataset import known_issues as ki
 from trizod.dataset import release_info as ri
 from trizod.dataset.mmseqs import describe_rule
 from trizod.dataset.testset import RETIRED_FASTA
@@ -95,6 +120,10 @@ V030 = {
 #: Release Parquet columns finalize reads.
 _READ = (
     "id",
+    "entry_id",
+    "st_id",
+    "entity_assem_id",
+    "entity_id",
     "sequence",
     "split",
     "train_tier",
@@ -109,8 +138,20 @@ _READ = (
     "retired_reason",
     "chezod1325_overlap",
     "chezod1174_overlap",
+    "label_tier",
+    "label_tier_source",
+    "ph",
+    "cosolvent_evidence",
+    "is_bound",
+    "physical_state",
 )
-STRICT_IONIC_CAP_M = 0.5
+STRICT_IONIC_CAP_M = ki.STRICT_IONIC_CAP_M
+#: What ``total_bytes`` of MANIFEST.json covers.
+TOTAL_BYTES_COVERS = (
+    "the files listed under files, i.e. every file of the deposit except "
+    "MANIFEST.json and SHA256SUMS, which describe the others; n_files counts "
+    "all of them"
+)
 _PLACEHOLDER = re.compile(r"\{\{\s*([a-z0-9_]+)\s*\}\}")
 #: The maintainer note at the top of a template, dropped when rendering.
 _TEMPLATE_NOTE = re.compile(r"<!-- Template:.*?-->\n*", re.S)
@@ -329,6 +370,102 @@ def write_checksums(out: Path, skip=("SHA256SUMS",)) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# no machine paths in the deposit (G35)
+# --------------------------------------------------------------------------- #
+
+#: A JSON string value that is an absolute path, optionally behind a set-spec
+#: scheme (``fasta:``, ``parquet:``): the whole value, never a path inside prose.
+_ABS_VALUE = re.compile(r"^(?P<scheme>[a-z]+:)?(?P<path>/(?!/)[^\s]+)$")
+#: The start of a stray absolute path of a build machine (not inside a
+#: relative path or a URL: no path character before it).
+_MACHINE_PATH = re.compile(
+    r"(?<![\w.~/-])/(?:Users|home|private/var|private/tmp|var/folders|tmp)/"
+)
+
+
+def _anchor_prefixes(anchors) -> list[tuple[str, str]]:
+    """``(absolute directory + "/", label)`` of every anchor, deepest first."""
+    out = []
+    for a in anchors:
+        d, label = a if isinstance(a, tuple) else (a, "")
+        if d is not None:
+            out.append((str(Path(d).resolve()).rstrip("/") + "/", label))
+    return sorted(out, key=lambda x: len(x[0]), reverse=True)
+
+
+def _portable(value: str, anchors) -> str:
+    """``value`` with every absolute path relative to the deepest anchor that
+    holds it (a whole-value path outside every anchor becomes its file name)."""
+    prefixes = _anchor_prefixes(anchors)
+    m = _ABS_VALUE.match(value)
+    if m:
+        deepest = [(Path(prefix), label) for prefix, label in prefixes]
+        return (m.group("scheme") or "") + ri.portable_path(m.group("path"), deepest)
+    # a path inside prose or an embedded JSON string: relative to its anchor
+    for prefix, label in prefixes:
+        value = value.replace(prefix, label)
+    return value
+
+
+def _scrub(obj, anchors):
+    if isinstance(obj, dict):
+        return {k: _scrub(v, anchors) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub(v, anchors) for v in obj]
+    if isinstance(obj, str):
+        return _portable(obj, anchors)
+    return obj
+
+
+def scrub_json_paths(path: Path, anchors) -> bool:
+    """Rewrite every string value of a JSON file that is an absolute path as a
+    path relative to the first of ``anchors`` holding it (the deposit, the
+    package bundle, the data root, the checkout), else its file name. Returns
+    whether the file changed. Used on files other modules write (the deploy
+    summary, the crosswalk, the UdonPred export summary)."""
+    text = path.read_text()
+    data = json.loads(text)
+    clean = _scrub(data, anchors)
+    if clean == data:
+        return False
+    path.write_text(json.dumps(clean, indent=2) + "\n")
+    return True
+
+
+def machine_paths(out: Path, anchors) -> list[str]:
+    """``file: path`` of every absolute path of this machine left in a text
+    file of ``out`` or the key-value metadata of a Parquet there."""
+    needles = sorted(
+        {str(Path(a).resolve()) for a in anchors if a is not None} | {str(Path.home())},
+        key=len,
+        reverse=True,
+    )
+    hits = []
+    for p in sorted(out.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(out).as_posix()
+        if p.suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            meta = pq.read_schema(p).metadata or {}
+            text = "\n".join(v.decode(errors="replace") for v in meta.values())
+        elif p.suffix in (".json", ".md", ".tsv", ".cff", ".txt", "") or p.name in (
+            "SHA256SUMS",
+        ):
+            text = p.read_text(errors="replace")
+        else:
+            continue
+        hit = next((n for n in needles if n and n in text), None)
+        if hit is None:
+            m = _MACHINE_PATH.search(text)
+            hit = m.group(0) if m else None
+        if hit is not None:
+            hits.append(f"{rel}: {hit}")
+    return hits
+
+
+# --------------------------------------------------------------------------- #
 # documents
 # --------------------------------------------------------------------------- #
 
@@ -489,6 +626,13 @@ def _calibration_values(calibration: dict | None) -> dict[str, str]:
         "k_kappa": (
             f"κ {hi['kappa_binary']['value']:.2f} at k ≥ 10 against "
             f"{lo['kappa_binary']['value']:.2f} below"
+            + (
+                f", over {_fmt(hi['residue_pairs'])} and "
+                f"{_fmt(lo['residue_pairs'])} residue pairs of replicate "
+                "depositions"
+                if hi.get("residue_pairs") and lo.get("residue_pairs")
+                else ""
+            )
             if hi and lo
             else "not recorded"
         ),
@@ -501,6 +645,163 @@ def _calibration_values(calibration: dict | None) -> dict[str, str]:
     }
 
 
+def straddling_entries(path: Path) -> list[str]:
+    """``entry_id`` values whose rows cross a row-group boundary of a Parquet
+    sorted by ``entry_id`` (from the row-group statistics)."""
+    import pyarrow.parquet as pq
+
+    md = pq.ParquetFile(path).metadata
+    names = [md.schema.column(i).name for i in range(md.num_columns)]
+    if "entry_id" not in names:
+        return []
+    col = names.index("entry_id")
+    bounds = []
+    for i in range(md.num_row_groups):
+        st = md.row_group(i).column(col).statistics
+        if st is None or not st.has_min_max:
+            return []
+        bounds.append((st.min, st.max))
+    return sorted(
+        {
+            bounds[i][1]
+            for i in range(len(bounds) - 1)
+            if bounds[i][1] == bounds[i + 1][0]
+        }
+    )
+
+
+def _retired_explained(reasons: dict) -> str:
+    if not reasons:
+        return "No chain is retired."
+    return "; ".join(
+        f"`{r}` ({_fmt(n)}): {ri.describe_retired_reason(r)}"
+        for r, n in reasons.items()
+    )
+
+
+def changes_and_issues(
+    rows: list[dict],
+    bundle: Path,
+    root: Path,
+    *,
+    previous_build: Path | None = None,
+    previous_label: str | None = None,
+    pkl_dir: Path | None = None,
+    bmrb_dir: Path | None = None,
+    snapshot_drift: Path | None = None,
+    construct_caveats: Path | None = None,
+    provenance: dict | None = None,
+    reviewed: Path | None = None,
+    ionic_drivers: Path | None = None,
+) -> tuple[dict[str, str], list[tuple[str, str, str]], dict]:
+    """The CHANGELOG / README values of the changes and known issues, the rows
+    of ``known_issues.tsv`` and a summary for MANIFEST (:mod:`known_issues`)."""
+    rows_by_id = {r["id"]: r for r in rows}
+    issues: list[tuple[str, str, str]] = []
+    assessed = {}
+    cur = ki.load_build(bundle)
+    if previous_build is not None:
+        prev = ki.load_build(previous_build, labels=True)
+        label = previous_label or (
+            "the previous build "
+            + (ri.bundle_pipeline_version(previous_build) or Path(previous_build).name)
+        )
+        moves = ki.tier_moves(prev, cur, rows_by_id)
+        lab = ki.label_changes(prev, rows)
+        values = {
+            "previous_build": label,
+            "tier_moves_table": ki.tier_moves_table(moves),
+            "rescore_summary": ki.rescore_text(lab, label),
+            "chezod117_placeholders": ki.chezod_placeholder_text(lab, rows),
+            "alphabet_changes": ki.alphabet_text(lab),
+        }
+        issues += (
+            ki.tier_move_rows(moves) + ki.rescore_rows(lab) + ki.alphabet_rows(lab)
+        )
+        assessed["previous_build"] = label
+    else:
+        missing = "not assessed: finalize ran without --previous-build"
+        values = {
+            "previous_build": "the previous build (not given)",
+            "tier_moves_table": f"Tier moves {missing}.",
+            "rescore_summary": f"Re-score statistics {missing}.",
+            "chezod117_placeholders": ki.chezod_placeholder_text(
+                {"per_chain": {}}, rows
+            ),
+            "alphabet_changes": f"Sequence changes {missing}.",
+        }
+    if pkl_dir is not None:
+        cond_rows = ki.condition_issues(rows, pkl_dir, bmrb_dir)
+        text = ki.condition_text(cond_rows, cur, rows_by_id)
+        values.update(
+            ph_scale_summary=text["ph"],
+            temperature_summary=text["temperature"],
+            pressure_unit_summary=text["pressure"],
+        )
+        issues += cond_rows
+        assessed["conditions"] = f"BmrbEntry pickles, {text['unread']} chains unread"
+    else:
+        missing = "not assessed for this deposit (finalize ran without --pkl-dir)"
+        values.update(
+            ph_scale_summary=f"pH* and pD chains {missing}.",
+            temperature_summary=f"Temperature unit corrections {missing}.",
+            pressure_unit_summary=f"Pressures without a unit {missing}.",
+        )
+    drift = None
+    if snapshot_drift is not None:
+        drift = ki.snapshot_drift(snapshot_drift, rows_by_id)
+        issues += drift["rows"]
+        assessed["snapshot_drift"] = Path(snapshot_drift).name
+    values["snapshot_drift_summary"] = ki.snapshot_drift_text(drift)
+    caveats = None
+    if construct_caveats is not None:
+        caveats = ki.construct_caveats(construct_caveats, rows)
+        issues += caveats["rows"]
+        assessed["construct_caveats"] = Path(construct_caveats).name
+    values["construct_caveats"] = ki.construct_text(
+        caveats, ki.nonstandard_counts(rows)
+    )
+    reviewed_path = Path(reviewed) if reviewed is not None else root / ki.REVIEWED_TSV
+    reviewed_rows = (
+        ki.reviewed_issues(reviewed_path, rows_by_id) if reviewed_path.is_file() else []
+    )
+    issues += reviewed_rows
+    values["reviewed_issues"] = ki.reviewed_text(reviewed_rows)
+    chezod = ki.chezod117_conditions(rows)
+    issues += chezod["rows"]
+    values["chezod117_conditions"] = chezod["text"]
+    if ionic_drivers is not None:
+        drivers = ki.ionic_drivers(ionic_drivers, rows_by_id)
+        issues += drivers["rows"]
+        values["ionic_drivers"] = drivers["text"]
+        assessed["ionic_drivers"] = Path(ionic_drivers).name
+    else:
+        values["ionic_drivers"] = (
+            "Ionic strengths are used as deposited, also where the sample's own "
+            "components imply another value (per-chain list not assessed for "
+            "this deposit: finalize ran without --ionic-drivers)."
+        )
+    pin = ki.pin_trimmed(provenance, rows_by_id)
+    issues += pin["rows"]
+    values["pin_trimmed"] = pin["text"]
+    few = ki.few_scored_training(rows)
+    issues += few
+    values["few_scored_training"] = (
+        f"{_fmt(len(few))} training representatives have fewer than "
+        f"{ri.K_MIN_RELIABLE} scored residues"
+        + (f" ({', '.join(cid for cid, _, _ in few)})" if few else "")
+    )
+    from collections import Counter
+
+    by_issue = dict(sorted(Counter(i for _, i, _ in set(issues)).items()))
+    values["n_known_issues"] = _fmt(len(set(issues)))
+    values["known_issue_counts"] = (
+        ", ".join(f"`{k}` {_fmt(n)}" for k, n in by_issue.items()) or "none"
+    )
+    summary = {"file": "known_issues.tsv", "by_issue": by_issue, "inputs": assessed}
+    return values, issues, summary
+
+
 def doc_values(
     meta: dict[str, str],
     summary: dict,
@@ -510,10 +811,17 @@ def doc_values(
     shifts: dict,
     snapshot: dict | None,
     crosswalk: dict,
+    *,
+    scoring: dict | None = None,
+    straddling: list[str] | None = None,
+    validation: bool = False,
+    extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Every ``{{placeholder}}`` value of the docs templates, from this build."""
     test_set = _meta_json(meta, "test_set") or {}
     commit = _meta_json(meta, "code_commit") or {}
+    scoring = scoring or {}
+    straddling = straddling or []
     leakage = bundle_manifest.get("leakage", {})
     rule = leakage.get("rule")
     split = summary["split_counts"]
@@ -577,6 +885,22 @@ def doc_values(
         "code_commit": commit.get("commit", "unknown")
         + ("-dirty" if commit.get("dirty") else ""),
         "pipeline_version": commit.get("pipeline_version", "unknown"),
+        "scoring_commit": (scoring.get("commit") or "not recorded")
+        + ("-dirty" if scoring.get("dirty") else ""),
+        "scoring_pipeline_version": scoring.get("pipeline_version") or "not recorded",
+        "retired_reasons_explained": _retired_explained(reasons),
+        "row_group_note": (
+            f"one row group, or two for the {_fmt(len(straddling))} entries whose "
+            f"rows cross a group boundary ({', '.join(straddling)})"
+            if straddling
+            else "one row group"
+        ),
+        "validation_row": (
+            "| `VALIDATION.json` | Results of the release audit this deposit "
+            "passed, check by check |"
+            if validation
+            else ""
+        ),
         "snapshot_name": snap.get("name", "not recorded"),
         "snapshot_n_entries": (
             _fmt(snap["n_entries"]) if "n_entries" in snap else "not recorded"
@@ -586,6 +910,7 @@ def doc_values(
         "leakage_rule": describe_rule(rule) if rule else "not recorded",
     }
     values.update(_calibration_values(calibration))
+    values.update(extra or {})
     return values
 
 
@@ -648,20 +973,48 @@ def data_fingerprint(path: Path) -> str:
     return hashlib.sha256(sink.getvalue().to_pybytes()).hexdigest()
 
 
+def locate_calibration_input(recorded, explicit=None) -> Path | None:
+    """The Parquet the threshold framework calibrated on: ``explicit``
+    (``--calibration-input``), else the recorded path -- absolute (older
+    builds), or relative to the data root (``$TRIZOD_DATA_ROOT``) or this
+    checkout. None when it is not on this machine."""
+    if explicit is not None:
+        return Path(explicit)
+    if not recorded:
+        return None
+    p = Path(recorded)
+    candidates = (
+        [p]
+        if p.is_absolute()
+        else [
+            repo_paths.data_root() / p,
+            repo_paths.repo_root() / p,
+        ]
+    )
+    return next((c for c in candidates if c.is_file()), None)
+
+
 def check_calibration_input(
-    parquet: Path, calibration: dict | None, allow_mismatch: bool = False
+    parquet: Path,
+    calibration: dict | None,
+    allow_mismatch: bool = False,
+    input_path: Path | None = None,
 ) -> dict | None:
     """The threshold framework calibrates on the release Parquet before its
     metadata is stamped, so the final Parquet's bytes differ from the input it
     records. Check that their data are identical (every column and row; the
     key-value metadata ignored). ``data_identical`` is None when the input is
-    not on this machine."""
+    not on this machine (pass ``input_path``, ``--calibration-input``)."""
     if not calibration:
         return None
-    src = calibration.get("input_parquet")
-    out = {"input_parquet": src, "data_identical": None}
-    if not src or not Path(src).is_file():
-        print(f"  note: calibration input {src} not found -- data identity not checked")
+    recorded = calibration.get("input_parquet")
+    src = locate_calibration_input(recorded, input_path)
+    out = {"input_parquet": recorded, "data_identical": None}
+    if src is None or not src.is_file():
+        print(
+            f"  note: calibration input {recorded} not found (pass "
+            "--calibration-input) -- data identity not checked"
+        )
         return out
     out["data_identical"] = data_fingerprint(parquet) == data_fingerprint(src)
     _check(
@@ -671,6 +1024,25 @@ def check_calibration_input(
         "or pass --allow-calibration-mismatch for a dry run",
     )
     return out
+
+
+#: The placeholder CITATION.cff carries until the Zenodo draft reserves the
+#: version DOI.
+DOI_PLACEHOLDER = "RESERVE-AT-DRAFT"
+_CFF_DOI = re.compile(
+    r"-\s*type:\s*doi\s*\n\s*value:\s*(?P<doi>\S+)\s*\n\s*description:\s*"
+    r"\"?(?P<desc>[^\n\"]*)"
+)
+
+
+def version_doi(cff_text: str, version: str) -> str | None:
+    """The version DOI ``CITATION.cff`` lists for ``version``; None while it is
+    the placeholder or absent."""
+    for m in _CFF_DOI.finditer(cff_text):
+        if f"v{version}" in m.group("desc").split():
+            doi = m.group("doi")
+            return None if DOI_PLACEHOLDER in doi else doi
+    return None
 
 
 def check_repo_metadata(version: str, root: Path) -> None:
@@ -711,8 +1083,19 @@ def assemble(
     allow_uncalibrated: bool = False,
     allow_calibration_mismatch: bool = False,
     force: bool = False,
+    previous_build: Path | None = None,
+    previous_label: str | None = None,
+    pkl_dir: Path | None = None,
+    snapshot_drift: Path | None = None,
+    construct_caveats: Path | None = None,
+    scoring_commit: str | None = None,
+    calibration_input: Path | None = None,
+    reviewed: Path | None = None,
+    ionic_drivers: Path | None = None,
 ) -> dict:
-    """Assemble the deposit into ``out``; returns the MANIFEST."""
+    """Assemble the deposit into ``out``; returns the MANIFEST. ``reviewed`` is
+    the hand-reviewed known-issue table (default:
+    ``docs/dataset/known_issues_reviewed.tsv`` of ``root``)."""
     parquet, bundle, out = Path(parquet), Path(bundle), Path(out)
     root = Path(root) if root is not None else repo_paths.repo_root()
     docs = root / "docs" / "dataset"
@@ -731,10 +1114,29 @@ def assemble(
         "<framework dir>), or pass --allow-uncalibrated for a dry run",
     )
     check_repo_metadata(version, root)
+    doi = version_doi((root / "CITATION.cff").read_text(), version)
+    if doi is None:
+        print(
+            f"  WARNING: CITATION.cff lists no version DOI for v{version} (still "
+            f"{DOI_PLACEHOLDER}): reserve it on the Zenodo draft, write it into "
+            "CITATION.cff and .zenodo.json, and re-run finalize"
+        )
     calibration_input = check_calibration_input(
-        parquet, calibration, allow_calibration_mismatch
+        parquet, calibration, allow_calibration_mismatch, calibration_input
     )
     bundle_manifest = json.loads((bundle / "MANIFEST.json").read_text())
+    scoring = ri.scoring_block(
+        scoring_commit or bundle_manifest.get("pipeline_version"), root
+    )
+    parquet_scoring = _meta_json(meta, "scoring_commit")
+    _check(
+        parquet_scoring is None
+        or scoring_commit is not None
+        or parquet_scoring.get("pipeline_version") == scoring["pipeline_version"],
+        f"{parquet} records scoring commit "
+        f"{(parquet_scoring or {}).get('pipeline_version')}, the bundle "
+        f"{scoring['pipeline_version']}: the Parquet was not built from this bundle",
+    )
     check_test_fastas(bundle / "test", rows)
     summary = summarise_rows(rows, names)
     tiers = bundle_manifest.get("tiers", {})
@@ -810,13 +1212,53 @@ def assemble(
         out / "crosswalk",
         release_path="trizod_dataset.parquet",
     )
+    # deploy_fasta, export_jsonl and testset_crosswalk record the paths they
+    # read and wrote; no path of this machine may ship (G35)
+    anchors = [
+        out,
+        (bundle, "<package bundle>/"),
+        crosswalk_root,
+        repo_paths.data_root(),
+        root,
+    ]
+    for rel in (
+        "disorder_trizod.summary.json",
+        "udonpred/export_summary.json",
+        "crosswalk/test_set_crosswalk.json",
+    ):
+        if (out / rel).is_file():
+            scrub_json_paths(out / rel, anchors)
 
     # 4. provenance tables
     files_table = snapshot_files_table(entry_files, out / "bmrb_files.sha256")
     class_table = cb.compute(rows, calibration)
     cb.write_tsv(class_table, out / "class_balance.tsv")
+    validation_entry = None
     if validation is not None:
         _copy(Path(validation), out / "VALIDATION.json")
+        validation_entry = {
+            "file": "VALIDATION.json",
+            "source_sha256": ri.sha256_file(validation),
+            "paths_rewritten": scrub_json_paths(out / "VALIDATION.json", anchors),
+        }
+    pin_provenance = test_out / "TriZOD_test_set.provenance.json"
+    changes, issue_rows, issues_summary = changes_and_issues(
+        rows,
+        bundle,
+        root,
+        previous_build=previous_build,
+        previous_label=previous_label,
+        pkl_dir=pkl_dir,
+        bmrb_dir=bmrb_dir,
+        snapshot_drift=snapshot_drift,
+        construct_caveats=construct_caveats,
+        provenance=(
+            json.loads(pin_provenance.read_text()) if pin_provenance.is_file() else None
+        ),
+        reviewed=reviewed,
+        ionic_drivers=ionic_drivers,
+    )
+    ki.write_tsv(issue_rows, out / "known_issues.tsv")
 
     # 5. documents
     values = doc_values(
@@ -828,6 +1270,10 @@ def assemble(
         shifts_entry,
         snapshot,
         crosswalk,
+        scoring=scoring,
+        straddling=straddling_entries(out / "trizod_dataset.parquet"),
+        validation=validation is not None,
+        extra=changes,
     )
     for template, name in TEMPLATES.items():
         text = (docs / template).read_text()
@@ -854,12 +1300,21 @@ def assemble(
             "code": ri.CODE_LICENSE,
             "statement": ri.LICENSE_STATEMENT,
         },
+        "version_doi": doi,
+        "concept_doi": ri.CONCEPT_DOI,
         "test_set": _meta_json(meta, "test_set"),
         "cuts": _meta_json(meta, "cuts"),
         "code": {
+            "scoring": scoring,
             "build": _meta_json(meta, "code_commit"),
             "package_pipeline_version": bundle_manifest.get("pipeline_version"),
             "finalize": ri.code_commit(root),
+            "roles": (
+                "scoring: scored the entries and ran the dataset chain into the "
+                "package bundle (labels, tiers, splits, shift offsets); build: "
+                "built trizod_dataset.parquet from that bundle; finalize: "
+                "assembled this deposit and regenerated its views and documents"
+            ),
         },
         "threshold_protocol": (
             {
@@ -897,12 +1352,34 @@ def assemble(
             },
             "retired_by_reason": summary["retired_by_reason"],
         },
+        "known_issues": issues_summary,
+        "validation": validation_entry,
         "n_files": len(files) + 2,  # + MANIFEST.json, SHA256SUMS
         "total_bytes": sum(f["bytes"] for f in files.values()),
+        "total_bytes_covers": TOTAL_BYTES_COVERS,
         "files": files,
     }
+    manifest = _scrub(manifest, anchors)
     _json(out / "MANIFEST.json", manifest)
     write_checksums(out)
+    stray = machine_paths(
+        out,
+        [
+            out,
+            bundle,
+            crosswalk_root,
+            repo_paths.data_root(),
+            root,
+            parquet.parent,
+            Path(shifts).parent,
+            Path(bmrb_dir),
+        ],
+    )
+    _check(
+        not stray,
+        f"absolute paths of this machine in the deposit: {stray[:10]} -- rebuild "
+        "the Parquet with this checkout, or make the writer record a relative path",
+    )
     return manifest
 
 
@@ -964,6 +1441,58 @@ def main(argv=None) -> None:
         help="accept a Parquet whose data differ from the calibration's input "
         "(dry runs only)",
     )
+    ap.add_argument(
+        "--previous-build",
+        type=Path,
+        default=None,
+        help="package bundle (or scored dir) of the previous build of record: "
+        "tier moves, 273 K re-score statistics and sequence changes against it",
+    )
+    ap.add_argument(
+        "--previous-label",
+        default=None,
+        help="how the CHANGELOG names --previous-build (default: its pipeline_version)",
+    )
+    ap.add_argument(
+        "--pkl-dir",
+        type=Path,
+        default=None,
+        help="the build's BmrbEntry pickle cache (tmp/bmrb_entries): pH* / pD, "
+        "temperature and pressure-unit issues per chain",
+    )
+    ap.add_argument(
+        "--snapshot-drift",
+        type=Path,
+        default=None,
+        help="snapshot-drift table of the release audit (id, released, "
+        "label_or_tier_change, per_tier)",
+    )
+    ap.add_argument(
+        "--construct-caveats",
+        type=Path,
+        default=None,
+        help="construct / sample caveat table of the release audit (class, id)",
+    )
+    ap.add_argument(
+        "--ionic-drivers",
+        type=Path,
+        default=None,
+        help="ionic-strength driver log of the release audit (chain, flag, "
+        "I_deposited_strict_M, I_implied_M, implied_parts)",
+    )
+    ap.add_argument(
+        "--scoring-commit",
+        default=None,
+        help="commit that scored the entries and wrote the bundle (default: the "
+        "bundle MANIFEST's pipeline_version)",
+    )
+    ap.add_argument(
+        "--calibration-input",
+        type=Path,
+        default=None,
+        help="the Parquet the threshold framework calibrated on, when its "
+        "recorded path does not resolve here",
+    )
     ap.add_argument("--force", action="store_true", help="replace a non-empty --out")
     args = ap.parse_args(argv)
     specs = [_parse_set(s) for s in args.sets] if args.sets else None
@@ -979,9 +1508,22 @@ def main(argv=None) -> None:
         allow_uncalibrated=args.allow_uncalibrated,
         allow_calibration_mismatch=args.allow_calibration_mismatch,
         force=args.force,
+        previous_build=args.previous_build,
+        previous_label=args.previous_label,
+        pkl_dir=args.pkl_dir,
+        snapshot_drift=args.snapshot_drift,
+        construct_caveats=args.construct_caveats,
+        ionic_drivers=args.ionic_drivers,
+        scoring_commit=args.scoring_commit,
+        calibration_input=args.calibration_input,
     )
     print(f"\nAssembled TriZOD v{manifest['version']} -> {args.out}")
-    print(f"  files: {manifest['n_files']}, {manifest['total_bytes'] / 1e6:.1f} MB")
+    print(
+        f"  files: {manifest['n_files']}, {manifest['total_bytes'] / 1e6:.1f} MB "
+        "(without MANIFEST.json and SHA256SUMS)"
+    )
+    print(f"  scoring commit: {manifest['code']['scoring']['commit']}")
+    print(f"  known issues: {manifest['known_issues']['by_issue']}")
     ts = manifest["test_set"] or {}
     print(f"  test set: {ts.get('label', 'unknown')}")
     print("  check: (cd <out> && sha256sum -c SHA256SUMS)")
