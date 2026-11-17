@@ -8,7 +8,7 @@ Trimmed 12 Nov 2026 (story blueprint 6.3 and 10.3): the pH and temperature histo
 and the annotation shares (old panels a, b and e) are now main Fig. 2a, b, drawn by
 ``fig2_composition.py``, which imports ``load``, ``RANGES`` and ``range_bars`` from this
 module (keep their names and signatures). ``make_numbers.py`` imports ``load`` and
-``HIGH_P``. S4 keeps the three panels that Fig. 2 does not show:
+``style_paper.HIGH_PRESSURE_BAR``. S4 keeps the three panels that Fig. 2 does not show:
 
 Panels
   a    Ionic strength as DEPOSITED for the chain's own shift table. The Parquet column
@@ -63,7 +63,6 @@ RANGES = {
 }
 DEFAULTS = {"ph": 7.0, "temperature": 298.0, "ionic_strength": 0.1}
 RAW_KEY = {"ph": "ph", "temperature": "temp", "ionic_strength": "ionic"}
-HIGH_P = 400.0  # bar; the writing plan's "high pressure" cut (Appendix A12)
 
 PHYS_MAIN = [
     "native",
@@ -205,7 +204,7 @@ def main():
         summ[f"{col}_not_deposited"] = {
             t: int((df[f"in_{t}"] & ~df[f"{col}_deposited"]).sum()) for t in TIERS
         }
-    hp = df[df.pressure_bar >= HIGH_P]
+    hp = df[df.pressure_bar >= sp.HIGH_PRESSURE_BAR]
     summ["pressure"] = {
         "chains_with_numeric_pressure": int(df.pressure_bar.notna().sum()),
         "chains_no_pressure_row": int(df.pressure_raw.isna().sum()),
@@ -295,11 +294,11 @@ def main():
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     ax.yaxis.set_minor_locator(ticker.FixedLocator([10, 1000, 1e5]))
     ax.yaxis.set_minor_formatter(ticker.NullFormatter())
-    ax.axvspan(HIGH_P, 5000, color="#EDEDED", zorder=-5, lw=0)
+    ax.axvspan(sp.HIGH_PRESSURE_BAR, 5000, color="#EDEDED", zorder=-5, lw=0)
     ax.text(
-        (HIGH_P * 5000) ** 0.5,
+        (sp.HIGH_PRESSURE_BAR * 5000) ** 0.5,
         1.5e5,
-        f"≥{HIGH_P:.0f}\nbar",
+        f"≥{sp.HIGH_PRESSURE_BAR:.0f}\nbar",
         ha="center",
         va="top",
         linespacing=1.0,

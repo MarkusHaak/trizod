@@ -15,7 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from trizod import paths
@@ -24,7 +24,7 @@ from trizod.bmrb import xref_sources as xs
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ap.add_argument(
         "--out-dir",
         type=Path,

@@ -70,7 +70,6 @@ COND = ("ph", "temperature", "ionic_strength")
 # panel a: axis ranges (cover every deposited value: pH 1.0-11.1, 252-373 K)
 T_LIM = (248.0, 377.0)
 PH_LIM = (0.3, 13.4)  # head-room above pH 12 for the window labels
-NONSTATE = ["denatured", "unfolded", "molten globule"]  # "non-native state" in b
 
 # panel b rows: (key, label); value order by the release share, the missing condition last
 ANNOT_ROWS = [
@@ -121,7 +120,9 @@ def load_chains(refresh: bool = False) -> pd.DataFrame:
     """One row per chain: conditions, imputation flags, annotations, tier membership."""
     df, _ = s4.load()
     df = deposited_flags(df, refresh=refresh)
-    df["nonnative"] = df.physical_state.isin(NONSTATE)
+    # "non-native state" row of b: the non-native states of the perturbed rule
+    state = df.physical_state.fillna("").astype(str).str.lower()
+    df["nonnative"] = state.isin(sp.NON_NATIVE_STATES)
     df["no_ionic"] = df.ionic_strength_imputed
     return df
 

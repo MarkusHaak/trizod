@@ -32,13 +32,10 @@ figures share one look and one set of inputs:
   its sub-folders; an optional PNG preview goes to a scratch directory for visual
   checks only.
 
-Data are read through :mod:`trizod.paths`, by default from the frozen 2026-10 build. The
-data root is ``$TRIZOD_DATA_ROOT`` when set, else the first of the code checkout and its
-parents that holds ``data/interim/build`` (a git worktree shares the main
-checkout's ``data/``), else the :mod:`trizod.paths` default. A later build is selected
-with ``$TRIZOD_BUILD_DIR``, ``$TRIZOD_RELEASE_DIR``, ``$TRIZOD_BUNDLE`` and
-``$TRIZOD_REBUILD_LOG``, and the caches are moved with ``$TRIZOD_CACHE_DIR``
-(``README.md``, "Selecting the build").
+Data are read from the build that :func:`paper_config.resolve` selects: by default the build
+of record (the 2026-11-11 snapshot rebuild, ``trizod-a481315``); the ``TRIZOD_*`` variables
+select another build and ``$TRIZOD_CACHE_DIR`` moves the caches (``README.md``, "Selecting
+the build"). ``scripts/manuscript/make_numbers.py`` resolves its paths with the same code.
 
 Run generators from the code checkout with
 ``uv run --extra figures --with pyarrow python scripts/figures/paper/<script>.py --out-dir <draft>/Figures/paper``
@@ -64,66 +61,34 @@ import numpy as np  # noqa: E402
 from matplotlib import text as mtext  # noqa: E402
 from matplotlib import ticker as mticker  # noqa: E402
 
-from trizod import paths  # noqa: E402
-
 # ----------------------------------------------------------------------------------
-# paths
+# paths: the build is chosen in paper_config (shared with scripts/manuscript/make_numbers.py)
 # ----------------------------------------------------------------------------------
-REPO = paths.ROOT  # the code checkout: scripts/, docs/, trizod/
-# git-ignored caches of the generators (raw scan, mmseqs, PANAV loops); $TRIZOD_CACHE_DIR
-# moves them, so the caches of two builds never mix
-TMP = (
-    Path(os.environ["TRIZOD_CACHE_DIR"]).expanduser()
-    if os.environ.get("TRIZOD_CACHE_DIR")
-    else paths.TMP
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paper_config as pc  # noqa: E402
 
-
-def _find_root(start: Path) -> Path:
-    """The checkout that holds ``data/interim/build`` (worktrees share the main one)."""
-    for p in [start, *start.parents]:
-        if (p / "data" / "interim" / "build").is_dir():
-            return p
-    return start
-
-
-def _env_path(name: str, default: Path) -> Path:
-    """``$name`` as a path when set and non-empty, else ``default``."""
-    v = os.environ.get(name)
-    return Path(v).expanduser() if v else default
-
-
-ROOT = Path(os.environ.get("TRIZOD_DATA_ROOT") or _find_root(REPO))
-_L = paths.layout(ROOT)
+REPO = pc.REPO  # the code checkout: scripts/, docs/, trizod/
+# git-ignored caches of the generators (raw scan, mmseqs, PANAV loops); the raw-file scans,
+# the PANAV loop map and the entry authors are keyed by their inputs (paper_config.keyed_json).
+# The S6d recovery, S8 case search, S3 groups, fig1c and fig3c keep their own keys, so give a
+# new build its own $TRIZOD_CACHE_DIR or pass their --refresh / --recompute
+TMP = pc.cache_root()
+B = pc.resolve()  # the build of record unless TRIZOD_* variables select another
+ROOT = B.root
+_L = B.layout
 DATA = _L.data
-# The build the figures describe. The defaults are the frozen 2026-10 build; a later build
-# is selected with environment variables (README.md, "Selecting the build"), all optional:
-#   TRIZOD_BUILD_DIR    build directory (final_dataset/, testset/, mmseqs/)
-#   TRIZOD_RELEASE_DIR  trizod_dataset.parquet + trizod_shifts.parquet
-#   TRIZOD_BUNDLE       release bundle (MANIFEST.json, scores/, train/, test/)
-#   TRIZOD_REBUILD_LOG  the build log with the four print_filter_losses() reports
-# The last three default to fixed names inside the BUILD directory, so pointing only
-# TRIZOD_BUILD_DIR at another build fails loudly instead of mixing two builds.
-BUILD = _env_path("TRIZOD_BUILD_DIR", _L.interim_build)
-PQ_DIR = _env_path("TRIZOD_RELEASE_DIR", BUILD / "parquet-2026-10-simplify")
-PQ_MAIN = PQ_DIR / "trizod_dataset.parquet"
-PQ_SHIFTS = PQ_DIR / "trizod_shifts.parquet"
-BUNDLE = _env_path("TRIZOD_BUNDLE", BUILD / "release_bundle" / "trizod-dataset-2026-10")
-REBUILD_LOG = _env_path("TRIZOD_REBUILD_LOG", BUILD / "rebuild_2026-10.log")
-# The frozen build the draft was written on; its split predates rebuild fix (a).
-FROZEN_PIPELINE = "trizod-5b8147a"
-
-
-def _manifest() -> dict:
-    try:
-        return json.loads((BUNDLE / "MANIFEST.json").read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-_MANIFEST = _manifest()
-RELEASE = _MANIFEST.get("version", "2026-10")  # release label, e.g. "2026-11"
-PIPELINE = _MANIFEST.get("pipeline_version", FROZEN_PIPELINE)
+BUILD = B.build
+PQ_DIR = B.release
+PQ_MAIN = B.pq_main
+PQ_SHIFTS = B.pq_shifts
+BUNDLE = B.bundle
+REBUILD_LOG = B.log
+PKL_DIR = B.pkl
+# the pre-fix 2026-10 build; its split predates rebuild fix (a)
+FROZEN_PIPELINE = pc.FROZEN_BUILD
+_MANIFEST = pc.read_manifest(B)
+RELEASE = _MANIFEST.get("version", "2026-11")  # release label, e.g. "2026-11"
+PIPELINE = _MANIFEST.get("pipeline_version", pc.BUILD_OF_RECORD)
 IS_FROZEN = PIPELINE == FROZEN_PIPELINE  # True only for the pre-fix 2026-10 split
 CHEZOD_VER = _L.interim_chezod_verification
 CHEZOD = _L.ext_chezod
@@ -187,6 +152,45 @@ TIERS = ["unfiltered", "tolerant", "moderate", "strict"]  # permissive -> strict
 RANK = {t: i for i, t in enumerate(TIERS)}
 G_DIS = 0.40  # binary disorder cut used throughout the paper (16 Nov 2026; was 0.65)
 BACKBONE_ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
+
+# "Perturbed" / "other sample" (Fig. 3a, Supplementary Fig. S8 and every analysis that sets
+# such chains apart): the sample is not a native protein in aqueous solution. ONE rule,
+# :func:`is_perturbed`; the fibril states that S8 listed until 16 Nov 2026 ("fibril",
+# "fibrils", "amyloid fibril") are all solid-state samples in the 2026-11 release, so the
+# solid-state criterion covers them.
+NON_NATIVE_STATES = frozenset({"denatured", "unfolded", "molten globule", "misfolded"})
+HIGH_PRESSURE_BAR = 400.0  # bar; the writing plan's "high pressure" cut (Appendix A12)
+
+
+def is_perturbed(df, cosolvent=None, pressure_bar=None, states: bool = True):
+    """Boolean Series: the chain's sample is perturbed, i.e. it holds a cosolvent, was
+    measured at >= :data:`HIGH_PRESSURE_BAR`, is deposited in one of
+    :data:`NON_NATIVE_STATES`, is a solid-state sample or holds a membrane mimetic.
+
+    ``df`` holds the release columns ``physical_state``, ``sample_state_evidence`` and
+    ``membrane_mimetic``, plus ``cosolvent_evidence`` and ``pressure_bar`` unless
+    ``cosolvent`` / ``pressure_bar`` give that evidence from elsewhere (Fig. 3a reads both
+    from the chain's own shift list in the raw NMR-STAR file). A missing value counts as
+    not perturbed (ambient pressure, no cosolvent, solution state). ``states=False`` drops
+    the physical-state criterion, for analyses that match the state instead (the
+    single-study pairs of ``fig3_replicates.one_factor_pairs``)."""
+    import pandas as pd
+
+    def col(x, name):
+        x = df[name] if x is None else x
+        return pd.Series(x, index=df.index)
+
+    state = df["physical_state"].fillna("").astype(str).str.lower()
+    cos = col(cosolvent, "cosolvent_evidence").fillna(False).astype(bool)
+    press = pd.to_numeric(col(pressure_bar, "pressure_bar"), errors="coerce").fillna(0)
+    out = (
+        cos
+        | (press >= HIGH_PRESSURE_BAR)
+        | (df["sample_state_evidence"].fillna("").astype(str) == "solid")
+        | df["membrane_mimetic"].notna()
+    )
+    return out | state.isin(NON_NATIVE_STATES) if states else out
+
 
 # ----------------------------------------------------------------------------------
 # colours: one colour per entity, in every main and Supplementary figure
@@ -846,12 +850,28 @@ def arr(v) -> np.ndarray:
     return np.array([np.nan if x is None else x for x in v], dtype=float)
 
 
-def load_main(columns=None):
-    """The one-row-per-chain release Parquet as pandas (object strings, not arrow)."""
-    import pandas as pd
-    import pyarrow.parquet as pq
+_TABLES: dict = {}
 
-    df = pq.read_table(PQ_MAIN, columns=columns).to_pandas()
+
+def _main_table():
+    """The release Parquet as an Arrow table, read once per process (Arrow tables are
+    immutable, so every caller still gets its own pandas frame)."""
+    if PQ_MAIN not in _TABLES:
+        import pyarrow.parquet as pq
+
+        _TABLES[PQ_MAIN] = pq.read_table(PQ_MAIN)
+    return _TABLES[PQ_MAIN]
+
+
+def load_main(columns=None):
+    """The one-row-per-chain release Parquet as pandas (object strings, not arrow).
+
+    pandas >= 3 maps strings to pyarrow-backed columns; element-wise Python access to those
+    (map, iterrows, groupby lambdas) is ~100x slower, so strings become object columns."""
+    import pandas as pd
+
+    t = _main_table()
+    df = (t if columns is None else t.select(list(columns))).to_pandas()
     for col in df.columns:
         if pd.api.types.is_string_dtype(df[col]) and df[col].dtype != object:
             df[col] = df[col].astype(object)
