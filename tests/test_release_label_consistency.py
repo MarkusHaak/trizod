@@ -634,6 +634,34 @@ def test_deploy_fasta_default_work_dir_layout(tmp_path):
     assert deploy_mismatches(out, builder.collect_columns(bundle, None)) == set()
 
 
+# --------------------------------------------------------------------------- #
+# retired TriZOD test chains (2026-11): in neither the train nor the test set
+# --------------------------------------------------------------------------- #
+
+
+def _retire(bundle, ids):
+    (bundle / "test" / "TriZOD_test_retired.fasta").write_text(
+        "".join(f">{cid} label_tier=tolerant reason=not_strict\n{SEQ}\n" for cid in ids)
+    )
+
+
+def test_deploy_fasta_leaves_out_retired_test_chains(bundle, tmp_path):
+    _retire(bundle, [EXCLUDED_TOL])
+    out = _deploy(bundle, tmp_path, "tolerant", "deploy.fasta")
+    assert EXCLUDED_TOL not in _targets(out)
+    summary = json.loads(out.with_suffix(".summary.json").read_text())
+    assert summary["n_retired"] == 1
+
+
+@pytest.mark.parametrize("where", [TOL_TRAIN, TEST])
+def test_deploy_fasta_refuses_a_retired_chain_in_train_or_test(bundle, tmp_path, where):
+    # a retired chain must have been removed from training by the redundancy
+    # step and left out of the test FASTA by the test-set step
+    _retire(bundle, [where])
+    with pytest.raises(SystemExit, match="retired"):
+        _deploy(bundle, tmp_path, "tolerant", "deploy.fasta")
+
+
 def test_label_source_tier_rule():
     reps = {t: set(REPS[t]) for t in TIERS}
     held = {t: {r["ID"] for r in SCORES[t]} for t in TIERS}

@@ -190,6 +190,8 @@ def prefilter_dataframe(
     exclude_paramagnetic=False,
     physical_state_blacklist=(),
     method_fallback="off",
+    max_pressure_bar=np.inf,
+    exclude_membrane_mimetic=False,
 ):
     if method_fallback not in ("off", "reject-solid", "require-solution"):
         raise ValueError(f"Unknown method fallback: {method_fallback}")
@@ -332,6 +334,29 @@ def prefilter_dataframe(
         sels_pre[
             ("physical state", f"[{len(physical_state_blacklist)} denied]")
         ] = ~denied
+    if max_pressure_bar is not None and not np.isinf(max_pressure_bar):
+        # A finite ceiling with no column would silently keep every
+        # high-pressure chain; fill_row_data always emits it.
+        if "pressure_bar" not in df:
+            raise ValueError(
+                "max_pressure_bar is finite but the frame has no pressure_bar "
+                "column. Build the frame with fill_row_data()."
+            )
+        pressure = pd.to_numeric(df.pressure_bar, errors="coerce")
+        # `~(p >= cap)`, not `p < cap`: an unrecorded pressure (NaN) is ambient
+        # and passes.
+        sels_pre[("pressure", f"[0, {max_pressure_bar:g}) bar")] = ~(
+            pressure >= max_pressure_bar
+        )
+    if exclude_membrane_mimetic:
+        if "membrane_mimetic_sample" not in df:
+            raise ValueError(
+                "exclude_membrane_mimetic is set but the frame has no "
+                "membrane_mimetic_sample column. Build the frame with "
+                "fill_row_data()."
+            )
+        mimetic = df.membrane_mimetic_sample.astype("boolean").fillna(False)
+        sels_pre[("membrane mimetic", "")] = ~mimetic.astype(bool)
     sels_kws = {keyword: ~df[keyword] for keyword in keywords}
     sels_cosolvent = {token: ~df[token] for token in perturbing_cosolvents}
     sels_paramag = {}

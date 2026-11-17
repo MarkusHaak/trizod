@@ -20,6 +20,7 @@ All three must pass.
 - `trizod/cache.py` — POTENCI prediction cache (`load_potenci_cache()`/`save_potenci_cache()`, content-addressed by seq+T+pH+ion).
 - `trizod/io/` — I/O helpers: `fasta.py` (FASTA read/write) and `str_writer.py` (`write_rereferenced_str()`, re-referenced NMR-STAR emission).
 - `trizod/bmrb/bmrb.py` — BMRB NMR-STAR file parsing (Entity, Assembly, SampleConditions, ShiftTable, BmrbEntry)
+- `trizod/bmrb/membrane.py` — membrane-mimetic class table (regex → class, CMC, MW) and the per-sample rule behind `membrane_mimetic_sample`
 - `trizod/bmrb/xrefs.py` — per-chain UniProt/PDB cross-references with provenance (`exact`/`author`/`sifts`/`unspecified`/`blast`), read straight from the NMR-STAR files by `scripts/build_parquet_dataset.py --bmrb-dir`; kept out of `bmrb.py` so it does not change `bmrb_parser_version()` (cache key)
 - `trizod/bmrb/xref_sources.py` — dated external sources for the cross-references (BMRB–PDB match list, wwPDB SEQRES, SIFTS), SHA-256-verified against their `MANIFEST.json`; used via `build_parquet_dataset.py --xref-sources`
 - `trizod/potenci/potenci.py` — POTENCI random coil shift predictions (public API: `get_pred_shifts()`)
@@ -49,6 +50,8 @@ All three must pass.
 - 4 stringency tiers: `unfiltered`, `tolerant`, `moderate`, `strict`
 - `filter_defaults` DataFrame in `trizod/trizod.py` defines defaults per tier
 - Individual filters overridable via CLI args
+- Condition rules (2026-11): `max-pressure-bar` (400 bar from tolerant up; unrecorded = ambient), `exclude-membrane-mimetic` (moderate + strict; class rule in `trizod/bmrb/membrane.py`, verdict in `membrane_mimetic_sample`), strict `ionic-strength-range` [0, 0.5] M, and the 273 K placeholder (`SampleConditions.get_temperature()`: exactly "273"/"273.0" K read as not deposited unless the entry text states 0 °C; flagged `temperature_placeholder`)
+- The TriZOD test set is resolved against the strict pool (`trizod/dataset/testset.py`, `RESOLVE_TIER`); pinned chains that left strict are *retired* (`testset/TriZOD_test_retired.fasta`): still leakage targets in `redundancy.py`, staged under `test/` for the package gate, `split = test_retired` in the Parquet, in neither set of the deploy FASTA. Do not trim the pin when chains leave strict
 - `print_filter_losses()` (in `trizod/pipeline.py`) reports per-filter counts (filtered + uniquely filtered)
 - See `docs/filtering.md` for full reference
 

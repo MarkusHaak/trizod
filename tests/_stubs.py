@@ -42,6 +42,9 @@ class Conditions:
     def get_temperature(self, **kwargs):
         return 298.0
 
+    def is_temperature_placeholder(self):
+        return False
+
     def get_pressure_bar(self):
         return np.nan
 
@@ -52,12 +55,19 @@ class Sample:
     A component is ``(ID, Assembly_ID, Entity_ID, Mol_common_name, conc, units)``.
     """
 
-    def __init__(self, components=(), solvent_system=None, details=None, name=None):
+    def __init__(
+        self,
+        components=(),
+        solvent_system=None,
+        details=None,
+        name=None,
+        sample_type="solution",
+    ):
         self.name = name
         self.details = details
         self.solvent_system = solvent_system
         self.framecode = "sample_1"
-        self.type = "solution"
+        self.type = sample_type
         self.components = list(components)
 
 
@@ -160,6 +170,70 @@ def fill_real(entry_id, st_id=None, perturbing_cosolvents=(), keywords=(), **kwa
         bmrb_entries=bmrb_entries,
         **kwargs,
     )
+
+
+# --------------------------------------------------------------------------- #
+# prefilter_dataframe on a hand-built frame, with a shipped tier's defaults
+# --------------------------------------------------------------------------- #
+
+#: One row that passes every shipped tier: 40 residues, every backbone shift
+#: type, deposited ambient conditions, no pressure recorded, no mimetic.
+PASSING_ROW = {
+    "exp_method": "NMR",
+    "exp_method_subtype": "solution",
+    "sample_state_evidence": "solution",
+    "temperature": 298.0,
+    "ionic_strength": 0.1,
+    "pH": 7.0,
+    "seq": "A" * 40,
+    "total_bbshifts": 200,
+    "bbshift_types": 7,
+    "bbshift_positions": 40,
+    "pressure_bar": np.nan,
+    "paramagnetic": False,
+    "membrane_mimetic_sample": False,
+}
+
+
+def condition_frame(**columns):
+    """``PASSING_ROW`` repeated once per value of the (list-valued) overrides."""
+    n = max((len(v) for v in columns.values()), default=1)
+    data = {key: [value] * n for key, value in PASSING_ROW.items()}
+    data.update({key: list(values) for key, values in columns.items()})
+    return pd.DataFrame(data)
+
+
+def prefilter_tier(df, tier, item=0):
+    """``prefilter_dataframe`` with every argument from ``filter_defaults``.
+
+    Returns element ``item`` of its result tuple (0: the frame with
+    ``pass_pre``, 2: ``sels_pre``), or the whole tuple when ``item`` is None.
+    """
+    from trizod.pipeline import prefilter_dataframe
+    from trizod.trizod import filter_defaults
+
+    d = filter_defaults.loc[tier]
+    out = prefilter_dataframe(
+        df,
+        method_whitelist=list(d["exp-method-whitelist"]),
+        method_blacklist=list(d["exp-method-blacklist"]),
+        temperature_range=list(d["temperature-range"]),
+        ionic_strength_range=list(d["ionic-strength-range"]),
+        pH_range=list(d["pH-range"]),
+        peptide_length_range=[*d["peptide-length-range"], np.inf][:2],
+        min_backbone_shift_types=d["min-backbone-shift-types"],
+        min_backbone_shift_positions=d["min-backbone-shift-positions"],
+        min_backbone_shift_fraction=d["min-backbone-shift-fraction"],
+        max_noncanonical_fraction=d["max-noncanonical-fraction"],
+        max_x_fraction=d["max-x-fraction"],
+        keywords=[],
+        perturbing_cosolvents=[],
+        exclude_paramagnetic=d["exclude-paramagnetic"],
+        method_fallback=d["method-fallback"],
+        max_pressure_bar=d["max-pressure-bar"],
+        exclude_membrane_mimetic=d["exclude-membrane-mimetic"],
+    )
+    return out if item is None else out[item]
 
 
 # --------------------------------------------------------------------------- #

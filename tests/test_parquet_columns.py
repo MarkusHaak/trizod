@@ -134,11 +134,13 @@ def _scored_frame():
         "physical_state": ["native"],
         "cosolvent_evidence": [False],
         "membrane_mimetic": ["SDS;micelle"],
+        "membrane_mimetic_sample": [True],
         "citation_DOI": ["10.1000/xyz"],
         "citation_title": ["A title"],
         "ionic_strength": [0.15],
         "pH": [7.0],
         "temperature": [298.0],
+        "temperature_placeholder": [False],
         "pressure_bar": [1.01325],
         "bbshift_positions_post": [n],
         "bbshift_types_post": [3],
@@ -252,11 +254,77 @@ XREF_COLUMNS = [
 ]
 
 
-def test_xref_columns_are_appended_last():
-    tail = [(c.name, c.arrow) for c in builder.COLUMNS[-len(XREF_COLUMNS) :]]
-    assert tail == XREF_COLUMNS
+def test_xref_columns_follow_label_tier_source():
     names = [c.name for c in builder.COLUMNS]
-    assert names.index("xrefs") == names.index("label_tier_source") + 1
+    start = names.index("xrefs")
+    assert start == names.index("label_tier_source") + 1
+    block = [(c.name, c.arrow) for c in builder.COLUMNS[start : start + 4]]
+    assert block == XREF_COLUMNS
+
+
+#: Tier-rule provenance (2026-11), appended after the cross-references.
+TIER_RULE_COLUMNS = [
+    ("membrane_mimetic_sample", "bool", "membrane_mimetic_sample"),
+    ("temperature_placeholder", "bool", "temperature_placeholder"),
+    ("high_pressure", "bool", "pressure_bar"),
+]
+
+
+def test_tier_rule_columns_are_appended_last():
+    tail = [
+        (c.name, c.arrow, c.source) for c in builder.COLUMNS[-len(TIER_RULE_COLUMNS) :]
+    ]
+    assert tail == TIER_RULE_COLUMNS
+    names = [c.name for c in builder.COLUMNS]
+    assert names.index("membrane_mimetic_sample") == names.index("pdb_ids") + 1
+    for name, _arrow, source in TIER_RULE_COLUMNS:
+        assert builder.COLUMNS[names.index(name)].origin == "scores"
+        assert source in builder.SCORES_JSON_SOURCES
+
+
+def test_tier_rule_columns_are_copied_and_derived(tmp_path):
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _record(
+                "12345",
+                "12345_1_1_1",
+                membrane_mimetic_sample=True,
+                temperature_placeholder=True,
+                pressure_bar=2500.0,
+            ),
+            _record(
+                "23456",
+                "23456_1_1_1",
+                membrane_mimetic_sample=False,
+                temperature_placeholder=False,
+                pressure_bar=399.9,
+            ),
+            _record("34567", "34567_1_1_1", pressure_bar=400.0),
+            _record("99999", "99999_1_1_1", pressure_bar=None),  # not recorded
+        ],
+    )
+    cols = builder.collect_columns(bundle, None)
+    assert cols["membrane_mimetic_sample"][:2] == [True, False]
+    assert cols["temperature_placeholder"][:2] == [True, False]
+    # absent keys (a scores.json from before the rules) stay null, never False
+    assert cols["membrane_mimetic_sample"][3] is None
+    assert cols["temperature_placeholder"][3] is None
+    # high_pressure: the tier filter's threshold (>= 400 bar); unrecorded = null
+    assert cols["high_pressure"] == [True, False, True, None]
+
+
+def test_tier_rule_semantics_are_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    metadata = pq.read_schema(sorted_parquet).metadata
+    for key in (
+        b"membrane_mimetic_sample_semantics",
+        b"temperature_placeholder_semantics",
+        b"high_pressure_semantics",
+    ):
+        assert metadata[key].decode(), key
+    assert b"never filtered" not in metadata[b"pressure_bar_semantics"]
+    assert b"annotation only" not in metadata[b"membrane_mimetic_semantics"]
 
 
 # --------------------------------------------------------------------------- #
@@ -497,6 +565,35 @@ def test_label_tier_comes_from_the_test_fasta_header(tmp_path):
     assert _one(cols, "label_tier", 1) is None
 
 
+def test_retired_test_chains_get_their_own_split(tmp_path):
+    """A pinned test chain that left strict is retired: not a test chain, not
+    a training chain either (it stays a leakage target), and it keeps the
+    label_tier that explains why."""
+    bundle = _write_bundle(
+        tmp_path / "bundle",
+        records=[
+            _record("12345", "12345_1_1_1"),
+            _record("23456", "23456_1_1_1"),
+            _record("99999", "99999_1_1_1"),
+        ],
+        test_trizod_header=">12345_1_1_1 label_tier=strict pinned_id=12345_1_1_1",
+    )
+    (bundle / "test" / "TriZOD_test_retired.fasta").write_text(
+        ">23456_1_1_1 label_tier=moderate pinned_id=23456_1_1_1 reason=not_strict\n"
+        "AAAA\n"
+    )
+    cols = builder.collect_columns(bundle, None)
+    assert cols["split"] == ["test_trizod", "test_retired", "excluded"]
+    assert cols["label_tier"] == ["strict", "moderate", None]
+
+
+def test_retired_split_is_declared_in_the_file(sorted_parquet):
+    pq = pytest.importorskip("pyarrow.parquet")
+    metadata = pq.read_schema(sorted_parquet).metadata
+    assert b"test_retired" in metadata[b"split_values"]
+    assert b"test_retired" in metadata[b"label_tier_semantics"]
+
+
 def test_label_tier_null_when_the_bundle_predates_the_header(tmp_path):
     bundle = _write_bundle(
         tmp_path / "bundle",
@@ -556,7 +653,7 @@ def test_pressure_bar_semantics_are_declared_in_the_file(sorted_parquet):
     pq = pytest.importorskip("pyarrow.parquet")
     metadata = pq.read_schema(sorted_parquet).metadata
     semantics = metadata[b"pressure_bar_semantics"].decode()
-    assert "bar" in semantics and "never filtered" in semantics
+    assert "bar" in semantics and "400" in semantics
 
 
 def test_label_source_rule_is_declared_in_the_file(sorted_parquet):

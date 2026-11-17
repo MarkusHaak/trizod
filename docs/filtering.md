@@ -30,6 +30,8 @@ respective CLI arguments.
 | exp-method-blacklist         | Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.                                                                                            |
 | method-fallback              | What to do about entries with no `_Entry.Experimental_method_subtype` at all: `off`, `reject-solid` or `require-solution`. See "Undeclared experimental method".                            |
 | exclude-paramagnetic         | Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata. Paramagnetic samples cause massive chemical shift perturbations that make Z-score computation meaningless. |
+| max-pressure-bar             | Exclude entries whose scored shift table's sample condition list records a pressure **at or above** this value, in bar (`pressure_bar`). A pressure that is not recorded passes as ambient. See "Condition rules (2026-11)". |
+| exclude-membrane-mimetic     | Exclude entries whose sample is a membrane mimetic by the class rule of `trizod/bmrb/membrane.py` (`membrane_mimetic_sample`). See "Condition rules (2026-11)". |
 | max-offset                   | Maximum valid offset correction for any random coil chemical shift type. Compared against the `off_<atom>_sigma` columns, which are in **sigma units** — means of `(observed - POTENCI) / REFINED_WEIGHTS[atom]`, not ppm. Multiply by `REFINED_WEIGHTS[atom]` for ppm (e.g. 3 sigma is ~0.59 ppm for CA, ~0.08 ppm for HA). The ppm siblings `lacs_off_<atom>_ppm` and `total_off_<atom>_ppm` are **not** what this threshold sees. |
 | reject-shift-type-only       | Upon exceeding the maximal offset set by `--max-offset`, exclude only the backbone shifts exceeding the offset instead of the whole entry.                                                  |
 
@@ -335,7 +337,7 @@ an absent tag before.
 | Filter                       | unfiltered  | tolerant                                | moderate                                | strict                                                                                         |
 | :--------------------------- | ----------- | --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | temperature-range            | [-inf,+inf] | [263,333]                               | [273,323]                               | [273,313]                                                                                      |
-| ionic-strength-range         | [0,+inf]    | [0,7]                                   | [0,5]                                   | [0,3]                                                                                          |
+| ionic-strength-range         | [0,+inf]    | [0,7]                                   | [0,5]                                   | [0,0.5]                                                                                        |
 | pH-range                     | [-inf,+inf] | [2,12]                                  | [4,10]                                  | [6,8]                                                                                          |
 | unit-assumptions             | Yes         | Yes                                     | Yes                                     | No                                                                                             |
 | unit-corrections             | Yes         | Yes                                     | No                                      | No                                                                                             |
@@ -355,6 +357,8 @@ an absent tag before.
 | exp-method-blacklist         | []          | ['solid']                               | ['solid']                               | ['solid']                                                                                      |
 | method-fallback              | off         | reject-solid                            | reject-solid                            | require-solution                                                                               |
 | exclude-paramagnetic         | No          | Yes                                     | Yes                                     | Yes                                                                                            |
+| max-pressure-bar             | +inf        | 400                                     | 400                                     | 400                                                                                            |
+| exclude-membrane-mimetic     | No          | No                                      | Yes                                     | Yes                                                                                            |
 | max-offset                   | +inf        | 3                                       | 3                                       | 2                                                                                              |
 | reject-shift-type-only       | Yes         | Yes                                     | No                                      | No                                                                                             |
 
@@ -414,13 +418,123 @@ pyrophosphate is a buffer. Net data impact of both removals: +1 strict row.
 
 Stabilising osmolytes (TMAO, glycerol) are **not** in the list — they do not take
 the sample out of the aqueous regime the reference data describe. Detergents and
-lipids are not in it either; they are annotated as `membrane_mimetic` and never
-filtered (see "Membrane mimetics are annotated, never filtered").
+lipids are not in it either; they have their own class rule and filter,
+`exclude-membrane-mimetic` (see "Condition rules (2026-11)").
 
 Each filter can be set individually with the respective CLI option, which takes
 precedence over `--filter-defaults`.
 
+## Condition rules (2026-11)
+
+Four rules added for the 2026-11 rebuild. They are four different kinds of
+decision: pressure and membrane mimetics remove labels that describe a perturbed
+ensemble, the ionic-strength cap is a stated convention, and the 273 K rule repairs
+bad metadata. Each leaves a provenance column, so a chain that drops to a looser tier
+stays identifiable. Impact on the 2026-11-11 rebuild (recounted with these
+definitions): moderate 11,305 → 10,811 chains (−494), strict 4,245 → 3,957 (−288);
+every lost chain stays in the release at a looser tier.
+
+### High pressure — `max-pressure-bar` (tolerant, moderate, strict: 400 bar)
+
+A chain is excluded if the sample condition list its shift table references records a
+pressure **≥ 400 bar** (`pressure_bar`, after unit conversion); a pressure that is not
+recorded is taken as ambient and passes. Kilobar pressure populates lower-volume,
+partially unfolded states (Akasaka 2003; ubiquitin at 2,500 bar, bmr52344, scores G 0.68
+against 0.12 at ambient), so the labels describe a deliberately perturbed ensemble; 400
+bar already moves random-coil N/HN by ~0.24–0.30 σ (Koehler et al. 2012). The deposits
+are bimodal (≈1 bar, or 2,000–2,500 bar), so any cut between ~10 and 500 bar selects the
+same chains. Applied from tolerant up, like the perturbing cosolvents, on the same
+"non-ambient ensemble" logic. One unit repair: a value of 900–1,100 deposited as `bar`
+is read as hPa (bmr25704, "1013 bar"). Column: `pressure_bar`; Parquet flag
+`high_pressure`.
+
+### Membrane mimetics — `exclude-membrane-mimetic` (moderate, strict)
+
+A chain's sample — the `_Sample` frames its shift table references, or every sample of
+the entry if it references none (the same resolution as the cosolvent filter) — is a
+membrane mimetic if any non-polymer `_Sample_component` is
+
+- **(a) a bilayer lipid or assembly, at any concentration**: diacyl/ether PC, PG, PE,
+  PS or PA with chains ≥ C10 (acronyms such as DMPC/POPC/DPhPC, the IUPAC
+  `…glycero-3-phospho…` names, `14:0 PC`), cardiolipin, lipid extracts/asolectin,
+  bicelles, nanodiscs/MSP, liposomes/vesicles, amphipols;
+- **(b) a dedicated micelle former, at any concentration**: SDS; alkylphosphocholines
+  (DPC incl. the deposited misspellings, FC-10/12/14/16); lysophospholipids (LMPG, LPPG,
+  lyso-PC); short-chain phospholipids (DHPC 06:0, 07:0, 08:0); LDAO; lauroyl sarcosine;
+  CnEm; DTAC/CTAB; a component named "micelles";
+- **(c) an additive-class detergent at or above its CMC in water, or with no
+  convertible concentration** (CMC table below). Digitonin counts whenever present.
+
+**Exception:** a CnEm component is not counted when its sample also holds an n-alkanol
+or is of `_Sample.Type` "liquid crystal" without phospholipid — the CnEm/n-alkanol RDC
+alignment media (31134 C12E5/hexanol, 25324 C8E5/octanol). Bile-acid ligands
+(cholate, glycochenodeoxycholate), acyl-CoA, lysozyme and lipid II are never matched;
+a mixture deposited as one name ("DMPC/DHPC", "DMPC+CHAPS") is classified part by part.
+
+Why three classes and not one CMC test: CMCs span three orders of magnitude, sub-CMC
+SDS already induces helix in disordered chains, and a CMC test on a classic mimetic
+turns a deposition unit error into a false "aqueous" label (bmr21013, titled "DPC
+micelle bound RI23", lists DPC at "10 µM"). The additive class exists for soluble
+proteins solubilised by a little CHAPS/CHAPSO/octyl glucoside/Triton (NALP1 PYD with
+1 mM CHAPS, 16670). Micelle- or bilayer-induced order is a mislabelled positive, the
+failure mode the cosolvent filter removes for TFE; removing it barely moves the class
+balance (usable disorder share at G > 0.40: moderate 15.94 → 15.98 %, strict 12.53 →
+12.58 %). The removed chains stay in tolerant.
+
+Concentrations come from `_Sample_component.Concentration_val` / `_units`: M, mM and
+µM convert directly; %, mg/mL and µg/mL through the molar mass. Amounts (mg, µmol),
+bare ratios (w/w, eq) or no value count as "no convertible concentration". Only class
+(c) is ever converted.
+
+| additive (c) | CMC in water (mM) | MW (g/mol) |
+| :----------- | ----------------: | ---------: |
+| CHAPS        | 8                 | 614.9      |
+| CHAPSO       | 8 (taken = CHAPS) | 630.9      |
+| octyl glucoside (OG) | 18        | 292.4      |
+| octyl maltoside (OM) | 19.5      | 454.5      |
+| decyl maltoside (DM) | 1.8       | 482.6      |
+| dodecyl maltoside (DDM) | 0.17   | 510.6      |
+| Triton X-100 | 0.24              | 625        |
+| Tween-20     | 0.06              | 1228       |
+| digitonin    | — (always counts) | 1229       |
+
+Water CMCs are upper bounds for ionic detergents (they fall in salt). For reference, the
+(b) micelle formers' CMCs (not used by the rule): LPPG 0.018, FC-16 0.013, FC-14 0.12,
+LMPG 0.16, LDAO 1.0, DH7PC 1.4, DPC 1.5, SDS 8.2, FC-10 11, DHPC 15 mM. Columns:
+`membrane_mimetic_sample` (the verdict) and `membrane_mimetic` (every class recognised,
+counted or not).
+
+### Ionic strength — strict `ionic-strength-range` [0, 0.5] M
+
+Strict now caps the ionic strength at 0.5 M (was 3 M); moderate (≤ 5 M) and tolerant
+(≤ 7 M, inert) are unchanged, and deposited values are used as they are. This is a
+**convention, not a correction**: POTENCI's only ionic-strength term is a
+Debye–Hückel screening of the side-chain charges, and same-sequence replicates at
+0.5–5 M show no G-score difference from low-salt ones. The cap keeps the
+highest-confidence tier in the dilute-buffer regime where that treatment is physically
+reasonable. It also removes halophilic proteins at their native salt (bmr34844,
+34695) and chains whose deposited ionic strength contradicts their own components
+(bmr5365: 1.5 M for 25 mM phosphate + 100 mM NaCl).
+
+### 273 K placeholder (all tiers; strict exclusion follows)
+
+A temperature row whose raw deposited value is exactly `273` or `273.0` (unit K or
+none; **not** 273.15 or 273.65) is read as **not deposited**, in every entry — unless
+the entry's own text states 0 °C: `273 K` or `0 °C`/`0oC`/`0 degC` in the
+`_Sample_condition_list` name, framecode or details, `_Experiment_list.Details`,
+`_Entry.Details` or `_Sample.Details`. Exactly 273 K appears in 12.9 % of the ADIT-NMR
+entries submitted from July 2010 to mid-2020 against 0.6 % of all others, and for 237
+of 247 checkable entries the co-deposited PDB entry gives another temperature (mostly
+298 K). Like any missing temperature, strict (`default-conditions` off) then excludes
+the chain and the other tiers score it at the default 298 K — a 25 K error moves
+POTENCI predictions by ~0.76 σ on average, so 411 moderate chains are **re-scored**,
+not just strict membership changed. Column: `temperature_placeholder` (the temperature
+is imputed). The rule lives in `SampleConditions.get_temperature()`, so it changes
+`bmrb_parser_version()` and forces a re-parse and re-score.
+
 ## Measured Impact
+
+The tables below predate the 2026-11 condition rules (see above for their impact).
 
 Two different populations are counted below; mixing them up is the commonest way to
 misread these numbers.
@@ -510,32 +624,33 @@ by nothing else), followed by **pH** (908) and the **backbone-shift-fraction** m
 
 ## Annotation Columns
 
-The scoring pipeline emits these on **every** row at **every** tier. Only
-`physical_state` participates in a filter (via `physical-state-blacklist`); the rest
-never remove anything on their own.
+The scoring pipeline emits these on **every** row at **every** tier. `physical_state`
+(via `physical-state-blacklist`), `pressure_bar` (`max-pressure-bar`) and
+`membrane_mimetic_sample` (`exclude-membrane-mimetic`) feed filters; the rest never
+remove anything on their own.
 
 | column                  | meaning                                                                                                      |
 | :---------------------- | :------------------------------------------------------------------------------------------------------------ |
 | `physical_state`        | `_Entity_assembly.Physical_state` for this row's entity assembly, verbatim (lower-cased, stripped), or null   |
 | `cosolvent_evidence`    | bool — does the entry independently name a perturbing cosolvent (in its title/details, assembly/entity text, or the referenced samples' name, details, solvent system and components)? Gates the four ambiguous physical states; see "Physical state". Called `denaturant_evidence` before 2026-08; reads methanol/ethanol and `_Sample.Solvent_system` since 2026-10 |
-| `pressure_bar`          | float — sample pressure in bar from the scored shift table's own condition list (as `pH`/`temperature`), converted literally from the deposited unit (bar, atm, Pa, hPa, kPa, MPa, mbar, mmHg, Torr, psi; `ambient` = 1 atm). Null when not recorded or the unit is missing/unknown — never a default, never a repaired unit (the 89 condition lists depositing `1 Pa` read 1e-5 bar). **No tier filters on it**: a ceiling needs an NMR-backed threshold |
+| `pressure_bar`          | float — sample pressure in bar from the scored shift table's own condition list (as `pH`/`temperature`), converted from the deposited unit (bar, atm, Pa, hPa, kPa, MPa, mbar, mmHg, Torr, psi; `ambient` = 1 atm; 900–1,100 deposited as `bar` read as hPa). Null when not recorded or the unit is missing/unknown — never a default (the 89 condition lists depositing `1 Pa` read 1e-5 bar). Read by `max-pressure-bar`; the Parquet adds `high_pressure` (≥ 400 bar) |
 | `sample_state_evidence` | `solution` / `solid` / `unknown` — see "Undeclared experimental method"                                       |
-| `membrane_mimetic`      | the matched membrane-mimetic token(s), `;`-joined, or null. A string, not a bool, so an SDS micelle stays distinguishable from DDM solubilisation |
+| `membrane_mimetic`      | every membrane-mimetic class recognised in the chain's samples (`phospholipid`, `bicelle`, `SDS`, `DPC`, `DHPC`, `CHAPS`, `DDM`, …), `;`-joined in class-table order, or null — counted or not, so a sub-CMC CHAPS is still named and an SDS micelle stays distinguishable from DDM solubilisation |
+| `membrane_mimetic_sample` | bool — the class rule's verdict (see "Condition rules"); read by `exclude-membrane-mimetic` |
+| `temperature_placeholder` | bool — the deposited temperature was the 273 K placeholder and was read as not deposited: `temperature` is the 298 K default (or NaN at strict) |
 
-### Membrane mimetics are annotated, never filtered
+### Membrane mimetics: from annotation to filter
 
-The vocabulary is `SDS, DPC, dodecyl, LPPG, LMPG, DHPC, DMPC, POPC, bicelle, micelle,
-Triton, CHAPS, octyl, maltoside, digitonin, nanodisc`, matched against
-`_Sample_component.Mol_common_name` for components that are not the studied polymer.
-
-It is deliberately **not** a filter at any tier, for a measurable reason: the records it
-would remove are 93.7 % ordered and contain **zero** disordered chains, against a
-baseline disordered fraction of 4.1 %. Filtering on it would be a one-sided deletion of
-well-determined ordered examples — it would shift the label distribution toward disorder
-rather than improve data quality. Micelles and bicelles are also isotropic solution NMR,
-so they are not a solid-state signal either (see `sample_state_evidence`). Users who
-want a detergent-free subset can filter on the column themselves; the release does not
-make that choice for them.
+Until 2026-11 the column was a substring match on `SDS, DPC, dodecyl, LPPG, LMPG, DHPC,
+DMPC, POPC, bicelle, micelle, Triton, CHAPS, octyl, maltoside, digitonin, nanodisc` and
+filtered nothing, on the argument that the records it would remove are ordered, so
+filtering would be a one-sided deletion of ordered examples. The removal is one-sided
+because the bias is: medium-induced order is a mislabelled positive. The substring
+list also failed on recall (IUPAC lipid names, LDAO, Fos-choline, lauroyl sarcosine)
+and flagged sub-CMC additives and alignment media. The class rule and the
+`exclude-membrane-mimetic` filter (moderate, strict) replace it — see "Condition rules
+(2026-11)". Users who want the detergent-containing chains back can take them from
+tolerant, where `membrane_mimetic_sample` marks them.
 
 ### Assembly-composition columns
 

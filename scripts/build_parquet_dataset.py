@@ -10,7 +10,10 @@ training-representative sets and clustering pools, so a single row per chain
 plus a handful of ordinal/categorical columns encodes every published view's
 membership:
 
-  * ``split``       one of train / redundant / test_chezod117 / test_trizod / excluded
+  * ``split``       one of train / redundant / test_chezod117 / test_trizod /
+                    test_retired / excluded (test_retired: a pinned TriZOD
+                    test chain that left the strict tier -- not tested on,
+                    still a leakage target, so never train or redundant)
   * ``train_tier``  strictest tier at which the chain is a training representative
   * ``pool_tier``   strictest tier whose redundancy-reduction pool contains the chain
 
@@ -80,9 +83,10 @@ from pathlib import Path
 from trizod import paths
 from trizod.bmrb import xref_sources as xs
 from trizod.bmrb import xrefs as xr
-from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS
+from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS, HIGH_PRESSURE_BAR
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
+from trizod.dataset.testset import RETIRED_FASTA
 from trizod.dataset.tiers import (
     LABEL_SOURCE_RULE,
     TIER_ORDER,
@@ -262,6 +266,13 @@ def as_float(value) -> float | None:
 def as_int(value) -> int | None:
     f = as_float(value)
     return int(f) if f is not None else None
+
+
+def as_high_pressure(value) -> bool | None:
+    """``pressure_bar`` -> is it at or above the tiers' ``max-pressure-bar``
+    (``HIGH_PRESSURE_BAR``)? Null when the pressure was not recorded."""
+    bar = as_float(value)
+    return None if bar is None else bar >= HIGH_PRESSURE_BAR
 
 
 def clean_str(value) -> str | None:
@@ -460,8 +471,9 @@ COLUMNS: list[Column] = [
     # so it must not lose precision relative to the shifts themselves
     *[_scores(f, "float64", f, as_float) for f in TOTAL_OFF_FIELDS],
     # --- appended in v0.4.0 --------------------------------------------------
-    # Sample-state annotations (plan §3.1/§3.2). Emitted at every tier and
-    # filtered by none of them except the per-tier physical_state deny list.
+    # Sample-state annotations (plan §3.1/§3.2). Emitted at every tier; the
+    # per-tier physical_state deny list and (since 2026-11) the moderate/strict
+    # membrane-mimetic filter, through membrane_mimetic_sample below, read them.
     _scores("physical_state", "string", "physical_state", clean_str),
     _scores("cosolvent_evidence", "bool", "cosolvent_evidence", as_bool),
     _scores("sample_state_evidence", "string", "sample_state_evidence", clean_str),
@@ -490,13 +502,14 @@ COLUMNS: list[Column] = [
     _composition("has_conformational_isomer", "bool", as_bool),
     _composition("is_bound", "bool", as_bool),
     # Strictest tier the test chain's sequence still satisfies. Only test_trizod
-    # rows have one; null everywhere else.
+    # and test_retired rows have one; null everywhere else.
     Column(
         "label_tier", "string", origin="testset", source="label_tier", convert=clean_str
     ),
     # --- appended 2026-10 ----------------------------------------------------
     # Sample pressure in bar from the scored shift table's own condition list,
-    # like ph/temperature. Annotation only: no tier has a pressure ceiling.
+    # like ph/temperature. Since 2026-11 the tolerant, moderate and strict
+    # tiers exclude >= 400 bar (high_pressure, appended below).
     _scores("pressure_bar", "float32", "pressure_bar", as_float),
     # --- appended 2026-11 ----------------------------------------------------
     # Tier whose scores.json record supplied every "scores" column of the row,
@@ -520,6 +533,18 @@ COLUMNS: list[Column] = [
     Column(
         "pdb_ids", "list<string>", derive=lambda c: _xref_col(c, xr.confident_pdb_ids)
     ),
+    # --- appended 2026-11: tier-rule provenance -------------------------------
+    # One flag per condition rule, so a consumer sees why a chain sits in a
+    # looser tier than its quality would suggest. Null, never False, when the
+    # scores.json record predates the rule.
+    # The class-rule verdict the moderate/strict membrane filter reads; the
+    # descriptive membrane_mimetic string above names the classes found.
+    _scores("membrane_mimetic_sample", "bool", "membrane_mimetic_sample", as_bool),
+    # The deposited temperature was the 273 K placeholder and was read as not
+    # deposited: temperature is then the 298 K default (strict excludes it).
+    _scores("temperature_placeholder", "bool", "temperature_placeholder", as_bool),
+    # pressure_bar >= 400 bar, the tolerant/moderate/strict ceiling.
+    _scores("high_pressure", "bool", "pressure_bar", as_high_pressure),
 ]
 
 #: ``scores.json`` keys carried into the Parquet, derived from ``COLUMNS`` so
@@ -667,6 +692,10 @@ def collect_columns(
     test_chezod = read_fasta_ids(in_bundle / "test" / "CheZOD117_test_set.fasta")
     trizod_test_attrs = read_fasta_attrs(in_bundle / "test" / "TriZOD_test_set.fasta")
     test_trizod = set(trizod_test_attrs)
+    # Retired TriZOD test chains (trizod.dataset.testset.RETIRED_FASTA): absent
+    # from a bundle staged before they existed, which then has none.
+    retired_fa = in_bundle / "test" / RETIRED_FASTA
+    retired_attrs = read_fasta_attrs(retired_fa) if retired_fa.exists() else {}
     if not any(a.get("label_tier") for a in trizod_test_attrs.values()):
         print(
             "  WARNING: no label_tier= on the TriZOD test FASTA headers "
@@ -707,6 +736,8 @@ def collect_columns(
             split = "test_chezod117"
         elif rid in test_trizod:
             split = "test_trizod"
+        elif rid in retired_attrs:
+            split = "test_retired"
         elif train_tier is not None:
             split = "train"
         elif pool_tier is not None:
@@ -728,7 +759,7 @@ def collect_columns(
         records = {
             "scores": rec,
             "composition": comp_row,
-            "testset": trizod_test_attrs.get(rid),
+            "testset": trizod_test_attrs.get(rid) or retired_attrs.get(rid),
         }
         ctx = {
             "seq": seq,
@@ -836,16 +867,20 @@ def build(
         b"dataset": b"TriZOD",
         b"description": b"Per-residue protein-disorder labels from re-referenced BMRB NMR backbone chemical shifts. One row per scored chain; per-residue arrays aligned 1:1 to sequence.",
         b"tier_order_loose_to_strict": b"unfiltered,tolerant,moderate,strict",
-        b"split_values": b"train,redundant,test_chezod117,test_trizod,excluded",
+        b"split_values": b"train,redundant,test_chezod117,test_trizod,test_retired,excluded",
+        b"test_retired_semantics": b"split test_retired: a pinned TriZOD test chain that no longer meets the strict tier (e.g. after the 2026-11 condition rules). It is not in the TriZOD test set, but it stays a leakage target, so it and its homologues are excluded from every training set exactly as with the full pin",
         b"mask_semantics": b"mask[i]=true where residue i is scored; gscores/zscores are NaN where mask is false",
         b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null, and label_tier is null for every non-test_trizod row",
         b"composition_join": b"composition columns (n_entities .. is_bound) are per BMRB ENTRY, joined on entry_id, from trizod.dataset.composition.detect_bound; n_entities counts distinct _Entity records, so a homodimer is 1 -- see n_copies / n_entity_assembly_rows for stoichiometry",
         b"composition_list_columns": b"metal_comp_ids, ligand_comp_ids and ligand_names are list<string>; an empty list is a measured absence, null is an unclassified entry",
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
-        b"membrane_mimetic_semantics": b"';'-joined detergent/lipid tokens matched in the sample components, null when none; annotation only, never filtered",
-        b"label_tier_semantics": b"test_trizod rows only: strictest tier whose pool still contains the pinned test sequence",
+        b"membrane_mimetic_semantics": b"';'-joined membrane-mimetic classes (trizod.bmrb.membrane: phospholipid, bicelle, nanodisc, SDS, DPC, DHPC, LMPG, LDAO, CHAPS, DDM, ...) recognised among the non-polymer components of the samples the scored shift table references, counted or not (a sub-CMC CHAPS is named), null when none. Descriptive; the moderate/strict filter reads membrane_mimetic_sample",
+        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always); CnEm/n-alkanol alignment media are not counted. Excluded from the moderate and strict tiers; null when the record predates the rule",
+        b"temperature_placeholder_semantics": b"true when the deposited temperature was exactly 273 K (the text '273' or '273.0', unit K or none) with no statement of 0 C in the entry's own text, and was read as not deposited: temperature then holds the 298 K default and the strict tier excludes the chain. Null when the record predates the rule",
+        b"high_pressure_semantics": b"pressure_bar >= 400 bar, the ceiling of the tolerant, moderate and strict tiers; null when no pressure was recorded (an unrecorded pressure passes as ambient)",
+        b"label_tier_semantics": b"test_trizod and test_retired rows only: strictest tier whose pool still contains the pinned test sequence (strict for every test_trizod row; moderate/tolerant for a test_retired row)",
         b"label_source": LABEL_SOURCE_RULE.encode(),
-        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted literally from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm); null when not recorded or the unit is missing/unknown; annotation only, never filtered",
+        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm; 900-1100 deposited as 'bar' is read as hPa); null when not recorded or the unit is missing/unknown. The tolerant, moderate and strict tiers exclude >= 400 bar (high_pressure); an unrecorded pressure passes as ambient",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
         b"sort_order": sort_order_doc(row_group_size).encode(),
         b"xrefs_semantics": XREFS_DOC.encode(),

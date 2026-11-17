@@ -95,10 +95,23 @@ The seeded recipe (fixed seed = 42) is:
 pin holds **460** sequences at `trizod/dataset/pinned/TriZOD_test_set.fasta`
 (redrawn 2026-08-11, seed 42, sample fraction 0.25, from the final strict pool);
 `trizod dataset test-set` resolves each pinned sequence against the **current
-tolerant pool** and writes `TriZOD_test_set.fasta` plus
+strict pool** and writes `TriZOD_test_set.fasta` plus
 `TriZOD_test_set_labels.tsv` (`test_id`, `pinned_id`, `substituted`,
-`label_tier`, `length`). Resolving against *tolerant* rather than *strict* is
-what keeps the benchmark stable when a filter change moves the strict boundary.
+`label_tier`, `length`, `status`). The TriZOD test set is defined as
+strict-tier sequences (since 2026-11; from 2026-08 it was resolved against
+tolerant to keep the benchmark whole). A pinned sequence that no longer meets
+strict after a rule change or rescore is **retired**: it leaves the test set but
+is written to `TriZOD_test_retired.fasta` (header `label_tier=… pinned_id=…
+reason=not_strict`, `status = retired` in the labels table), which the
+redundancy step adds to its leakage targets. Retired chains and their
+homologues therefore stay out of every training set exactly as with the full
+pin; only the test set shrinks. The release stages the file under `test/` (the
+leakage gate checks it), the Parquet gives such chains `split = test_retired`,
+and the deploy FASTA puts them in neither set. The pin is consequently **not**
+trimmed when chains leave strict — it is what defines the retired set; only a
+pinned sequence absent from the tolerant pool too is dropped outright. Test
+metrics are comparable across releases only on the chains both test sets
+share.
 
 For the `2026-08` build (`build_test_set_summary.json`):
 

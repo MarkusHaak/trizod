@@ -27,6 +27,9 @@ class _Conditions:
     def get_temperature(self, **kwargs):
         return 298.0
 
+    def is_temperature_placeholder(self):
+        return False
+
     def get_pressure_bar(self):
         return float("nan")
 

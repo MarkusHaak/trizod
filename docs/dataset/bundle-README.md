@@ -59,20 +59,23 @@ when pruning matters. `trizod_shifts.parquet` is sorted by
 | `zscores` | per-residue CheZOD Z-score (same alignment) |
 | `k` | number of weighted secondary shifts behind each residue (`0` = no shift) |
 | `off_<atom>_sigma`, `lacs_off_<atom>_ppm`, `total_off_<atom>_ppm` | per-atom referencing offsets (C, CA, CB, H, HA, HB, N) in **three different units** — see §7. To reproduce the shift TriZOD scored, subtract `total_off_<atom>_ppm` from the deposited shift; never add the other two together |
-| `pH`, `temperature`, `ionic_strength`, `pressure_bar`, `citation` | sample metadata. `pressure_bar` is the sample pressure in bar from the scored shift table's condition list, converted from the deposited unit; null when not recorded. Annotation only — no tier filters on pressure |
+| `pH`, `temperature`, `ionic_strength`, `pressure_bar`, `citation` | sample metadata. `pressure_bar` is the sample pressure in bar from the scored shift table's condition list, converted from the deposited unit; null when not recorded. Since 2026-11 the tolerant, moderate and strict tiers exclude >= 400 bar (an unrecorded pressure passes as ambient) |
 | `physical_state`, `cosolvent_evidence`, `sample_state_evidence`, `membrane_mimetic` | sample-state annotation (see below) |
 
 ### Sample-state and composition annotation
 
-New in this release, emitted for **every** record at **every** tier. These
-describe the deposition; only `physical_state` participates in any filter.
+Emitted for **every** record at **every** tier. These describe the
+deposition; `physical_state` and (since 2026-11) `membrane_mimetic_sample` feed
+filters, the rest annotate.
 
 | field | meaning |
 |---|---|
 | `physical_state` | `_Entity_assembly.Physical_state` for this row's entity assembly, verbatim and lower-cased (`native`, `intrinsically disordered`, `denatured`, `molten globule`, …), or null |
 | `cosolvent_evidence` | bool — does the entry independently name a perturbing cosolvent (guanidin*, gdm*, hexafluoroisopropanol*, hexafluoro-2-propanol*, urea, TFE, trifluoroethanol in any spelling, HFIP, DMSO, SDS, Gdn-HCl, GdnCl, methanol, ethanol, CD3OH, CD3OD, MeOH, EtOH) anywhere in its sample components, solvent system or sample-descriptive text? Renamed from `denaturant_evidence` — only urea and the guanidinium salts denature, while TFE/HFIP/DMSO are helix inducers, so the family is named for what it shares (the sample is not aqueous buffer) rather than for half of it |
 | `sample_state_evidence` | `solution` / `solid` / `unknown`, derived from `_Sample.Type`, `_Experiment.Sample_state` and the experiment names |
-| `membrane_mimetic` | matched membrane-mimetic token(s), `;`-joined, or null. **Annotation only — never filtered** |
+| `membrane_mimetic` | every membrane-mimetic class recognised in the chain's samples (`phospholipid`, `bicelle`, `SDS`, `DPC`, `DHPC`, `CHAPS`, `DDM`, …), `;`-joined, or null — counted by the rule or not |
+| `membrane_mimetic_sample` | bool, since 2026-11 — the membrane-mimetic class rule's verdict (bilayer lipids/assemblies and micelle formers at any concentration, additive detergents at or above their CMC); excluded from moderate and strict |
+| `temperature_placeholder` | bool, since 2026-11 — the deposited temperature was exactly 273 K with no stated 0 °C and was read as not deposited: `temperature` is the 298 K default, and strict excludes the chain |
 
 `trizod_dataset.parquet` additionally carries the assembly-composition columns
 `n_entities`, `n_entity_assembly_rows`, `n_copies`, `has_conformational_isomer`,
@@ -415,8 +418,12 @@ Larger than the old 364, and drawn from a pool that no longer holds solid-state
 depositions, 25 % HFIP peptides or molten globules.
 
 The result is pinned at `trizod/dataset/pinned/TriZOD_test_set.fasta` (seed 42,
-sample fraction 0.25) and re-resolved by sequence against the tolerant pool on
-every rebuild, so entry IDs stay valid as the snapshot evolves. In this release
+sample fraction 0.25) and re-resolved by sequence against the strict pool on
+every rebuild, so entry IDs stay valid as the snapshot evolves; the test set is
+defined as strict-tier sequences. A pinned sequence that no longer meets strict
+is retired (`test/TriZOD_test_retired.fasta`, Parquet `split = test_retired`):
+not tested on, but still excluded from training, with its homologues, as a
+leakage target. In this release
 all **460 resolve, none are dropped, none are ID-substituted, and all 460 still
 satisfy `strict`**. `TriZOD_test_set_labels.tsv` (`test_id`, `pinned_id`,
 `substituted`, `label_tier`, `length`) ships beside the FASTA and records the

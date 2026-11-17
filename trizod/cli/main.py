@@ -245,6 +245,26 @@ def score(
         "--exclude-paramagnetic/--no-exclude-paramagnetic",
         help="Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata.",
     ),
+    max_pressure_bar: float | None = typer.Option(
+        None,
+        "--max-pressure-bar",
+        help=(
+            "Exclude entries whose scored shift table's sample condition list "
+            "records a pressure at or above this value, in bar. A pressure that "
+            "is not recorded is taken as ambient and passes."
+        ),
+    ),
+    exclude_membrane_mimetic: bool | None = typer.Option(
+        None,
+        "--exclude-membrane-mimetic/--no-exclude-membrane-mimetic",
+        help=(
+            "Exclude entries whose sample is a membrane mimetic: a bilayer "
+            "lipid or assembly, or a dedicated micelle former (SDS, DPC, DHPC, "
+            "LMPG, LDAO, ...) at any concentration, or an additive-class "
+            "detergent (CHAPS, DDM, Triton, ...) at or above its CMC. See "
+            "trizod/bmrb/membrane.py."
+        ),
+    ),
     score_types: list[ScoreType] = typer.Option(
         [ScoreType.zscores, ScoreType.gscores],
         "--score-types",
@@ -382,6 +402,10 @@ def score(
         ),
         exclude_paramagnetic=bool(
             resolve(exclude_paramagnetic, "exclude-paramagnetic")
+        ),
+        max_pressure_bar=float(resolve(max_pressure_bar, "max-pressure-bar")),
+        exclude_membrane_mimetic=bool(
+            resolve(exclude_membrane_mimetic, "exclude-membrane-mimetic")
         ),
         score_types=[s.value for s in score_types],
         offset_correction=offset_correction,

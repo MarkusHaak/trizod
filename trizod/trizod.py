@@ -9,6 +9,7 @@ from pandarallel import pandarallel
 from tqdm import tqdm
 
 import trizod.bmrb.bmrb as bmrb
+from trizod.bmrb import membrane
 from trizod.bmrb.sample_state import (
     COSOLVENT_PATTERNS,
     ORGANIC_SOLVENT_TOKENS,
@@ -89,29 +90,15 @@ KEYWORD_NEGATIONS = {
     ),
 }
 
-#: Detergents/lipids that make a sample a membrane mimetic rather than a
-#: perturbing cosolvent. Annotated as the ``membrane_mimetic`` column, never
-#: filtered: the rows they would remove are 93.7 % ordered and contain zero
-#: disordered chains, so filtering on them would be a one-sided removal of
-#: ordered examples.
-MEMBRANE_MIMETIC_TOKENS = (
-    "SDS",
-    "DPC",
-    "dodecyl",
-    "LPPG",
-    "LMPG",
-    "DHPC",
-    "DMPC",
-    "POPC",
-    "bicelle",
-    "micelle",
-    "Triton",
-    "CHAPS",
-    "octyl",
-    "maltoside",
-    "digitonin",
-    "nanodisc",
-)
+# Membrane mimetics (detergents, lipids, bicelles, nanodiscs) are not perturbing
+# cosolvents: they have their own class rule in ``trizod.bmrb.membrane`` and
+# their own filter, ``exclude-membrane-mimetic`` (moderate and strict). Until
+# 2026-11 they were only annotated, on the argument that removing them would be
+# "a one-sided removal of ordered examples". The removal IS one-sided because
+# the bias is: micelle- and bilayer-induced order is a mislabelled positive,
+# the same failure mode the cosolvent filter removes for TFE -- and sub-CMC SDS
+# already induces helix in disordered chains. The usable disorder share barely
+# moves (moderate 15.94 -> 15.98 %, strict 12.53 -> 12.58 % at G > 0.40).
 
 #: Cosolvent tokens that must match as whole words rather than as substrings.
 #: ``urea`` is the fix: as a substring it fires on ``palmitate, laureate, and
@@ -302,7 +289,14 @@ filter_defaults = pd.DataFrame(
             [273.0, 323.0],
             [273.0, 313.0],
         ],
-        "ionic-strength-range": [[0.0, np.inf], [0.0, 7.0], [0.0, 5.0], [0.0, 3.0]],
+        # Strict: 0.5 M since 2026-11 (was 3 M). A convention, not a correction:
+        # POTENCI's only ionic-strength term is a Debye-Hueckel screening of the
+        # side-chain charges, and same-sequence replicates at 0.5-5 M show no
+        # G-score difference from low-salt ones (median dG 0.000, n = 43). The
+        # cap keeps the highest-confidence tier in the dilute-buffer regime
+        # where that treatment is physically reasonable. Deposited values are
+        # used as they are. The tolerant 7 M cap is inert (no chain exceeds 5 M).
+        "ionic-strength-range": [[0.0, np.inf], [0.0, 7.0], [0.0, 5.0], [0.0, 0.5]],
         "pH-range": [[-np.inf, np.inf], [2.0, 12.0], [4.0, 10.0], [6.0, 8.0]],
         "unit-assumptions": [True, True, True, False],
         "unit-corrections": [True, True, False, False],
@@ -367,6 +361,26 @@ filter_defaults = pd.DataFrame(
         # routinely filled in. 'off' keeps unfiltered = the raw corpus.
         "method-fallback": ["off", "reject-solid", "reject-solid", "require-solution"],
         "exclude-paramagnetic": [False, True, True, True],
+        # Sample pressure ceiling in bar (2026-11): a chain whose condition list
+        # records >= 400 bar is excluded; an unrecorded pressure passes as
+        # ambient. Kilobar pressure populates lower-volume, less ordered states
+        # (ubiquitin at 2,500 bar, bmr52344: G 0.68 vs 0.12 at ambient), so the
+        # labels describe a perturbed ensemble. Applied from tolerant up, like
+        # the perturbing cosolvents and on the same "non-ambient ensemble"
+        # logic. See bmrb.HIGH_PRESSURE_BAR.
+        "max-pressure-bar": [
+            np.inf,
+            bmrb.HIGH_PRESSURE_BAR,
+            bmrb.HIGH_PRESSURE_BAR,
+            bmrb.HIGH_PRESSURE_BAR,
+        ],
+        # Membrane-mimetic samples (2026-11), by the class rule of
+        # trizod.bmrb.membrane: bilayer lipids/assemblies and dedicated micelle
+        # formers at any concentration, additive-class detergents only at or
+        # above their CMC (or with no concentration), CnEm alignment media
+        # exempt. Read from the `membrane_mimetic_sample` column; the chains
+        # stay in tolerant and remain identifiable by `membrane_mimetic`.
+        "exclude-membrane-mimetic": [False, False, True, True],
         "max-offset": [np.inf, 3.0, 3.0, 2.0],
         "reject-shift-type-only": [True, True, False, False],
     },
@@ -384,7 +398,6 @@ def fill_row_data(
     include_shifts=False,
     no_shift_averaging=False,
     keyword_search_scope="all",
-    membrane_mimetics=MEMBRANE_MIMETIC_TOKENS,
     bmrb_entries=None,
 ):
     """Fill in one peptide row's metadata, keyword flags and state columns.
@@ -405,16 +418,21 @@ def fill_row_data(
         entry.exp_method_subtype if entry.exp_method_subtype else pd.NA
     )
     row["entity_name"] = entry.entities[row["entityID"]].name
-    row["ionic_strength"] = entry.conditions[condID].get_ionic_strength(
+    conditions = entry.conditions[condID]
+    row["ionic_strength"] = conditions.get_ionic_strength(
         return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers
     )
-    row["pH"] = entry.conditions[condID].get_pH(return_default=return_default)
-    row["temperature"] = entry.conditions[condID].get_temperature(
+    row["pH"] = conditions.get_pH(return_default=return_default)
+    row["temperature"] = conditions.get_temperature(
         return_default=return_default, assume_si=assume_si, fix_outliers=fix_outliers
     )
-    # Annotation only, from the same condition list as pH/temperature: bar, NaN
-    # when not recorded, never a default and never filtered on.
-    row["pressure_bar"] = entry.conditions[condID].get_pressure_bar()
+    # The deposited temperature was the 273 K placeholder and was read as not
+    # deposited: `temperature` is then the 298 K default, or NaN where the tier
+    # imputes nothing (strict), so the flag marks an imputed temperature.
+    row["temperature_placeholder"] = bool(conditions.is_temperature_placeholder())
+    # From the same condition list as pH/temperature: bar, NaN when not
+    # recorded and never a default. The max-pressure-bar filter reads it.
+    row["pressure_bar"] = conditions.get_pressure_bar()
     seq = entry.entities[row["entityID"]].seq
     row["seq"] = seq
     # retrieve # backbone shifts (H,HA,HB,C,CA,CB,N)
@@ -497,10 +515,12 @@ def fill_row_data(
     # _Sample.Solvent_system, and with _Sample.Details the free text searched for
     # perturbing cosolvents beside the component names
     solvent_systems, solvent_texts = [], []
+    samples = []
     for sID in sampleIDs:
         sample = entry.samples.get(sID)
         if sample is None:
             continue
+        samples.append(sample)
         sample_texts.extend([sample.name, sample.details])
         solvent_systems.append(sample.solvent_system)
         solvent_texts.extend([sample.solvent_system, sample.details])
@@ -565,14 +585,13 @@ def fill_row_data(
         row[token] = _token_matches(
             token_lower, texts, WORD_BOUNDARY_COSOLVENTS, COSOLVENT_PATTERN_RES
         )
-    # Membrane mimetics are annotated, never filtered: the matched token(s), not
-    # a bool, so an SDS micelle stays distinguishable from DDM solubilisation.
-    matched = [
-        token
-        for token in membrane_mimetics
-        if any(token.lower() in name for name in component_names)
-    ]
-    row["membrane_mimetic"] = ";".join(matched) if matched else pd.NA
+    # Membrane mimetics, judged on the same samples: the bool is the class rule
+    # the exclude-membrane-mimetic filter reads; the string names every class
+    # recognised (counted or not, e.g. a sub-CMC CHAPS), so an SDS micelle stays
+    # distinguishable from DDM solubilisation.
+    mimetic_labels, is_mimetic = membrane.classify_samples(samples)
+    row["membrane_mimetic"] = ";".join(mimetic_labels) if mimetic_labels else pd.NA
+    row["membrane_mimetic_sample"] = bool(is_mimetic)
     # add columns that will be filled later
     row["scores"] = None
     row["k"] = None
@@ -792,11 +811,13 @@ def output_dataset(
                 "physical_state",
                 "cosolvent_evidence",
                 "membrane_mimetic",
+                "membrane_mimetic_sample",
                 "citation_DOI",
                 "citation_title",
                 "ionic_strength",
                 "pH",
                 "temperature",
+                "temperature_placeholder",
                 "pressure_bar",
             ]
             + OFFSET_COLUMNS
@@ -872,6 +893,8 @@ def run_scoring_pipeline(args):
             exclude_paramagnetic=args.exclude_paramagnetic,
             physical_state_blacklist=args.physical_state_blacklist,
             method_fallback=args.method_fallback,
+            max_pressure_bar=args.max_pressure_bar,
+            exclude_membrane_mimetic=args.exclude_membrane_mimetic,
         )
     )
     print()

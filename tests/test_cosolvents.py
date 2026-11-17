@@ -19,8 +19,9 @@ things are pinned here:
 * two matcher defects: the "no sample referenced" fallback was assigned *inside*
   the loop over cosolvents, and ``entry.samples[sID]`` could raise ``KeyError``
   on a whitespace-padded sample ID that the ``try/except Found`` did not catch;
-* the ``membrane_mimetic`` column, which annotates the matched token(s) and
-  never filters;
+* the ``membrane_mimetic`` column, which names the membrane-mimetic classes
+  found in the same samples (the class rule and its filter are pinned in
+  ``tests/test_membrane_mimetic.py``) -- never a cosolvent;
 * the CLI surface: ``--perturbing-cosolvents`` and its deprecated alias
   ``--chemical-denaturants``.
 """
@@ -35,8 +36,9 @@ from tests._stubs import Entry as _Entry
 from tests._stubs import Sample as _Sample
 from tests._stubs import fill, fill_real
 from tests.conftest import requires_bmrb_data
+from trizod.bmrb.membrane import classify_component
 from trizod.cli.main import app
-from trizod.trizod import MEMBRANE_MIMETIC_TOKENS, filter_defaults
+from trizod.trizod import filter_defaults
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
 
@@ -128,12 +130,11 @@ def test_guanidinium_acronyms_are_kept_as_insurance(tier):
 
 
 @pytest.mark.parametrize("tier", TIERS)
-def test_membrane_mimetics_never_filter(tier):
-    # Decision D3: annotated, not filtered. The rows they would remove are
-    # 93.7 % ordered and contain zero disordered chains.
-    tokens = [t.lower() for t in filter_defaults.loc[tier, "perturbing-cosolvents"]]
-    for mimetic in MEMBRANE_MIMETIC_TOKENS:
-        assert mimetic.lower() not in tokens
+def test_membrane_mimetics_are_not_cosolvents(tier):
+    # Detergents and lipids have their own filter (exclude-membrane-mimetic,
+    # moderate and strict); none of them is a perturbing-cosolvent token.
+    for token in filter_defaults.loc[tier, "perturbing-cosolvents"]:
+        assert classify_component(token) is None, token
 
 
 # --------------------------------------------------------------------------- #
@@ -309,9 +310,9 @@ def test_unknown_sample_id_does_not_raise():
 # --------------------------------------------------------------------------- #
 
 
-def test_membrane_mimetic_column_carries_the_matched_tokens():
+def test_membrane_mimetic_column_carries_the_matched_classes():
     entry = _entry_with("SDS", "DPC micelles")
-    assert _fill(entry, [])["membrane_mimetic"] == "SDS;DPC;micelle"
+    assert _fill(entry, [])["membrane_mimetic"] == "SDS;DPC"
 
 
 def test_membrane_mimetic_distinguishes_sds_from_maltoside():
@@ -319,7 +320,7 @@ def test_membrane_mimetic_distinguishes_sds_from_maltoside():
     assert _fill(_entry_with("SDS"), [])["membrane_mimetic"] == "SDS"
     assert (
         _fill(_entry_with("n-dodecyl-beta-D-maltoside"), [])["membrane_mimetic"]
-        == "dodecyl;maltoside"
+        == "DDM"
     )
 
 
@@ -327,11 +328,8 @@ def test_membrane_mimetic_is_na_when_nothing_matches():
     assert pd.isna(_fill(_entry_with("sodium phosphate"), [])["membrane_mimetic"])
 
 
-def test_sodium_dodecyl_sulfate_matches_dodecyl_not_sds():
-    assert (
-        _fill(_entry_with("sodium dodecyl sulfate"), [])["membrane_mimetic"]
-        == "dodecyl"
-    )
+def test_sodium_dodecyl_sulfate_is_sds():
+    assert _fill(_entry_with("sodium dodecyl sulfate"), [])["membrane_mimetic"] == "SDS"
 
 
 # --------------------------------------------------------------------------- #
@@ -402,10 +400,11 @@ def test_word_boundary_urea_readmits_the_two_false_positives(entry_id):
 
 
 @requires_bmrb_data
-def test_real_membrane_entry_is_annotated_not_filtered():
+def test_real_membrane_entry_is_a_mimetic_not_a_cosolvent():
     strict_tokens = list(filter_defaults.loc["strict", "perturbing-cosolvents"])
     filled = _fill_real("11002", "1", strict_tokens)
     assert "SDS" in filled["membrane_mimetic"]
+    assert filled["membrane_mimetic_sample"] is True
     assert not any(filled[token] for token in strict_tokens)
 
 

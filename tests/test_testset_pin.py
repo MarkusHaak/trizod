@@ -100,8 +100,8 @@ def test_main_pinned_mode_emits_pinned_set(tmp_path):
 def test_main_missing_pin_errors(tmp_path):
     root = tmp_path / "root"
     wd = tmp_path / "wd"
-    (wd / "final_dataset" / "tolerant").mkdir(parents=True)
-    (wd / "final_dataset" / "tolerant" / "tolerant.fasta").write_text(">1_1_1_1\nAA\n")
+    (wd / "final_dataset" / "strict").mkdir(parents=True)
+    (wd / "final_dataset" / "strict" / "strict.fasta").write_text(">1_1_1_1\nAA\n")
     with pytest.raises(SystemExit):
         testset.main(["--work-dir", str(wd), "--root", str(root)])
 
@@ -150,21 +150,29 @@ def test_label_tier_independent_of_tier_pool_argument_order():
     assert info["label_tiers"] == {"100_1_1_1": "strict"}
 
 
-def test_resolve_against_tolerant_keeps_chain_that_left_strict():
-    # 200 dropped out of strict on the post-#20 rescore but is still tolerant:
-    # resolving against tolerant keeps it, labelled non-strict.
+def test_the_test_set_is_resolved_against_strict():
+    # The TriZOD test set is defined as strict-tier sequences (2026-11).
+    assert testset.RESOLVE_TIER == "strict"
+
+
+def test_resolve_against_strict_drops_chain_that_left_strict():
+    # 200 left strict after a rule change but is still tolerant: it is no longer
+    # a test chain, and the pin is trimmed after the rebuild. A looser pool
+    # would keep it, labelled non-strict -- that is what label_tier is for.
     strict = {"100_1_1_1": "AAAA"}
     tolerant = {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"}
     pinned = {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC"}
-    recs_strict, info_strict = resolve_pinned_testset(pinned, strict)
-    assert info_strict["dropped"] == ["200_1_1_1"]
     recs, info = resolve_pinned_testset(
+        pinned, strict, tier_pools={"strict": strict, "tolerant": tolerant}
+    )
+    assert set(recs) == {"100_1_1_1"}
+    assert info["dropped"] == ["200_1_1_1"]
+    assert info["label_tier_counts"] == {"strict": 1}
+    recs_tol, info_tol = resolve_pinned_testset(
         pinned, tolerant, tier_pools={"strict": strict, "tolerant": tolerant}
     )
-    assert set(recs) == {"100_1_1_1", "200_1_1_1"}
-    assert info["dropped"] == []
-    assert info["label_tiers"]["200_1_1_1"] == "tolerant"
-    assert len(recs) > len(recs_strict)
+    assert set(recs_tol) == {"100_1_1_1", "200_1_1_1"}
+    assert info_tol["label_tiers"]["200_1_1_1"] == "tolerant"
 
 
 def test_id_map_covers_every_resolved_chain_and_flags_substitution():
@@ -186,17 +194,100 @@ def test_id_map_covers_every_resolved_chain_and_flags_substitution():
     assert by_pin["999_1_1_1"]["substituted"] is True
 
 
-def test_main_resolves_against_tolerant_and_writes_labels(tmp_path):
+def _three_tier_pin(tmp_path):
     # 200 is only in tolerant, 300 only in moderate+tolerant.
     strict = {"100_1_1_1": "AAAA"}
     moderate = {"100_1_1_1": "AAAA", "300_1_1_1": "GGGG"}
     tolerant = {"100_1_1_1": "AAAA", "200_1_1_1": "CCCC", "300_1_1_1": "GGGG"}
-    root, wd = _setup_root_and_wd(
+    return _setup_root_and_wd(
         tmp_path,
         pin_records={"100_1_1_1": "AAAA", "200_1_1_1": "CCCC", "300_1_1_1": "GGGG"},
         tier_records={"strict": strict, "moderate": moderate, "tolerant": tolerant},
     )
+
+
+def test_main_resolves_against_strict_and_retires_the_rest(tmp_path, capsys):
+    # 200 (tolerant only) and 300 (moderate) left strict: they are no longer
+    # test chains, but they are RETIRED, not forgotten -- written to their own
+    # FASTA so the redundancy step keeps them (and their homologues) out of
+    # training exactly as if they were still test chains.
+    root, wd = _three_tier_pin(tmp_path)
     testset.main(["--work-dir", str(wd), "--root", str(root)])
+
+    out_dir = wd / "testset"
+    assert read_fasta(out_dir / "TriZOD_test_set.fasta") == {"100_1_1_1": "AAAA"}
+    assert read_fasta(out_dir / testset.RETIRED_FASTA) == {
+        "200_1_1_1": "CCCC",
+        "300_1_1_1": "GGGG",
+    }
+    headers = [
+        ln.strip() for ln in (out_dir / testset.RETIRED_FASTA).open() if ln[0] == ">"
+    ]
+    assert headers == [
+        ">200_1_1_1 label_tier=tolerant pinned_id=200_1_1_1 reason=not_strict",
+        ">300_1_1_1 label_tier=moderate pinned_id=300_1_1_1 reason=not_strict",
+    ]
+    summary = json.loads((out_dir / "build_test_set_summary.json").read_text())
+    assert summary["resolve_tier"] == "strict"
+    assert summary["retire_tier"] == "tolerant"
+    assert summary["retired"] == ["200_1_1_1", "300_1_1_1"]
+    assert summary["dropped"] == []
+    assert summary["label_tier_counts"] == {"strict": 1}
+    assert "retired" in capsys.readouterr().out
+
+
+def test_retired_chains_are_listed_in_the_labels_table(tmp_path):
+    root, wd = _three_tier_pin(tmp_path)
+    testset.main(["--work-dir", str(wd), "--root", str(root)])
+    rows = [
+        ln.rstrip("\n").split("\t")
+        for ln in (wd / "testset" / "TriZOD_test_set_labels.tsv").open()
+    ]
+    assert rows[0][-1] == "status"
+    status = {r[0]: (r[3], r[-1]) for r in rows[1:]}
+    assert status == {
+        "100_1_1_1": ("strict", "test"),
+        "200_1_1_1": ("tolerant", "retired"),
+        "300_1_1_1": ("moderate", "retired"),
+    }
+
+
+def test_a_pinned_sequence_in_no_pool_is_dropped_not_retired(tmp_path):
+    # e.g. a withdrawn entry with no live twin: nothing to keep out of training
+    pool = {"100_1_1_1": "AAAA"}
+    root, wd = _setup_root_and_wd(
+        tmp_path,
+        pin_records={"100_1_1_1": "AAAA", "999_1_1_1": "WWWW"},
+        tier_records={"strict": pool, "tolerant": pool},
+    )
+    testset.main(["--work-dir", str(wd), "--root", str(root)])
+    summary = json.loads((wd / "testset" / "build_test_set_summary.json").read_text())
+    assert summary["dropped"] == ["999_1_1_1"]
+    assert summary["retired"] == []
+    assert read_fasta(wd / "testset" / testset.RETIRED_FASTA) == {}
+
+
+def test_a_redraw_removes_a_stale_retired_file(tmp_path, monkeypatch):
+    root, wd = _setup_root_and_wd(
+        tmp_path,
+        pin_records={"100_1_1_1": "AAAA"},
+        tier_records={"strict": {"100_1_1_1": "AAAA"}},
+    )
+    monkeypatch.setattr(testset, "_redraw", lambda paths, out: {"7_1_1_1": "TTTT"})
+    stale = wd / "testset"
+    stale.mkdir(parents=True)
+    (stale / testset.RETIRED_FASTA).write_text(">1_1_1_1\nAA\n")
+    testset.main(
+        ["--work-dir", str(wd), "--root", str(root), "--redraw", "--confirm-redraw"]
+    )
+    assert not (stale / testset.RETIRED_FASTA).exists()
+
+
+def test_main_with_a_looser_resolve_tier_writes_labels(tmp_path):
+    root, wd = _three_tier_pin(tmp_path)
+    testset.main(
+        ["--work-dir", str(wd), "--root", str(root), "--resolve-tier", "tolerant"]
+    )
 
     out_dir = wd / "testset"
     assert read_fasta(out_dir / "TriZOD_test_set.fasta") == {
@@ -218,7 +309,14 @@ def test_main_resolves_against_tolerant_and_writes_labels(tmp_path):
         ln.rstrip("\n").split("\t")
         for ln in (out_dir / "TriZOD_test_set_labels.tsv").open()
     ]
-    assert rows[0] == ["test_id", "pinned_id", "substituted", "label_tier", "length"]
+    assert rows[0] == [
+        "test_id",
+        "pinned_id",
+        "substituted",
+        "label_tier",
+        "length",
+        "status",
+    ]
     labels = {r[0]: r[3] for r in rows[1:]}
     assert labels == {
         "100_1_1_1": "strict",
@@ -235,11 +333,11 @@ def test_main_resolves_against_tolerant_and_writes_labels(tmp_path):
 
 def test_main_records_id_substitution_in_label_map(tmp_path):
     # The pinned representative 999 lost its pool ID to the lower-numbered 50.
-    tolerant = {"50_1_1_1": "AAAA"}
+    strict = {"50_1_1_1": "AAAA"}
     root, wd = _setup_root_and_wd(
         tmp_path,
         pin_records={"999_1_1_1": "AAAA"},
-        tier_records={"tolerant": tolerant},
+        tier_records={"strict": strict},
     )
     testset.main(["--work-dir", str(wd), "--root", str(root)])
     rows = [
@@ -284,32 +382,31 @@ def test_redraw_runs_when_confirmed(tmp_path, monkeypatch):
     assert not (stale / "TriZOD_test_set_labels.tsv").exists()
 
 
-def test_all_pinned_sequences_resolve_against_the_tolerant_pool():
-    """Guard the D2 promise on whatever pool is actually on disk.
+def test_every_pinned_sequence_is_a_test_or_a_retired_chain():
+    """Guard the pin on whatever pools are actually on disk.
 
     The ``data/interim/build`` artefacts can be stale relative to
     ``data/interim/scored`` (they are rebuilt only by ``trizod dataset
     build``); this reads what is there and skips if the build has never run.
     """
     paths = resolve_paths()
-    tolerant = paths.final_dataset / "tolerant" / "tolerant.fasta"
-    if not tolerant.exists():
-        pytest.skip(f"no built tolerant pool at {tolerant}")
+    strict = paths.final_dataset / "strict" / "strict.fasta"
+    if not strict.exists():
+        pytest.skip(f"no built strict pool at {strict}")
     pinned = read_fasta(paths.pinned_testset)
     tier_pools = testset.load_tier_pools(paths.final_dataset)
     recs, info = resolve_pinned_testset(
-        pinned, tier_pools["tolerant"], tier_pools=tier_pools
+        pinned, tier_pools["strict"], tier_pools=tier_pools
     )
-    # The invariant, not the count: every pinned sequence must resolve against
-    # the pool it is served from. Asserting a specific number here would make
-    # this test fail on every legitimate redraw while saying nothing about
-    # whether the pin is still honoured. The current pin was redrawn from the
-    # final strict pool, so nothing should drop; a drop means the pool moved
-    # under a pin that was supposed to be resolvable against it.
-    assert info["dropped"] == [], (
-        f"pinned sequences absent from the tolerant pool: {info}"
+    retired, rinfo = testset.retire_dropped(pinned, info["dropped"], tier_pools)
+    # The invariant, not the count: every pinned sequence is either a test
+    # chain (strict) or a retired one (still a leakage target). A rule change
+    # moving test chains out of strict is expected and handled by retiring
+    # them; a sequence in no pool at all means the pool moved under the pin.
+    assert rinfo["dropped"] == [], (
+        f"pinned sequences in neither the strict nor the tolerant pool: {rinfo}"
     )
-    assert len(recs) == len(pinned)
+    assert len(recs) + len(retired) == len(pinned)
 
 
 def test_write_pin_writes_fasta_and_provenance(tmp_path):

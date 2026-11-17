@@ -25,6 +25,11 @@ Membership / split (defaults):
   (``<work-dir>/mmseqs/train_tolerant_best.fasta``, 5,684 seqs).
 * ``SET=test``  -- the seeded **TriZOD test set**
   (``<work-dir>/testset/TriZOD_test_set.fasta``, 344 seqs).
+* The **retired** TriZOD test chains (``TriZOD_test_retired.fasta`` beside the
+  test FASTA; pinned chains that left the strict tier) are in NEITHER set: the
+  redundancy step keeps them out of training as leakage targets, and the
+  test-set step leaves them out of the test set. The script aborts if one of
+  them appears in either input.
 * ``SET=val``   -- optional. With ``--val-fraction F`` (e.g. 0.15), a uniform
   random subset of the training records (seeded by ``--seed``, default 42) is
   relabelled ``SET=val``; the rest stay ``SET=train``. The val set is carved
@@ -74,6 +79,7 @@ import random
 from pathlib import Path
 
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.testset import RETIRED_FASTA
 from trizod.dataset.tiers import LABEL_SOURCE_RULE, TIER_ORDER, label_source_tier
 from trizod.io.fasta import fasta_ids
 
@@ -151,6 +157,13 @@ def main(argv=None) -> None:
     )
     ap.add_argument("--test-fasta", type=Path, default=None)
     ap.add_argument(
+        "--retired-fasta",
+        type=Path,
+        default=None,
+        help="retired TriZOD test chains, emitted in no set (default: "
+        f"{RETIRED_FASTA} beside the test FASTA, when present)",
+    )
+    ap.add_argument(
         "--scored-dir",
         type=Path,
         default=None,
@@ -208,6 +221,19 @@ def main(argv=None) -> None:
 
     train_ids = fasta_ids(train_fasta)
     test_ids = fasta_ids(test_fasta)
+
+    # Retired test chains are leakage targets: in neither set. One in the
+    # train FASTA means the redundancy step ran without them; one in the test
+    # FASTA means the two test-set files disagree.
+    retired_fasta = args.retired_fasta or test_fasta.with_name(RETIRED_FASTA)
+    retired_ids = set(fasta_ids(retired_fasta)) if retired_fasta.exists() else set()
+    for name, ids in (("train", train_ids), ("test", test_ids)):
+        clash = retired_ids & set(ids)
+        if clash:
+            raise SystemExit(
+                f"{len(clash)} retired TriZOD test chains in the {name} FASTA "
+                f"(retired chains belong to neither set): {sorted(clash)[:10]}"
+            )
 
     # split disjointness (a record cannot be both train and test)
     overlap = set(train_ids) & set(test_ids)
@@ -303,6 +329,7 @@ def main(argv=None) -> None:
         "n_train": n_by_set["train"],
         "n_val": n_by_set["val"],
         "n_test": n_by_set["test"],
+        "n_retired": len(retired_ids),
         "n_total": sum(n_by_set.values()),
         "total_residues": total_res,
         "sentinel_residues": total_sentinel,
