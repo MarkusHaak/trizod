@@ -54,11 +54,11 @@
       "resource_type": "dataset"
     },
     {
-      "identifier": "https://github.com/tsenoner/trizod",
+      "identifier": "https://github.com/MarkusHaak/trizod",
       "relation": "isSupplementTo",
       "scheme": "url",
       "resource_type": "software"
     }
   ],
-  "notes": "Data: CC BY 4.0. Code: MIT (https://github.com/tsenoner/trizod). Derived from entries of the Biological Magnetic Resonance Data Bank (BMRB, https://bmrb.io); please acknowledge the BMRB. No BMRB licence is claimed."
+  "notes": "Data: CC BY 4.0. Code: MIT (https://github.com/MarkusHaak/trizod). Derived from entries of the Biological Magnetic Resonance Data Bank (BMRB, https://bmrb.io); please acknowledge the BMRB. No BMRB licence is claimed."
 }

@@ -4,7 +4,7 @@ message: >-
   If you use the TriZOD dataset, please cite it as below, with the version DOI
   of the record you downloaded. The dataset is licensed CC BY 4.0 (see
   LICENSE.md in the deposit); the code that builds it is MIT
-  (https://github.com/tsenoner/trizod). The data derive from BMRB entries
+  (https://github.com/MarkusHaak/trizod). The data derive from BMRB entries
   (https://bmrb.io); please also acknowledge the BMRB.
 type: dataset
 abstract: >-
@@ -37,7 +37,7 @@ authors:
   - family-names: Alderson
     given-names: Reid
     affiliation: "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany; Bavarian NMR Center, Technical University of Munich, Garching, Germany"
-repository-code: "https://github.com/tsenoner/trizod"
+repository-code: "https://github.com/MarkusHaak/trizod"
 url: "https://doi.org/10.5281/zenodo.21309963"
 doi: 10.5281/zenodo.21309963
 identifiers:

@@ -27,7 +27,7 @@ PREVIOUS_VERSION = "0.3.0"
 PREVIOUS_VERSION_DATE = "2026-07-15"
 #: Concept DOI of the Zenodo record (all versions).
 CONCEPT_DOI = "10.5281/zenodo.21309963"
-REPOSITORY = "https://github.com/tsenoner/trizod"
+REPOSITORY = "https://github.com/MarkusHaak/trizod"
 
 #: Name of the final TriZOD test set. From this release on it may only shrink:
 #: a chain that no longer qualifies is retired (``split == "test_retired"``)

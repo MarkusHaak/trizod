@@ -38,7 +38,7 @@ dependencies = [
 figures = ["matplotlib>=3.9.4"]
 
 [project.urls]
-Repository = "https://github.com/tsenoner/trizod"
+Repository = "https://github.com/MarkusHaak/trizod"
 
 [project.scripts]
 trizod = "trizod.cli.main:app"
