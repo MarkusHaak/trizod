@@ -8,6 +8,7 @@ Covers the two defensive guarantees added after issue #20:
   the reported "non-determinism" is not intrinsic to the algorithm.
 """
 
+import hashlib
 import json
 import re
 
@@ -83,3 +84,17 @@ class TestBaselineStaleness:
     def test_provenance_from_current_code_is_current(self, tmp_path):
         write_baseline_provenance(tmp_path, {"strict": 4108})
         assert baseline_staleness(tmp_path) is None
+
+
+def test_file_sha256_rehashes_a_file_rewritten_in_place(tmp_path):
+    """Release audit (housekeeping): ``file_sha256`` was ``lru_cache``-d on the
+    path, so a file rewritten at the same path inside one process returned its
+    old hash -- and the release MANIFEST is built from these hashes."""
+    from trizod.provenance import file_sha256
+
+    path = tmp_path / "f.txt"
+    path.write_text("one")
+    first = file_sha256(path)
+    path.write_text("two")
+    assert file_sha256(path) != first
+    assert file_sha256(path) == hashlib.sha256(b"two").hexdigest()

@@ -69,16 +69,21 @@ All three must pass.
 - Always show staged files and proposed commit message, then wait for user approval before committing
 
 ## Dataset Build (`trizod dataset ...`)
-The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
+The redundancy-reduced dataset (training separated from the test sets at the leakage
+criterion below; never claim zero leakage) is built by a chain of subcommands
 (modules in `trizod/dataset/`, orchestrated end-to-end by `scripts/build_dataset.sh`):
 - `trizod dataset build` (`build.py`) — bound-complex removal + exact-sequence dedup + quality ranking → `final_dataset/`
-- `trizod dataset test-set` (`testset.py`) — recreate the seeded, CheZOD-free TriZOD test set → `testset/`
+- `trizod dataset test-set` (`testset.py`) — resolve the pinned TriZOD test set (TriZOD-test v1.0; CheZOD-disjoint at cluster level) → `testset/`
 - `trizod dataset redundancy` (`redundancy.py`) — two-stage test-set leakage removal + mmseqs clustering → `mmseqs/`
 - `trizod dataset representatives` (`representatives.py`) — override mmseqs cluster reps with the quality-best member
-- `trizod dataset package` (`package_release.py`) — assemble the Zenodo release bundle + MANIFEST + leakage gate
+- `trizod dataset package` (`package_release.py`) — stage the package bundle (input of the Parquet) + MANIFEST + leakage gate
 - `trizod dataset deploy` (`deploy_fasta.py`) — build the UdonPred-handoff FASTA (per-residue G-score labels)
 - `trizod dataset export-jsonl` (`export_jsonl.py`) — the UdonPred v2 view of the release Parquet: `trizod_<tier>/{train,valid,test}.jsonl` (`id`, `x_0`, `y`; 999 = masked), cluster-seeded valid split, checked back against the Parquet
 - `trizod dataset test-crosswalk` (`testset_crosswalk.py`) — every earlier TriZOD test set (Trizod348, v0.2.0, the pins, v0.3.0) against the final release, by exact sequence
+- `trizod dataset finalize` (`finalize.py`) — assemble the deposit into one folder: Parquet + shifts, deploy FASTA, UdonPred view, crosswalk, test FASTAs, `class_balance.tsv`, `bmrb_files.sha256`, README/datasheet/CHANGELOG rendered from the `docs/dataset/` templates, `columns.md`, LICENSE/CITATION/zenodo.json, `MANIFEST.json` over every file + `SHA256SUMS`. Deterministic; refuses an uncalibrated Parquet
+- Release identity: `release_info.py` — dataset version (0.4.0), test-set name (TriZOD-test v1.0), licences (data CC BY 4.0, code MIT), the G cuts 0.15 / 0.35 / 0.70 (G >= t; metadata only, never label columns), the k >= 10 note, snapshot/calibration readers. `CITATION.cff`, `.zenodo.json` and `pyproject.toml` must agree with it (`tests/test_release_docs.py`)
+- `class_balance.py` — per-split zone shares, k < 10 share, length, pi and posterior at the cuts (F33)
+- Parquet metadata + column dictionary: `scripts/build_parquet_dataset.py` (`table_metadata()`, `COLUMN_DOCS`; `--calibration <framework dir>`; `--write-column-dictionary docs/dataset/columns.md`)
 - Shared helpers: `composition.py` (bound-complex classifier), `mmseqs.py` (mmseqs wrappers; the leakage criterion: >= 30 % id over >= 80 % of either chain, >= 27 bits, searched in both directions), `chezod_overlap.py` (per-chain CheZOD117/1325/1174 overlap flags of the Parquet), `paths.py` (path resolution), `trizod/io/fasta.py`
 - Leakage targets: CheZOD117 (released chains + the 117 original SETH sequences in `data/external/chezod/seth_github/`), the TriZOD test set and the retired test chains. `test-set` retires (never deletes) a pinned chain as `not_strict`, `chezod117_overlap` or `within_test_duplicate`
 - Membrane-mimetic rule: `trizod/bmrb/membrane.py`; reviewed title-only entries in `trizod/dataset/data/membrane_overrides.tsv`
@@ -106,6 +111,7 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `tests/test_str_writer.py` — re-referenced NMR-STAR emission
 - `tests/test_xrefs.py` — UniProt/PDB cross-reference parsing, normalisation and which accessions reach `uniprot_ids`
 - `tests/test_xref_sources.py` — dated external sources: manifest check, sequence matching, per-chain SIFTS assignment
+- `tests/test_release_metadata.py` / `tests/test_column_dictionary.py` / `tests/test_class_balance.py` / `tests/test_finalize.py` / `tests/test_release_docs.py` — release identity in the Parquet metadata, the generated column dictionary, the class-balance table, the deposit assembly (synthetic bundle in `tests/_release_fixtures.py`) and version/licence/wording consistency (run with `uv run --with pyarrow`)
 - `tests/test_membrane_mimetic.py` — membrane-mimetic class rule, entity-linked components, sample-level fallback, override table
 - `tests/test_leakage_coverage.py` — leakage criterion, both search directions, bit floor, release gate (every train/redundant row)
 - `tests/test_testset_retirement.py` — CheZOD117-overlap and within-test-duplicate retirement
@@ -120,7 +126,7 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `docs/potenci.md` — POTENCI module: origin, API, performance, internals
 - `docs/lacs.md` — LACS module: algorithm, differences from MATLAB, API
 - `docs/filtering.md` — filter descriptions and default values per stringency level
-- `docs/dataset/` — dataset construction notes + datasheet (`dataset-construction.md`, `datasheet.md`)
+- `docs/dataset/` — `dataset-construction.md`; the deposit templates `bundle-README.md`, `datasheet.md`, `CHANGELOG.md` (rendered by `trizod dataset finalize`; type no counts into them); `columns.md` (generated column dictionary)
 - `docs/archive/` — superseded / historical material
 - Historical working snapshots are archived under `docs/archive/` (dated `260415/` … `260625/`)
 

@@ -1,17 +1,22 @@
 # TriZOD dataset — construction note
 
-A single end-to-end reference for how the TriZOD disorder dataset
-(release `2026-08`) is built, with the exact per-tier numbers. The figure
+A single end-to-end reference for how the TriZOD disorder dataset is built:
+dataset release **v0.4.0**, test set **TriZOD-test v1.0**, data licensed
+**CC BY 4.0**, code **MIT** (BMRB acknowledged, no BMRB licence claimed). The
+figure
 `publication/manuscript/Figures/2026-06-22_TriZOD_redundancy_reduction.drawio`
 visualises this pipeline; its caption text lives in
 [`figure-caption.md`](figure-caption.md).
 
 Reproduce everything with `scripts/build_dataset.sh`.
 
-> Every number on this page is from the `2026-08` build under
-> `data/interim/build/`. They differ substantially from `2026-07` (v0.3.0),
-> which predates the filtering corrections summarised in
-> [`bundle-README.md`](bundle-README.md#changelog--release-2026-08).
+> The per-stage numbers on this page are a **worked example from the
+> `2026-08` development build** (under `data/interim/build/`), kept to show the
+> size of each step; they are not the counts of any deposited release. The
+> counts of a release are rendered from its own files by `trizod dataset
+> finalize` into the deposit's README, datasheet, CHANGELOG and MANIFEST
+> ([`bundle-README.md`](bundle-README.md), [`datasheet.md`](datasheet.md) and
+> [`CHANGELOG.md`](CHANGELOG.md) are those templates).
 
 ## 0. Inputs
 
@@ -87,11 +92,13 @@ The seeded recipe (fixed seed = 42) is:
    at **30 % identity / 80 % coverage**.
 2. Drop every cluster containing a CheZOD sequence. This is what makes the test
    set disjoint from CheZOD.
-3. Randomly sample **25 %** of the CheZOD-free clusters.
+3. Randomly sample **25 %** of the clusters without a CheZOD sequence.
 4. Recluster those members at **50 % identity / 80 % coverage** → the TriZOD
    test-set representatives.
 
-**The test set is pinned**, so that recipe only runs on a deliberate redraw. The
+**The test set is pinned**, so that recipe only runs on a deliberate redraw;
+what the pin resolves to in a release is named **TriZOD-test v1.0** (its size
+and retired count are in the release's `test_set` metadata). The
 pin holds **460** sequences at `trizod/dataset/pinned/TriZOD_test_set.fasta`
 (redrawn 2026-08-11, seed 42, sample fraction 0.25, from the final strict pool);
 `trizod dataset test-set` resolves each pinned sequence against the **current
@@ -279,7 +286,8 @@ with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
 
 ## 6. Package + leakage gate
 
-`trizod dataset package --version 2026-08` stages the bundle and runs a hard
+`trizod dataset package --version <version>` stages the package bundle (the
+input of the Parquet; the deposit itself is assembled in §6a) and runs a hard
 **leakage gate**. The gate fails if
 
 - any test ID or exact test sequence appears in any training set;
@@ -288,11 +296,12 @@ with the highest-`quality_score` member → `train_<tier>_best.fasta` (the
 - any staged training record meets the stage-2 criterion **under the rule the
   build recorded** (`mmseqs/leakage_rule.json`): ≥ 30 % identity over ≥ 80 % of
   the test chain (`test`) or of the test or the training chain (`either`), at
-  E ≤ 10⁻³ against the test chains.
+  ≥ 27 bits, searched in both directions (until 2026-11-17: E ≤ 10⁻³, training
+  chains as queries only).
   `--leakage-rule` on the package step may only restate the recorded rule.
 
-The coverage check runs the stage-2 search (training as query, test as target,
-coverage from the alignment span), so mmseqs must be on PATH, and every
+The coverage check runs the stage-2 search (both directions, coverage from the
+alignment span), so mmseqs must be on PATH, and every
 offending pair is listed. The rule and its parameters are copied into
 `MANIFEST.json` under `leakage`. The `2026-08` bundle passed the ID and
 exact-sequence checks with **0 shared IDs and 0 exact-sequence matches**
@@ -301,18 +310,39 @@ later, and the `2026-10` bundle fails them. Under the `test` rule, a training
 chain contained in a longer test chain stays in training, so the substring
 check fails such a build whenever one is ≥ 20 aa.
 
-→ `data/interim/build/release_bundle/trizod-dataset-2026-08/` (train/ + scores/
-+ test/ + README + MANIFEST — 24 files, 150,570,282 bytes). The single-table
-`trizod_dataset.parquet` (16,851 rows × 70 columns) and the chemical-shift
-companion `trizod_shifts.parquet` (11,839,037 assigned shifts on canonical
-residues over all 16,851 chains — 8,380,186 backbone, 3,458,851 side chain, of
-which 12,643 chains carry side-chain assignments) are then built from that
-bundle by `scripts/build_parquet_dataset.py`. The main table is sorted by
-`(entry_id, id)` in 500-row groups; every C, CA, CB and N row of the shift
-table is flagged against the frozen median/MAD reference
-`trizod/shifts/mad_reference.csv`.
+→ `<work-dir>/release_bundle/trizod-dataset-<version>/` (train/ + scores/ +
+test/ + MANIFEST). The single-table `trizod_dataset.parquet` and the
+chemical-shift companion `trizod_shifts.parquet` (every assigned shift on a
+canonical residue, backbone and side chain) are then built from that bundle by
+`scripts/build_parquet_dataset.py`, with `--calibration <threshold-framework
+output>` so the table metadata carries the calibration of the cuts. The main
+table is sorted by `(entry_id, id)` in 500-row groups; every C, CA, CB and N row
+of the shift table is flagged against the frozen median/MAD reference
+`trizod/shifts/mad_reference.csv`. The table metadata records the dataset
+version, the licences, the code commit, the BMRB snapshot (name, n_entries,
+entry_list_sha256), the test-set name and counts, the cuts with their rule and
+the k ≥ 10 note, and the calibration summary; `docs/dataset/columns.md` is the
+column dictionary, generated from the column contract.
 
-## 7. The leakage guarantee
+## 6a. Assemble the deposit
+
+`trizod dataset finalize` collects the hand-over into one folder: the Parquet
+and the shift table; the deploy FASTA, regenerated from the bundle; the UdonPred
+v2 JSONL view and the test-set crosswalk, generated from the Parquet; the test
+FASTAs (including the retired chains and the 117 original CheZOD117 sequences)
+with the labels table and the pin provenance; `class_balance.tsv`;
+`bmrb_files.sha256` (the SHA-256 of every snapshot entry file); the README,
+datasheet and CHANGELOG rendered from the templates in `docs/dataset/` with the
+build's own counts; `columns.md`, `LICENSE.md`, `CITATION.cff` and
+`zenodo.json`; and one `MANIFEST.json` over every file (SHA-256, size, row and
+chain counts, version, licence, build and finalize commits, snapshot and
+cross-reference-source hashes, cuts, calibration and threshold-framework commit,
+leakage rule) plus `SHA256SUMS`. It refuses a Parquet without calibration, test
+FASTAs that disagree with the Parquet, and a snapshot whose file count differs
+from the one the Parquet names; the same inputs and output path give
+byte-identical files.
+
+## 7. How training is separated from the test sets
 
 Every `train_<tier>` set is redundancy-reduced in two stages against
 **CheZOD117 (release chains and original sequences), the TriZOD test set and
@@ -327,13 +357,18 @@ gate reads **every training and redundant row of every tier** — the training
 FASTAs and every member of every `clusters*.tsv`, with sequences from
 `scores/<tier>/scores.json` — where it used to read the training FASTAs only and
 so missed 1,521 redundant rows. The two test sets are themselves disjoint at the
-leakage criterion: the TriZOD set was drawn from CheZOD-free clusters, and a
-TriZOD test chain that still meets the criterion against CheZOD117 is retired
-(§3). So a model can train on any
-`train_<tier>` set and be evaluated on **CheZOD117** (the established
-hand-balanced benchmark, comparable to ODiNPred/SETH) and on the TriZOD test set
-(the larger, natural-BMRB-distribution held-out set) with no train/test leakage
-— the basis for the UdonPred benchmark.
+leakage criterion: the TriZOD set was drawn from clusters without a CheZOD
+sequence, and a TriZOD test chain that still meets the criterion against
+CheZOD117 is retired (§3). So a model can train on any `train_<tier>` set and be
+evaluated on **CheZOD117** (the established hand-balanced benchmark, comparable
+to ODiNPred/SETH) and on **TriZOD-test v1.0** (the larger,
+natural-BMRB-distribution held-out set) with homology controlled at that
+criterion — the basis for the UdonPred benchmark. What is controlled is stated
+precisely because it is not zero: remote homologues below the criterion, test
+chains that share a UniProt accession with a training chain (another
+construct), and the overlap with protein-language-model pretraining corpora
+remain, and earlier TriZOD test sets are not comparable (the deposit's
+crosswalk).
 
 ## 8. Sequence alphabet
 
@@ -373,10 +408,15 @@ CheZOD1325) for a fair comparison.
 ## Scripts (run order)
 
 ```bash
-scripts/build_dataset.sh         # the whole release end to end
+scripts/build_dataset.sh         # the whole chain end to end
 # = trizod dataset build → test-set → redundancy → representatives → package
 uv run --with pyarrow python scripts/build_parquet_dataset.py \
-    --in-bundle <bundle> --out <trizod_dataset.parquet> --shifts-out <trizod_shifts.parquet>
+    --in-bundle <bundle> --out <trizod_dataset.parquet> --shifts-out <trizod_shifts.parquet> \
+    --composition-csv <work-dir>/final_dataset/_composition_cache.csv \
+    --bmrb-dir <snapshot> --xref-sources <xref dir> --calibration <framework dir>
+uv run --with pyarrow trizod dataset finalize --parquet <trizod_dataset.parquet> \
+    --shifts <trizod_shifts.parquet> --bundle <bundle> --bmrb-dir <snapshot> \
+    --out <release dir> --crosswalk-root <checkout holding data/>
 ```
 
 `scripts/build_mad_reference.py` regenerates the far-outlier reference from a

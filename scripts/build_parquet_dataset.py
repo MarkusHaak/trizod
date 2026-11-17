@@ -42,9 +42,9 @@ loss).
 
 The companion shift table (``--shifts-out``) is a second, flat long Parquet
 holding every assigned chemical shift **on a canonical residue** of every
-released chain — backbone and side chain, 11,839,037 values in release 2026-08
-(``bmrb.get_deposited_shifts``, which drops the 0.139 % of deposited values
-sitting on a non-canonical residue). It joins on ``id`` with the main table,
+released chain — backbone and side chain (``bmrb.get_deposited_shifts``, which
+drops the ~0.14 % of deposited values sitting on a non-canonical residue).
+It joins on ``id`` with the main table,
 ships ``val_ppm`` exactly as deposited, and adds ``val_corrected_ppm`` wherever
 a trustworthy referencing offset transfers (``trizod.shifts.annotate_offsets``);
 that column is NULL, never a copy of the raw value, where none does. Every C,
@@ -60,13 +60,28 @@ the two upstream producers (``trizod.trizod.output_dataset`` and
 ``trizod.dataset.composition.detect_bound``), so a column added upstream fails a
 test here instead of silently never reaching the deposit — which is exactly how
 the C1b/C3/C4 annotations came to stop one step short of the Parquet.
+``COLUMN_DOCS`` documents every column (meaning, null/NaN rule);
+``--write-column-dictionary`` renders it to ``docs/dataset/columns.md`` and
+``tests/test_column_dictionary.py`` fails when the two disagree.
+
+The table metadata (:func:`table_metadata`) carries the release identity
+(``trizod.dataset.release_info``): ``dataset_version``, the data and code
+licences, ``code_commit``, the ``bmrb_snapshot`` (name, n_entries,
+entry_list_sha256), the ``test_set`` name and counts, the ``cuts`` with their
+rule and the k >= 10 note, and -- with ``--calibration`` -- the threshold
+framework's ``calibration`` summary (prevalence, likelihood ratios at the cuts,
+per-split prevalence, framework commit, results.json SHA-256).
 
 Usage:
     uv run --with pyarrow python scripts/build_parquet_dataset.py \
-        --in-bundle     <path to trizod-dataset-2026-06/> \
+        --in-bundle     <path to the package bundle, trizod-dataset-<version>/> \
         --out           <path to trizod_dataset.parquet> \
         [--composition-csv <path to _composition_cache.csv>] \
-        [--shifts-out <path to trizod_shifts.parquet>]
+        [--shifts-out <path to trizod_shifts.parquet>] \
+        [--calibration <threshold-framework output dir with results.json>]
+
+    uv run python scripts/build_parquet_dataset.py \
+        --write-column-dictionary docs/dataset/columns.md
 """
 
 from __future__ import annotations
@@ -87,6 +102,7 @@ from trizod.bmrb import xrefs as xr
 from trizod.bmrb.bmrb import BB_EXTRA_ATOM_IDS, HIGH_PRESSURE_BAR
 from trizod.constants import BACKBONE_ATOMS, REFINED_WEIGHTS
 from trizod.dataset import chezod_overlap as co
+from trizod.dataset import release_info as ri
 from trizod.dataset.mmseqs import describe_rule
 from trizod.dataset.paths import resolve_paths as resolve_dataset_paths
 from trizod.dataset.testset import RETIRED_FASTA
@@ -103,6 +119,7 @@ from trizod.offsets import (
     off_sigma_col,
     total_off_ppm_col,
 )
+from trizod.provenance import pipeline_version
 from trizod.shifts import (
     annotate_mad,
     annotate_offsets,
@@ -581,6 +598,378 @@ COMPOSITION_SOURCES = frozenset(c.source for c in COLUMNS if c.origin == "compos
 #: generated without that flag, so these keys are normally absent entirely.
 SCORES_JSON_NOT_CARRIED = frozenset(BACKBONE + BB_EXTRA_ATOM_IDS)
 
+# --------------------------------------------------------------------------- #
+# column dictionary
+# --------------------------------------------------------------------------- #
+
+NEVER_NULL = "never null"
+_PER_RESIDUE = "list never null, as long as `sequence`"
+_POOL_NULL = "null when the chain is in no tier's redundancy-reduction pool"
+_COMP_NULL = "null when the entry has no composition record"
+_ATOM_NAMES = {
+    "C": "carbonyl C",
+    "CA": "Cα",
+    "CB": "Cβ",
+    "H": "amide H",
+    "HA": "Hα",
+    "HB": "Hβ",
+    "N": "amide N",
+}
+
+
+@dataclass(frozen=True)
+class ColumnDoc:
+    """What a column means and when it is null (or NaN)."""
+
+    nullable: bool
+    meaning: str
+    null_rule: str
+
+
+def _doc(
+    meaning: str, null_rule: str = NEVER_NULL, nullable: bool | None = None
+) -> ColumnDoc:
+    if nullable is None:
+        nullable = null_rule != NEVER_NULL
+    return ColumnDoc(nullable, meaning, null_rule)
+
+
+def _offset_docs() -> dict[str, ColumnDoc]:
+    docs = {}
+    for a in BACKBONE:
+        atom = f"{_ATOM_NAMES[a]} ({a})"
+        docs[off_sigma_col(a)] = _doc(
+            f"POTENCI/AIC residual referencing offset of the {atom} shifts, in "
+            f"multiples of the per-atom POTENCI RMSD REFINED_WEIGHTS[{a}] = "
+            f"{REFINED_WEIGHTS[a]:g} ppm -- NOT ppm. `--max-offset` is compared "
+            "against it",
+            "null when not computed for this atom or rejected by --max-offset "
+            "(never a zero)",
+        )
+        docs[lacs_off_ppm_col(a)] = _doc(
+            f"LACS referencing offset of the {atom} shifts, in ppm",
+            "null when LACS did not run for this atom",
+        )
+        docs[total_off_ppm_col(a)] = _doc(
+            f"Total referencing offset of the {atom} shifts in ppm: "
+            f"`lacs_off_{a}_ppm + off_{a}_sigma × {REFINED_WEIGHTS[a]:g}`. "
+            "Subtract it from a deposited shift to get the shift TriZOD scored "
+            "(never add the other two columns: different units)",
+            "null when neither offset was computed",
+        )
+    return docs
+
+
+def _overlap_docs() -> dict[str, ColumnDoc]:
+    what = {
+        "chezod117": "CheZOD117 (the released chains plus the 117 original "
+        "sequences SETH published)",
+        "chezod1325": "CheZOD1325 (allseqs1325, ODiNPred's training set)",
+        "chezod1174": "CheZOD1174 (the SETH and ADOPT training set)",
+    }
+    return {
+        co.overlap_column(name): _doc(
+            f"The chain meets the leakage criterion ({describe_rule('either')}) "
+            f"against at least one sequence of {what[name]}. Benchmark a "
+            "predictor trained on that set on the test chains where it is false",
+            "null when the overlap was not computed",
+        )
+        for name in co.CHEZOD_SETS
+    }
+
+
+#: Meaning and null/NaN rule of every column in ``COLUMNS``, keyed by name.
+#: ``tests/test_column_dictionary.py`` fails when a column lacks an entry, and
+#: when ``docs/dataset/columns.md`` differs from :func:`column_dictionary_markdown`.
+COLUMN_DOCS: dict[str, ColumnDoc] = {
+    "id": _doc(
+        "Chain ID `entryID_stID_entityAssemID_entityID`: BMRB entry, assigned "
+        "chemical-shift list, entity assembly and entity. Unique per row; the "
+        "join key of every view and of `trizod_shifts.parquet`"
+    ),
+    "entry_id": _doc("BMRB entry ID, a string (the sort key: '10001' < '979')"),
+    "entity_id": _doc("BMRB `_Entity.ID` of the chain"),
+    "entity_assem_id": _doc("BMRB `_Entity_assembly.ID` of the chain"),
+    "st_id": _doc("BMRB `_Assigned_chem_shift_list.ID` the labels are scored from"),
+    "entity_name": _doc("`_Entity.Name`", "null when the entry names no entity"),
+    "sequence": _doc(
+        "One-letter sequence as scored: the 20 standard residues plus X, U and "
+        "Z (metadata `sequence_alphabet`). Every per-residue list is aligned "
+        "1:1 to it"
+    ),
+    "length": _doc("Length of `sequence`"),
+    "gscores": _doc(
+        "Per-residue TriZOD G-score, 0–1, higher = more disordered: THE label. "
+        "Cuts (metadata `cuts`): ordered G < 0.15, disordered G ≥ 0.35, "
+        "confidently disordered G ≥ 0.70",
+        f"{_PER_RESIDUE}; element NaN exactly where `mask` is false",
+        nullable=False,
+    ),
+    "zscores": _doc(
+        "Per-residue CheZOD Z-score (unbounded; grows with the shift count k)",
+        f"{_PER_RESIDUE}; element NaN exactly where `mask` is false",
+        nullable=False,
+    ),
+    "k": _doc(
+        "Per-residue number of backbone chemical shifts behind the residue's "
+        "score (its own and its neighbours'); 0 = none. k > 0 does not imply a "
+        "score. k ≥ 10 is a conventional reliability cut (metadata `cuts`)",
+        f"{_PER_RESIDUE}; elements never null (0 where no shift)",
+        nullable=False,
+    ),
+    "mask": _doc(
+        "Per-residue: true iff the residue is scored, i.e. its G (and Z) is "
+        "finite. Where false, G and Z are NaN here, null in scores.json and "
+        "999 in the UdonPred view and the deploy FASTA. Mask on this column, "
+        "not on k",
+        f"{_PER_RESIDUE}; elements never null",
+        nullable=False,
+    ),
+    "n_scored": _doc("Number of scored residues, `sum(mask)`"),
+    "split": _doc(
+        "train / redundant / test_trizod / test_retired / test_chezod117 / "
+        "excluded (metadata `split_values`, `test_retired_semantics`)"
+    ),
+    "train_tier": _doc(
+        "Strictest tier at which the chain is a training representative. The "
+        "training set of tier T is `split == 'train'` and `train_tier` at T or "
+        "stricter (tiers nest: unfiltered ⊃ tolerant ⊃ moderate ⊃ strict)",
+        "null unless `split == 'train'`",
+    ),
+    "pool_tier": _doc(
+        "Strictest tier whose redundancy-reduction pool contains the chain", _POOL_NULL
+    ),
+    "cluster_repr": _doc(
+        "Training representative heading the chain's 50 %/80 % mmseqs cluster",
+        _POOL_NULL,
+    ),
+    "quality": _doc(
+        "Quality score that picked the cluster representative: tier rank × 10⁶ "
+        "+ backbone positions × backbone atom types − max |POTENCI residual|",
+        _POOL_NULL,
+    ),
+    "exp_method": _doc(
+        "`_Entry.Experimental_method`", "null when the entry does not declare it"
+    ),
+    "exp_method_subtype": _doc(
+        "`_Entry.Experimental_method_subtype` (e.g. SOLUTION)",
+        "null when the entry does not declare it (about a quarter of BMRB)",
+    ),
+    "ph": _doc(
+        "Sample pH from the shift list's sample condition list (pD and pH* "
+        "read as deposited, see the known issues); 7.0 imputed where none was "
+        "deposited, except at strict, which requires it",
+        "null when not deposited and not imputed, or outside the valid range",
+    ),
+    "temperature": _doc(
+        "Sample temperature in K; 298 K imputed where none was deposited or a "
+        "273 K placeholder was read as not deposited (`temperature_placeholder`)",
+        "null when not deposited and not imputed",
+    ),
+    "ionic_strength": _doc(
+        "Sample ionic strength in M as deposited; 0.1 M imputed where none was "
+        "deposited, except at strict",
+        "null when not deposited and not imputed, or invalid (negative)",
+    ),
+    "total_bbshifts": _doc(
+        "Backbone shifts (H, HA, HB, C, CA, CB, N) deposited on the chain, "
+        "terminal residues not counted",
+        "null when the shifts could not be mapped onto the sequence",
+    ),
+    "bbshift_positions_post": _doc(
+        "Residues with at least one backbone shift used in the score",
+        "null when the chain was not scored",
+    ),
+    "bbshift_types_post": _doc(
+        "Backbone atom types with shifts used in the score (at most 7)",
+        "null when the chain was not scored",
+    ),
+    "citation_title": _doc(
+        "Title of the entry's primary citation", "null when none deposited"
+    ),
+    "citation_doi": _doc(
+        "DOI of the entry's primary citation", "null when none deposited"
+    ),
+    **_offset_docs(),
+    "physical_state": _doc(
+        "`_Entity_assembly.Physical_state` of the chain's assembly, lower-cased "
+        "(native, intrinsically disordered, denatured, …); the tiers deny "
+        "non-native states",
+        "null when not deposited",
+    ),
+    "cosolvent_evidence": _doc(
+        "Does the entry name a perturbing cosolvent (urea, guanidinium, TFE, "
+        "HFIP, DMSO, methanol, ethanol, SDS, …) in its sample components, "
+        "solvent system or sample text?",
+        "null only when the scores.json record lacks the field",
+    ),
+    "sample_state_evidence": _doc(
+        "solution / solid / unknown, from `_Sample.Type`, "
+        "`_Experiment.Sample_state` and the experiment names",
+        "null only when the scores.json record lacks the field",
+    ),
+    "membrane_mimetic": _doc(
+        "';'-joined membrane-mimetic classes recognised in the chain's samples "
+        "(phospholipid, bicelle, nanodisc, SDS, DPC, CHAPS, …), counted by the "
+        "class rule or not. Descriptive; the filter reads "
+        "`membrane_mimetic_sample`",
+        "null when none is recognised",
+    ),
+    "n_entities": _doc(
+        "Distinct `_Entity` records of the entry (a homodimer is 1)", _COMP_NULL
+    ),
+    "has_non_polymer": _doc("The entry has a non-polymer entity", _COMP_NULL),
+    "has_nucleic": _doc("The entry has a DNA/RNA entity", _COMP_NULL),
+    "has_metal": _doc("The entry has a metal (ion or cofactor)", _COMP_NULL),
+    "has_metal_ion": _doc("The entry has a free metal ion", _COMP_NULL),
+    "has_metal_cofactor": _doc("The entry has a metal-containing cofactor", _COMP_NULL),
+    "has_water": _doc(
+        "The entry lists a water entity (not counted as a member)", _COMP_NULL
+    ),
+    "has_other_ligand": _doc("The entry has another non-polymer ligand", _COMP_NULL),
+    "metal_comp_ids": _doc(
+        "Chemical-component IDs of the metals (empty list: none)", _COMP_NULL
+    ),
+    "ligand_comp_ids": _doc(
+        "Chemical-component IDs of the ligands (empty list: none)", _COMP_NULL
+    ),
+    "ligand_names": _doc("Names of the ligands (empty list: none)", _COMP_NULL),
+    "multi_protein_assembly": _doc(
+        "An assembly holds more than one distinct protein entity", _COMP_NULL
+    ),
+    "n_entity_assembly_rows": _doc(
+        "`_Entity_assembly` rows of the chain's entity (raw copy count; "
+        "inflated by alternative-conformer depositions)",
+        _COMP_NULL,
+    ),
+    "n_copies": _doc(
+        "Conservative lower bound on the copies of the entity in an assembly "
+        "(metadata `n_copies_semantics`)",
+        f"{_COMP_NULL}, or the classifier errored on it",
+    ),
+    "has_conformational_isomer": _doc(
+        "Assembly rows name conformers (cis/trans, major/minor, …), so "
+        "`n_entity_assembly_rows` over-counts copies",
+        _COMP_NULL,
+    ),
+    "is_bound": _doc(
+        "Bound-complex verdict of `trizod dataset build` (a second protein, a "
+        "ligand, nucleic acid or metal in an assembly); bound entries are not "
+        "in any training pool",
+        _COMP_NULL,
+    ),
+    "label_tier": _doc(
+        "Strictest tier whose pool still contains the pinned test sequence "
+        "(strict for every test_trizod row)",
+        "null unless `split` is test_trizod or test_retired",
+    ),
+    "pressure_bar": _doc(
+        "Sample pressure in bar from the shift list's sample condition list, "
+        "converted from the deposited unit",
+        "null when not recorded or the unit is unknown (passes as ambient)",
+    ),
+    "label_tier_source": _doc(
+        "Tier whose scores.json record supplied the row's labels and offsets "
+        "(metadata `label_source`)"
+    ),
+    "xrefs": _doc(
+        "Every UniProt / PDB link of the chain, a struct (db, accession, "
+        "source, identity, coverage, origin, raw_db, raw_accession, details); "
+        "metadata `xrefs_semantics`",
+        "null when the entry was not read; empty when it declares no link",
+    ),
+    "uniprot_ids": _doc(
+        "The chain's own UniProt accessions at its best evidence level "
+        "(author, else sifts, else 100 %/100 % hits)",
+        "null when the entry was not read; empty when there is none",
+    ),
+    "uniprot_source": _doc(
+        "Evidence level of `uniprot_ids`: author / sifts / unspecified / blast",
+        "null when `uniprot_ids` is empty or the entry was not read",
+    ),
+    "pdb_ids": _doc(
+        "Distinct PDB IDs from `exact` and `author` links",
+        "null when the entry was not read; empty when there is none",
+    ),
+    "membrane_mimetic_sample": _doc(
+        "Class-rule verdict: the chain's sample is a membrane mimetic "
+        "(metadata `membrane_mimetic_sample_semantics`); excluded from moderate "
+        "and strict. False also when no sample component could be read",
+        "null only when the scores.json record lacks the field",
+    ),
+    "temperature_placeholder": _doc(
+        "The deposited temperature was exactly 273 K with no stated 0 °C and "
+        "was read as not deposited: the chain is scored at the 298 K default "
+        "and strict excludes it",
+        "null only when the scores.json record lacks the field",
+    ),
+    "high_pressure": _doc(
+        "`pressure_bar >= 400`: the ceiling of the tolerant, moderate and strict tiers",
+        "null when no pressure was recorded (passes as ambient): filter with "
+        "`high_pressure IS NOT TRUE`, not `== False`",
+    ),
+    **_overlap_docs(),
+    "retired_reason": _doc(
+        "Why a pinned test chain was retired: not_strict, chezod117_overlap or "
+        "within_test_duplicate",
+        "null unless `split == 'test_retired'`",
+    ),
+}
+
+
+def arrow_type_doc(token: str) -> str:
+    """The Arrow type of a column token, spelled out (``list<xref>`` -> its
+    struct)."""
+    if token == "list<xref>":
+        fields = ", ".join(f"{n}: {t}" for n, t in xr.XREF_FIELDS)
+        return f"list<struct<{fields}>>"
+    return token
+
+
+def column_dictionary_markdown() -> str:
+    """The column dictionary (``docs/dataset/columns.md``), from ``COLUMNS``
+    and ``COLUMN_DOCS``. Every Arrow field is declared nullable in the schema;
+    the table's ``Nullable`` column says whether the release can hold a null."""
+    missing = [c.name for c in COLUMNS if c.name not in COLUMN_DOCS]
+    extra = sorted(set(COLUMN_DOCS) - {c.name for c in COLUMNS})
+    if missing or extra:
+        raise ValueError(f"COLUMN_DOCS out of step: missing {missing}, extra {extra}")
+    lines = [
+        "# TriZOD dataset: column dictionary",
+        "",
+        "<!-- Generated by `scripts/build_parquet_dataset.py "
+        "--write-column-dictionary docs/dataset/columns.md` from `COLUMNS` and "
+        "`COLUMN_DOCS`. Do not edit by hand: "
+        "tests/test_column_dictionary.py fails when it differs. -->",
+        "",
+        f"`trizod_dataset.parquet` has {len(COLUMNS)} columns, one row per "
+        "scored protein chain, in this order. Per-residue columns are lists "
+        "aligned 1:1 to `sequence`. A residue is scored where `mask` is true; "
+        "`gscores` and `zscores` are NaN exactly where it is false (null in "
+        "scores.json, 999 in the UdonPred view and the deploy FASTA). A shift "
+        "count k > 0 does not imply a score. Null means unknown or not "
+        "recorded, never a default. *Nullable* says whether a null can occur "
+        "in the release (every Arrow field is declared nullable). The table "
+        "metadata (`pyarrow.parquet.read_schema(path).metadata`) restates the "
+        "semantics of the flag columns, the cuts and the provenance.",
+        "",
+        "| # | Column | Arrow type | Nullable | Meaning | Null / NaN rule |",
+        "|--:|---|---|---|---|---|",
+    ]
+    for i, col in enumerate(COLUMNS, 1):
+        doc = COLUMN_DOCS[col.name]
+        cells = [
+            str(i),
+            f"`{col.name}`",
+            f"`{arrow_type_doc(col.arrow)}`",
+            "yes" if doc.nullable else "no",
+            doc.meaning,
+            doc.null_rule,
+        ]
+        lines.append("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
 #: Pre-rename offset keys. A ``scores.json`` staged before the offset columns
 #: were renamed for unit safety spells them ``off_CA`` / ``lacs_off_CA``; those
 #: files must still build, and must produce the same numbers.
@@ -872,39 +1261,39 @@ def print_xref_coverage(cols: dict) -> None:
     print(f"  uniprot_ids by source: {cov['uniprot_source']}")
 
 
-def build(
-    in_bundle: Path,
-    out_path: Path,
-    composition_csv: Path | None = None,
+def table_metadata(
+    cols: dict,
     row_group_size: int = ROW_GROUP_SIZE,
-    labelled: dict[str, tuple[str, dict]] | None = None,
     xrefs: dict[str, xr.EntryXrefs] | None = None,
     xrefs_snapshot: str | None = None,
     external: xs.ExternalSources | None = None,
-    chezod_overlaps: dict[str, set[str]] | None = None,
-) -> None:
-    cols = collect_columns(
-        in_bundle,
-        composition_csv,
-        labelled,
-        xrefs=xrefs,
-        external=external,
-        chezod_overlaps=chezod_overlaps,
-    )
+    *,
+    version: str = ri.DATASET_VERSION,
+    snapshot: dict | None = None,
+    calibration: dict | None = None,
+    commit: dict | None = None,
+) -> dict[bytes, bytes]:
+    """The Parquet key-value metadata for the collected ``cols``.
 
-    pa, pq = import_pyarrow()
-    schema = arrow_schema(pa)
-    table = pa.table({name: cols[name] for name in schema.names}, schema=schema)
-    table = table.sort_by(SORT_KEYS)
-
+    Pure Python (no pyarrow), so every key is testable without the optional
+    extra. ``snapshot`` is :func:`trizod.dataset.release_info.snapshot_block`
+    of the BMRB snapshot, ``calibration`` :func:`~trizod.dataset.release_info.
+    read_calibration` of a threshold-framework run and ``commit``
+    :func:`~trizod.dataset.release_info.code_commit` of this checkout (default:
+    looked up). A missing snapshot or calibration is recorded as such, never
+    left out silently.
+    """
+    if commit is None:
+        commit = ri.code_commit()
+    test_set = ri.testset_block(cols["split"], cols["retired_reason"])
     metadata = {
         b"dataset": b"TriZOD",
         b"description": b"Per-residue protein-disorder labels from re-referenced BMRB NMR backbone chemical shifts. One row per scored chain; per-residue arrays aligned 1:1 to sequence.",
         b"tier_order_loose_to_strict": b"unfiltered,tolerant,moderate,strict",
         b"split_values": b"train,redundant,test_chezod117,test_trizod,test_retired,excluded",
         b"test_retired_semantics": b"split test_retired: a pinned TriZOD test chain that is no longer tested on, for the reason in retired_reason: not_strict (it no longer meets the strict tier, e.g. after the 2026-11 condition rules), chezod117_overlap (it meets the leakage criterion against a CheZOD117 sequence, so the two test sets would overlap) or within_test_duplicate (it is the shorter chain of a pair of test chains at >= 50 % identity over >= 80 % of either chain). It is not in the TriZOD test set, but it stays a leakage target, so it and its homologues are excluded from every training set exactly as with the full pin; the test set only shrinks",
-        b"mask_semantics": b"mask[i]=true where residue i is scored; gscores/zscores are NaN where mask is false",
-        b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null; label_tier is null for every row that is neither test_trizod nor test_retired, retired_reason for every row but test_retired, and the <set>_overlap flags when the overlap was not computed",
+        b"mask_semantics": b"mask[i] is true iff residue i is scored, i.e. gscores[i] (and zscores[i]) is finite; they are NaN exactly where mask is false (null in scores.json, 999 in the UdonPred view and the deploy FASTA). A shift count k[i] > 0 does not imply a score: mask on mask, never on k",
+        b"null_semantics": b"null means unknown/not recorded, never a default: an absent composition record leaves every composition column null; train_tier is null unless split is train; pool_tier, cluster_repr and quality are null for a chain in no tier's pool; label_tier is null for every row that is neither test_trizod nor test_retired, retired_reason for every row but test_retired, and the <set>_overlap flags when the overlap was not computed. Per-row rules: the column dictionary",
         b"sequence_alphabet": b"sequence holds the 20 standard residues plus X (unknown or non-standard; also an internal non-letter of the deposited sequence), U (selenocysteine) and Z (Glx). A trailing non-letter of the deposited sequence (a translation-stop '*', a typed apostrophe) is no residue and is not part of the chain; the per-residue arrays are aligned 1:1 to sequence",
         b"chezod_overlap_semantics": (
             "chezod117_overlap / chezod1325_overlap / chezod1174_overlap: the "
@@ -940,6 +1329,80 @@ def build(
             else "none: NMR-STAR snapshot only"
         ).encode(),
     }
+    release = {
+        "dataset_version": version,
+        "license": ri.LICENSE_STATEMENT,
+        "data_license": ri.DATA_LICENSE,
+        "code_license": ri.CODE_LICENSE,
+        "code_commit": json.dumps(
+            {
+                **(commit or {"commit": "unknown", "dirty": None}),
+                "pipeline_version": pipeline_version(),
+                "repository": ri.REPOSITORY,
+            },
+            sort_keys=True,
+        ),
+        "bmrb_snapshot": (
+            json.dumps(snapshot, sort_keys=True)
+            if snapshot is not None
+            else "not recorded: no BMRB_SNAPSHOT.json in the snapshot directory"
+        ),
+        "test_set": json.dumps(test_set, sort_keys=True),
+        "cuts": json.dumps(ri.cut_block(), sort_keys=True),
+        "cut_rule": ri.CUT_RULE,
+        "k_reliability_note": ri.K_NOTE,
+        "calibration": (
+            json.dumps(calibration, sort_keys=True)
+            if calibration is not None
+            else "not recorded: built without --calibration"
+        ),
+        "column_dictionary": ri.COLUMN_DICTIONARY,
+    }
+    metadata.update({k.encode(): v.encode() for k, v in release.items()})
+    return metadata
+
+
+def build(
+    in_bundle: Path,
+    out_path: Path,
+    composition_csv: Path | None = None,
+    row_group_size: int = ROW_GROUP_SIZE,
+    labelled: dict[str, tuple[str, dict]] | None = None,
+    xrefs: dict[str, xr.EntryXrefs] | None = None,
+    xrefs_snapshot: str | None = None,
+    external: xs.ExternalSources | None = None,
+    chezod_overlaps: dict[str, set[str]] | None = None,
+    *,
+    version: str = ri.DATASET_VERSION,
+    snapshot: dict | None = None,
+    calibration: dict | None = None,
+    commit: dict | None = None,
+) -> None:
+    cols = collect_columns(
+        in_bundle,
+        composition_csv,
+        labelled,
+        xrefs=xrefs,
+        external=external,
+        chezod_overlaps=chezod_overlaps,
+    )
+
+    pa, pq = import_pyarrow()
+    schema = arrow_schema(pa)
+    table = pa.table({name: cols[name] for name in schema.names}, schema=schema)
+    table = table.sort_by(SORT_KEYS)
+
+    metadata = table_metadata(
+        cols,
+        row_group_size,
+        xrefs,
+        xrefs_snapshot,
+        external,
+        version=version,
+        snapshot=snapshot,
+        calibration=calibration,
+        commit=commit,
+    )
     table = table.replace_schema_metadata(metadata)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1059,10 +1522,16 @@ def snapshot_label(bmrb_dir: Path) -> str:
     return f"{resolved} (retrieved {retrieved})" if retrieved else resolved
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument(
-        "--in-bundle", type=Path, required=True, help="path to trizod-dataset-2026-06/"
+        "--in-bundle",
+        type=Path,
+        default=None,
+        help="package bundle written by `trizod dataset package` "
+        "(trizod-dataset-<version>/)",
     )
     ap.add_argument("--out", type=Path, default=None, help="output .parquet path")
     ap.add_argument(
@@ -1130,7 +1599,54 @@ def main() -> None:
         default=paths.PKL_DIR,
         help="BMRB pickle cache read by --shifts-out (default: tmp/bmrb_entries)",
     )
-    args = ap.parse_args()
+    ap.add_argument(
+        "--version",
+        default=ri.DATASET_VERSION,
+        help="dataset version written into the metadata (default: %(default)s)",
+    )
+    ap.add_argument(
+        "--calibration",
+        type=Path,
+        default=None,
+        help=(
+            "threshold-framework output directory (or its results.json): its "
+            "prevalence, likelihood ratios at the cuts, per-split prevalence, "
+            "SHA-256 and framework commit go into the `calibration` metadata key"
+        ),
+    )
+    ap.add_argument(
+        "--calibration-commit",
+        default=None,
+        help=(
+            "commit of the threshold framework that produced --calibration "
+            "(default: the last commit of " + ri.FRAMEWORK_PATH + " here)"
+        ),
+    )
+    ap.add_argument(
+        "--snapshot-dir",
+        type=Path,
+        default=None,
+        help=(
+            "BMRB snapshot directory whose BMRB_SNAPSHOT.json identifies the "
+            "snapshot in the metadata (default: --bmrb-dir)"
+        ),
+    )
+    ap.add_argument(
+        "--write-column-dictionary",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write the column dictionary (Markdown) to PATH, e.g. "
+        "docs/dataset/columns.md",
+    )
+    args = ap.parse_args(argv)
+    if args.write_column_dictionary is not None:
+        args.write_column_dictionary.write_text(column_dictionary_markdown())
+        print(f"wrote {args.write_column_dictionary} ({len(COLUMNS)} columns)")
+        if not args.out and not args.shifts_out:
+            return
+    if args.in_bundle is None:
+        ap.error("--in-bundle is required to build")
     if not args.out and not args.shifts_out:
         ap.error("nothing to do: pass --out and/or --shifts-out")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -1195,6 +1711,28 @@ def main() -> None:
                 overlaps = co.chezod_overlaps(chains, sets, Path(td))
             for name, ids in overlaps.items():
                 print(f"  {co.overlap_column(name)}: {len(ids)} chains")
+        snapshot = ri.snapshot_block(args.snapshot_dir or args.bmrb_dir)
+        if snapshot is None:
+            print(
+                "  WARNING: no BMRB_SNAPSHOT.json in "
+                f"{args.snapshot_dir or args.bmrb_dir} -- the bmrb_snapshot "
+                "metadata will say 'not recorded'"
+            )
+        calibration = None
+        if args.calibration is not None:
+            fw_commit = (
+                {"commit": args.calibration_commit, "dirty": None}
+                if args.calibration_commit
+                else None
+            )
+            calibration = ri.read_calibration(args.calibration, fw_commit)
+            print(
+                f"calibration: pi {calibration['prevalence']['value']} "
+                f"{calibration['prevalence']['ci95']}, results.json "
+                f"{calibration['results_json_sha256'][:12]}"
+            )
+        else:
+            print("  WARNING: no --calibration -- the calibration metadata is empty")
         build(
             args.in_bundle,
             args.out,
@@ -1204,6 +1742,9 @@ def main() -> None:
             xrefs_snapshot=xrefs_snapshot,
             external=external,
             chezod_overlaps=overlaps,
+            version=args.version,
+            snapshot=snapshot,
+            calibration=calibration,
         )
     if args.shifts_out:
         build_shifts(args.in_bundle, args.shifts_out, args.pkl_dir, labelled)

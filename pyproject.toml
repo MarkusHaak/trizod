@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trizod"
-version = "0.2.0"
+version = "0.4.0"
 description = "Modern disorder scores for BMRB data"
 readme = "README.md"
 license = "MIT"

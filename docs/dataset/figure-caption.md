@@ -10,10 +10,17 @@ The **authoritative caption** is the `\caption{}` for `fig:redundancy_reduction`
 `Article.tex`; the text below mirrors it for reference and cross-checking. The
 construction is documented in [`dataset-construction.md`](dataset-construction.md).
 
+> **2026-11-17 wording note (release audit G36).** The numbers below are from the
+> 2026-06 build. The row after leakage removal is called **test-separated**
+> here: the training sets are separated from the test sets at 30 % identity over
+> 80 % of either chain, searched in both directions, which controls homology at
+> that level and does not eliminate it. The figure and its manuscript caption
+> should use the same wording.
+
 > **2026-06 redesign note.** The figure now uses a strict *shape = function,
 > colour = data category* grammar. The row after leakage removal is labelled
-> **leakage-free** (was "non-redundant"): those sequences are free of test-set
-> leakage but still internally redundant — the redundancy reduction is the 50/80
+> **test-separated** (was "non-redundant"): those sequences are separated from the test
+> sets but still internally redundant — the redundancy reduction is the 50/80
 > clustering that produces the training sets. The former decision-diamond
 > (random sampling) and trapezium (external CheZOD) shapes were removed.
 
@@ -23,7 +30,7 @@ construction is documented in [`dataset-construction.md`](dataset-construction.m
 > entries, removes duplicate sequences, bound/multi-molecule complexes and sequences
 > < 20 aa to obtain the *unfiltered* set, and derives four **nested** filter tiers by
 > applying progressively stricter quality filters (unfiltered → tolerant → moderate →
-> strict); each tier is made leakage-free by removing held-out-test-set leakage and is
+> strict); each tier is separated from the held-out test sets by leakage removal and is
 > then redundancy-reduced by mmseqs clustering into training sets of 1,254–5,927
 > proteins. A seeded side-branch removes CheZOD redundancy from the strict set and
 > reclusters a random subset into the CheZOD-disjoint TriZOD test set (344) which, with
@@ -31,26 +38,26 @@ construction is documented in [`dataset-construction.md`](dataset-construction.m
 
 ## Full caption (with symbol key)
 
-> **Construction of the TriZOD dataset and its leakage-free test split.** Read left→right.
+> **Construction of the TriZOD dataset and its held-out test split.** Read left→right.
 > *(left) Training-set construction.* The 17,388 BMRB entries (cylinder) are parsed and
 > reduced to the **unfiltered** set (9,480) by removing duplicate sequences,
 > bound/multi-molecule complexes and sequences < 20 aa; progressively stricter quality
 > filters derive the four **nested** tiers (unfiltered 9,480 ⊃ tolerant 9,035 ⊃ moderate
-> 6,346 ⊃ strict 2,039). Each tier is first made **leakage-free** by two-stage test-set-
+> 6,346 ⊃ strict 2,039). Each tier is first **separated from the test sets** by two-stage test-set-
 > leakage removal (vermillion box) at 30 % identity / 80 % coverage against the held-out
 > test sets — stage 1 drops training sequences that co-cluster with a test sequence,
-> stage 2 drops direct `easy-search` hits — yielding the leakage-free sets
+> stage 2 drops direct `easy-search` hits — yielding the test-separated sets
 > (8,290 / 7,867 / 5,425 / 1,547), which are still internally redundant. These are then
 > redundancy-reduced into the per-tier **training sets** (green; 5,927 / 5,684 / 4,063 /
 > 1,254): `cluster` builds the strict set, then iterative `clusterupdate`
 > *strict → moderate → tolerant → unfiltered* combines the previous tier's training set
-> with the current leakage-free set, so each tier extends the previous. `cluster`,
+> with the current test-separated set, so each tier extends the previous. `cluster`,
 > `clusterupdate` and the test-set `recluster` all use 50 % identity / 80 % coverage.
 > *(right) Test-set construction.* The *strict* tier's unique sequences (grey dashed
 > provenance arrow) have their CheZOD redundancy removed (vermillion box: clustered with
 > the external CheZOD117 and CheZOD1325 sets at 30 % / 80 %, dropping every cluster that
 > contains a CheZOD sequence, so the test set is CheZOD-disjoint), leaving 1,237
-> CheZOD-free clusters; a fixed-seed random 25 % of these is reclustered at 50 % / 80 %
+> clusters without a CheZOD sequence; a fixed-seed random 25 % of these is reclustered at 50 % / 80 %
 > to give the **TriZOD test set** (344, blue). The two **held-out test sets** searched
 > against in the leakage step (merged vermillion dotted arrow) are CheZOD117 (115; 2 of
 > 117 did not map) and the TriZOD test set; CheZOD1325 enters only the test-set
@@ -72,7 +79,7 @@ construction is documented in [`dataset-construction.md`](dataset-construction.m
 | row (figure order, left→right) | unfiltered | tolerant | moderate | strict |
 |---|--:|--:|--:|--:|
 | filter tiers (unique) | 9,480 | 9,035 | 6,346 | 2,039 |
-| leakage-free | 8,290 | 7,867 | 5,425 | 1,547 |
+| test-separated | 8,290 | 7,867 | 5,425 | 1,547 |
 | training sets | 5,927 | 5,684 | 4,063 | 1,254 |
 
 The figure shows the cleaned **unfiltered** set (9,480, leftmost column) as the entry

@@ -20,11 +20,12 @@ where
 
 Membership / split (defaults):
 
-* ``SET=train`` -- the canonical quality-best, redundancy-reduced, CheZOD/
-  TriZOD-test-leakage-free **tolerant** training set
-  (``<work-dir>/mmseqs/train_tolerant_best.fasta``, 5,684 seqs).
-* ``SET=test``  -- the seeded **TriZOD test set**
-  (``<work-dir>/testset/TriZOD_test_set.fasta``, 344 seqs).
+* ``SET=train`` -- the canonical quality-best, redundancy-reduced
+  **tolerant** training set, separated from the CheZOD117 and TriZOD test
+  sets at 30 % identity over 80 % of either chain, searched in both directions
+  (``<work-dir>/mmseqs/train_tolerant_best.fasta``).
+* ``SET=test``  -- the TriZOD test set, TriZOD-test v1.0
+  (``<work-dir>/testset/TriZOD_test_set.fasta``).
 * The **retired** TriZOD test chains (``TriZOD_test_retired.fasta`` beside the
   test FASTA; pinned chains that left the strict tier, overlap CheZOD117 or
   duplicate another test chain) are in NEITHER set: the
@@ -35,16 +36,15 @@ Membership / split (defaults):
   random subset of the training records (seeded by ``--seed``, default 42) is
   relabelled ``SET=val``; the rest stay ``SET=train``. The val set is carved
   *across the whole train set* (not stratified) and is disjoint from test (it
-  is a subset of the already-leakage-free train). Default ``--val-fraction 0``
+  is a subset of train). Default ``--val-fraction 0``
   emits only train + test.
 
 Which ``scores.json`` supplies the labels: per-residue G-scores are NOT
 tier-independent. Tolerant is the only tier that combines a finite
 ``--max-offset`` (3 sigma) with ``--reject-shift-type-only``, so it masks an
 over-limit atom type out of the score (and nulls its offset) where the
-unfiltered run applies the offset and scores the type; in release 2026-10 that
-makes 1,073 of 15,073 tolerant records differ from the unfiltered ones, 478 of
-them training representatives (audit issue I-01). Each record's labels
+unfiltered run applies the offset and scores the type (audit issue I-01: about
+7 % of the tolerant records of release 2026-10). Each record's labels
 therefore come from the tier that selected the chain, by
 :func:`trizod.dataset.tiers.label_source_tier` -- the same rule
 ``scripts/build_parquet_dataset.py`` applies to the Parquet's
@@ -80,6 +80,7 @@ import random
 from pathlib import Path
 
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.release_info import DATASET_VERSION, TEST_SET_NAME, cut_block
 from trizod.dataset.testset import RETIRED_FASTA
 from trizod.dataset.tiers import LABEL_SOURCE_RULE, TIER_ORDER, label_source_tier
 from trizod.io.fasta import fasta_ids
@@ -317,6 +318,11 @@ def main(argv=None) -> None:
         )
 
     summary = {
+        "dataset_version": DATASET_VERSION,
+        "test_set": f"{TEST_SET_NAME} (SET=test)",
+        "target": "TriZOD G-score per residue (continuous, 0-1); "
+        f"{SENTINEL} where masked (MASK=0)",
+        "cuts": cut_block(),
         "tier": args.tier,
         "train_fasta": _rel(train_fasta),
         "test_fasta": _rel(test_fasta),

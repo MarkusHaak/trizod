@@ -1,7 +1,18 @@
 cff-version: 1.2.0
 title: "TriZOD: Re-referenced BMRB chemical shift dataset and disorder scoring pipeline"
-message: "If you use this software or dataset, please cite it as below."
-type: software
+message: >-
+  If you use the TriZOD dataset, please cite it as below. The dataset is
+  licensed CC BY 4.0; the code in this repository is MIT (see LICENSE).
+  The data derive from BMRB entries (https://bmrb.io); please also
+  acknowledge the BMRB.
+type: dataset
+abstract: >-
+  Per-residue protein-disorder labels (the continuous TriZOD G-score) from
+  re-referenced BMRB NMR backbone chemical shifts, one Parquet row per scored
+  protein chain, in four nested stringency tiers, with the held-out test set
+  TriZOD-test v1.0 and CheZOD117. Training sets are separated from the test
+  sets at 30 % identity over 80 % of either chain, searched in both
+  directions.
 authors:
   - family-names: Senoner
     given-names: Tobias
@@ -35,9 +46,8 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.21309964
     description: "TriZOD dataset v0.2.0"
-license: MIT
-version: "0.2.0"
-date-released: "2026-07-11"
+license: CC-BY-4.0
+version: "0.4.0"
 keywords:
   - NMR
   - BMRB

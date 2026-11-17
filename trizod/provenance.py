@@ -46,9 +46,11 @@ _MATH_FILES = ("constants.py",)
 _PKG_ROOT = Path(__file__).resolve().parent
 
 
-@lru_cache(maxsize=1)
 def file_sha256(path) -> str:
-    """SHA-256 of a file, read in 1 MiB blocks (release and source manifests)."""
+    """SHA-256 of a file, read in 1 MiB blocks (release and source manifests).
+
+    Deliberately not cached: a file rewritten at the same path within one
+    process must hash anew (release audit 2026-11-17, housekeeping)."""
     h = hashlib.sha256()
     with open(path, "rb") as fh:
         for block in iter(lambda: fh.read(1 << 20), b""):

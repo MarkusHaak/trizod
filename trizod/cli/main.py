@@ -22,6 +22,7 @@ from trizod.dataset.mmseqs import (
     LEAKAGE_RULES,
     LEAKAGE_RULES_HELP,
 )
+from trizod.dataset.release_info import DATASET_VERSION
 
 app = typer.Typer(
     rich_markup_mode=None,
@@ -467,7 +468,11 @@ def _validate_and_prepare_paths(args):
 
 dataset_app = typer.Typer(
     rich_markup_mode=None,
-    help="Build the redundancy-reduced, leakage-free TriZOD dataset.",
+    help=(
+        "Build the redundancy-reduced TriZOD dataset, its training sets "
+        "separated from the test sets at 30 % identity over 80 % of either "
+        "chain (searched in both directions), and assemble the deposit."
+    ),
 )
 app.add_typer(dataset_app, name="dataset")
 
@@ -574,7 +579,7 @@ def _dataset_representatives(
 
 @dataset_app.command("package")
 def _dataset_package(
-    version: str = typer.Option("2026-07", "--version"),
+    version: str = typer.Option(DATASET_VERSION, "--version"),
     include_str: bool = typer.Option(False, "--include-str"),
     out: str | None = typer.Option(None, "--out"),
     work_dir: str | None = typer.Option(None, "--work-dir"),
@@ -587,7 +592,7 @@ def _dataset_package(
         "is an error.",
     ),
 ):
-    """Assemble the Zenodo release bundle + MANIFEST + leakage gate."""
+    """Stage the package bundle (input of the Parquet) + MANIFEST + leakage gate."""
     from trizod.dataset import package_release
 
     argv = ["--version", version]
@@ -679,3 +684,72 @@ def _dataset_test_crosswalk(
     for s in sets or []:
         argv += ["--set", s]
     testset_crosswalk.main(argv)
+
+
+@dataset_app.command("finalize")
+def _dataset_finalize(
+    parquet: str = typer.Option(..., "--parquet", help="Release Parquet."),
+    shifts: str = typer.Option(..., "--shifts", help="trizod_shifts.parquet."),
+    bundle: str = typer.Option(
+        ..., "--bundle", help="Package bundle the Parquet was built from."
+    ),
+    bmrb_dir: str = typer.Option(
+        ..., "--bmrb-dir", help="BMRB snapshot directory (per-file SHA-256 table)."
+    ),
+    out: str = typer.Option(..., "--out", help="Release folder to write."),
+    crosswalk_root: str | None = typer.Option(
+        None,
+        "--crosswalk-root",
+        help="Checkout holding data/ for the crosswalk's earlier test sets.",
+    ),
+    sets: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="NAME=fasta:PATH|parquet:PATH|git:REV:PATH, repeatable; replaces "
+        "the crosswalk's default earlier sets.",
+    ),
+    validation: str | None = typer.Option(
+        None, "--validation", help="VALIDATION.json of the final audit."
+    ),
+    allow_uncalibrated: bool = typer.Option(
+        False,
+        "--allow-uncalibrated",
+        help="Accept a Parquet built without --calibration (dry runs only).",
+    ),
+    allow_calibration_mismatch: bool = typer.Option(
+        False,
+        "--allow-calibration-mismatch",
+        help="Accept a Parquet whose data differ from the calibration's input "
+        "(dry runs only).",
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace a non-empty --out."),
+):
+    """Assemble the deposit: Parquet, views, crosswalk, test FASTAs, rendered
+    docs, class balance, snapshot hashes, MANIFEST.json and SHA256SUMS."""
+    from trizod.dataset import finalize
+
+    argv = [
+        "--parquet",
+        parquet,
+        "--shifts",
+        shifts,
+        "--bundle",
+        bundle,
+        "--bmrb-dir",
+        bmrb_dir,
+        "--out",
+        out,
+    ]
+    if crosswalk_root is not None:
+        argv += ["--crosswalk-root", crosswalk_root]
+    for s_ in sets or []:
+        argv += ["--set", s_]
+    if validation is not None:
+        argv += ["--validation", validation]
+    if allow_uncalibrated:
+        argv.append("--allow-uncalibrated")
+    if allow_calibration_mismatch:
+        argv.append("--allow-calibration-mismatch")
+    if force:
+        argv.append("--force")
+    finalize.main(argv)

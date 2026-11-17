@@ -234,12 +234,12 @@ PARQUET_METADATA = {
     ),
     b"not_covered": (
         b"Shifts assigned to a NON-CANONICAL residue or group are excluded, "
-        b"because seq_id would not index the released sequence: 16,502 values, "
-        b"0.139 % of the 11,855,542 deposited values, on 290 distinct Comp_IDs "
-        b"across 1,050 of the 16,851 chains -- the PTMs (SEP, TPO, PTR, TYS, "
-        b"HYP, ALY, MLY, M3L), the non-standard residues (ORN, AIB, ABA, NLE, "
-        b"DPR, PCA, MLE, DAL) and the terminal/lipid groups (ACE, NH2, MYR). "
-        b"Read those from the BMRB entry directly."
+        b"because seq_id would not index the released sequence: about 0.14 % "
+        b"of the deposited values (measured on the 2026-08 build), on some 290 "
+        b"distinct Comp_IDs -- the PTMs (SEP, TPO, PTR, TYS, HYP, ALY, MLY, "
+        b"M3L), the non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA, MLE, "
+        b"DAL) and the terminal/lipid groups (ACE, NH2, MYR). Read those from "
+        b"the BMRB entry directly."
     ),
     b"correction_formula": _CORRECTION_FORMULA.encode(),
     b"offset_source_values": _OFFSET_SOURCE_VALUES.encode(),

@@ -1,330 +1,187 @@
-# TriZOD dataset — datasheet
+# TriZOD dataset v{{version}}: datasheet
 
-A continuous, per-residue protein-disorder dataset derived from BMRB NMR
-backbone chemical shifts, re-referenced and redundancy-reduced. This datasheet
-describes the dataset that is packaged for release (Zenodo); the code that
-produces it is the TriZOD pipeline in this repository.
+<!-- Template: `trizod dataset finalize` renders it into the deposit's
+datasheet.md with this build's counts. Every placeholder in double braces is
+filled from the release; do not type counts into this file. -->
 
-> Companion: the *trained disorder predictor* benchmarked on this dataset is
-> reported separately (**UdonPred**). This dataset is built with a leakage-free
-> split so that predictor can train here and test on CheZOD117 fairly.
+Structured after the datasheet questions of Gebru et al. (2021). The deposit's
+`README.md` is the short version; `columns.md` documents every column.
 
-## 1. What this dataset is
+## 1. Motivation
 
-For every selected BMRB chemical-shift record, TriZOD provides a **per-residue
-continuous disorder score** — the CheZOD-style **Z-score** and the new
-**TriZOD G-score** (0–1, expected value independent of the number of measured
-shifts) — computed from the deviation of observed backbone shifts from
-POTENCI random-coil predictions, after **LACS + POTENCI/AIC re-referencing**.
+**Why was it created?** To give sequence-based protein-disorder predictors a
+large, continuous, residue-level training target measured in solution, with
+explicit quality tiers and test sets held out from training at a stated
+homology level. NMR chemical shifts report the conformational ensemble per
+residue; their deviation from random-coil values measures order.
 
-It is released in **four nested stringency tiers** (`unfiltered ⊃ tolerant ⊃
-moderate ⊃ strict`) so users can trade quantity for quality.
-
-| tier | scored records | unique-seq training reps |
-|---|---:|---:|
-| unfiltered | 16,851 | 5,803 |
-| tolerant | 15,080 | 5,466 |
-| moderate | 11,159 | 4,520 |
-| strict | 4,108 | 1,895 |
-
-Pipeline version: `trizod-09340c7`, `--rereference-mode both`. Dataset
-release: `2026-08`.
-
-> Tier membership is **not** comparable to release `2026-07` (v0.3.0)
-> record-for-record — that release predates the filtering corrections listed in
-> the bundle changelog (`bundle-README.md`). The `unfiltered` tier is the
-> identical record set; `tolerant`/`moderate` lose a net 253/131 records and
-> `strict` gains a net 599. The **test sets are deliberately kept comparable**
-> (§4).
+**Who created it?** The TriZOD authors (`CITATION.cff`), Technical University of
+Munich and Helmholtz Munich. The code is at {{repository}}.
 
 ## 2. Composition
 
-Four layers are shipped:
+**Instances.** One row per scored protein chain of a BMRB chemical-shift list
+({{n_rows}} rows, {{n_columns}} columns): its sequence and, per residue, the
+TriZOD **G-score** (0–1, higher = more disordered; the label), the CheZOD
+Z-score, the shift count `k` and a boolean `mask`. Rows also carry sample
+conditions, rule flags, referencing offsets, assembly composition, UniProt/PDB
+cross-references and the split columns. The companion
+`trizod_shifts.parquet` holds {{n_shifts}} assigned shifts over
+{{n_shift_chains}} chains.
 
-1. **Per-residue scores (the labels)** — `scores/<tier>/scores.json` (JSONL).
-   One record per `ID = entryID_stID_entity_assemID_entityID`. Key fields:
-   - `seq` — amino-acid sequence (1-letter).
-   - `zscores`, `gscores`, `k` — per-residue lists **aligned 1:1 to `seq`**
-     (`null` where no shift is available; `k` = number of weighted secondary
-     shifts contributing to that residue).
-   - `off_<atom>_sigma` / `lacs_off_<atom>_ppm` / `total_off_<atom>_ppm` —
-     POTENCI/AIC residual and LACS offsets per backbone atom (C, CA, CB, H, HA,
-     HB, N), plus their ppm total. **Three different units**:
-     `lacs_off_<atom>_ppm` is ppm, `off_<atom>_sigma` is in sigma units
-     (multiples of the per-atom POTENCI RMSD `REFINED_WEIGHTS[atom]`), and
-     `total_off_<atom>_ppm = lacs_off_<atom>_ppm + off_<atom>_sigma ×
-     REFINED_WEIGHTS[atom]` is the ppm quantity to subtract from a deposited
-     shift — see §6.
-   - conditions (`pH`, `temperature`, `ionic_strength`, and `pressure_bar` —
-     sample pressure in bar, null when not recorded; >= 400 bar is excluded
-     from tolerant up since 2026-11), counts,
-     citation.
-   - **sample-state annotation** (new): `physical_state` (the depositor's
-     `_Entity_assembly.Physical_state`), `cosolvent_evidence` (does the entry
-     independently name a perturbing cosolvent?), `sample_state_evidence`
-     (`solution` / `solid` / `unknown`) and `membrane_mimetic` (matched
-     detergent/lipid tokens). Only `physical_state` participates in a filter;
-     the rest are annotation. See `docs/filtering.md`.
-2. **Redundancy-reduced training sets** — `train/<tier>/`:
-   - `train_<tier>_best.fasta` — **canonical**: one sequence per mmseqs cluster,
-     represented by the highest-quality member.
-   - `train_<tier>.fasta` — paper-faithful mmseqs cluster representatives.
-   - `clusters_best.tsv` / `clusters.tsv` — cluster membership (`repr`,`member`).
-3. **Single-table Parquet** — `trizod_dataset.parquet`, one row per chain
-   (16,851 rows × 70 columns), encoding every published view through the
-   ordinal/categorical columns `split` (train 5,803 · excluded 8,175 ·
-   redundant 2,298 · test_trizod 460 · test_chezod117 115; since 2026-11 also
-   `test_retired`, see §4), `train_tier`
-   (strict 1,895 · moderate 2,625 · tolerant 946 · unfiltered 337),
-   `pool_tier`, `cluster_repr` and `label_tier`, plus the sample-state and
-   assembly-composition annotation columns, and per-chain UniProt / PDB
-   cross-references (`xrefs`, `uniprot_ids`, `uniprot_source`, `pdb_ids`)
-   from the same NMR-STAR snapshot plus three dated public files (BMRB's
-   BMRB–PDB match list, wwPDB SEQRES, SIFTS), each link labelled `exact`
-   (same deposition), `author` (depositor-supplied), `sifts` (UniProt of the
-   sequence-matched chain of the entry's own or a depositor-named structure), `unspecified` or
-   `blast` (BMRB annotator BLAST hit, with identity and coverage) — see the
-   bundle README. Rows are sorted by
-   `(entry_id, id)` in string order and written in 500-row groups with min/max
-   statistics, so a filter on `entry_id` reads one row group.
-4. **Chemical-shift companion** — `trizod_shifts.parquet`, **11,839,037**
-   assigned shifts **on canonical residues**, backbone *and* side chain, over
-   all 16,851 chains (12,643 of which have side-chain assignments), one row per
-   `(chain, residue, atom)` and joining on `id`. 8,380,186 rows are backbone
-   (3,789,493 ¹H, 3,263,875 ¹³C, 1,326,818 ¹⁵N) and 3,458,851 side chain
-   (2,449,316 ¹H, 946,575 ¹³C, 62,960 ¹⁵N). `val_ppm` is **exactly as
-   deposited**; `val_corrected_ppm` carries the re-referenced value where one
-   demonstrably transfers and is **NULL** — never a copy of `val_ppm` — where it
-   does not, with `offset_source` naming the regime (§6). Shifts on
-   **non-canonical** residues are **not** included: 16,502 values (0.139 % of
-   the 11,855,542 deposited values) on 290 distinct `Comp_ID`s across 1,050
-   chains, including every PTM (HYP, SEP, TPO, PTR, TYS, ALY, MLY, M3L),
-   non-standard residues (ORN, AIB, ABA, NLE, DPR, PCA) and terminal/lipid
-   groups (ACE, NH2, MYR). They are dropped because `seq_id` would not index the
-   released `sequence`; read them from the BMRB entry if you need them. Every
-   C, CA, CB and N shift also carries the far-outlier flag `mad_z` /
-   `is_far_outlier` (§6).
+**Tiers.** Four nested stringency tiers, `unfiltered ⊃ tolerant ⊃ moderate ⊃
+strict`, trade quantity for quality (filters: `docs/filtering.md` of the code
+repository):
 
-Held-out **test sets** (`test/`): `CheZOD117_test_set.fasta` (115 seq) and
-`TriZOD_test_set.fasta` (460 seq), with per-residue targets obtainable from the
-corresponding score records by `ID`.
+{{tier_table}}
 
-## 3. How it was built (provenance)
+**Splits.**
 
-1. **Source**: BMRB NMR-STAR v3 entries (17,388), parsed with integrity checks;
-   16,963 parse into usable entries.
-2. **Filtering** (4 tiers): temperature / pH / ionic-strength windows, peptide
-   length, backbone-shift coverage minima, non-canonical/X caps, experiment
-   method (solution NMR only at strict, with a `sample_state_evidence` fallback
-   for the ~24 % of entries that declare no method subtype), paramagnetic-sample
-   exclusion, keyword & perturbing-cosolvent blacklists, and an exact-match
-   `_Entity_assembly.Physical_state` deny list. Keyword matching is scoped to
-   sample-descriptive fields, not the paper-topic metadata. See
-   `docs/filtering.md` for the per-tier defaults and the measured per-filter
-   losses.
-3. **Re-referencing**: LACS pre-correction (validated against 6,692 BMRB LACS
-   reports) followed by POTENCI/AIC residual offset correction.
-4. **Scoring**: per-residue Z-score and G-score.
-5. **Bound-complex removal**: drop entries with >1 distinct protein entity in
-   any assembly, or any non-polymer (ligand) / nucleic-acid / metal entity
-   (homo-oligomers kept; a `water` entity does **not** count as an assembly
-   member) — 4,559 of 16,963 cached entries (26.9 %) are flagged.
-6. **Length filter**: drop sequences < 20 residues.
-7. **Exact-sequence dedup**: keep the highest-`quality_score` record per
-   identical sequence, where
-   `quality_score = tier_rank·10⁶ + (n_bb_pos × n_bb_types) − max|POTENCI residual|`.
-8. **Redundancy reduction (mmseqs2)**, verbatim from the original TriZOD report
-   (common options `--alignment-mode 3 --cov-mode 0 -s 7.5 --comp-bias-corr 0
-   --mask 0`): test-set leakage removal against CheZOD117 + TriZOD-460 in **two
-   stages** — stage-1 cluster-membership removal (cluster the superset with the
-   test sequences and drop any training sequence sharing a cluster with a test
-   sequence, 30% id / 80% cov of both) then stage-2 `easy-search`, which drops a
-   training chain at ≥ 30% identity over ≥ 80% of the test chain or of the
-   training chain (rule `either`), at E ≤ 10⁻³ against the test chains — followed by
-   `cluster` strict @ 50/80 and iterative `clusterupdate`
-   moderate→tolerant→unfiltered so shared sequences keep the strict-tier
-   representative.
-9. **Quality-best override** of cluster representatives (`train_<tier>_best`).
+{{split_table}}
 
-The TriZOD test set is a **pinned** set of strict-tier sequences, re-resolved
-against the current strict pool by `trizod dataset test-set` (`--redraw` re-runs the seeded draw and
-overwrites the pin). Reproduce the whole release with `scripts/build_dataset.sh`
-(chains `trizod dataset build` → `test-set` → `redundancy` →
-`representatives` → `package`).
+**Test sets.** {{test_set_label}} (`split == "test_trizod"`), drawn from the
+strict tier with a fixed seed and pinned; retired chains ({{retired_by_reason}})
+stay leakage targets and are not tested on. CheZOD117 ({{n_chezod117}}
+BMRB-mapped chains of the 117) is the external benchmark. CheZOD117 chains are
+not filtered on sample conditions (known issues).
 
-## 4. Splits and the leakage guarantee
+**Labels and missing values.** A residue is scored where `mask` is true; G and
+Z are NaN where it is false (null in `scores.json`, 999 in the UdonPred view and
+the deploy FASTA). Terminal residues, residues without enough backbone shifts,
+and residues whose atom types an offset rejected are unscored. A shift count
+`k > 0` does not imply a score. {{share_k_lt_10}} of the {{scored_residues}}
+scored residues have k < 10.
 
-Every `train_<tier>` set is **redundancy-reduced against CheZOD117 (the
-released chains and the 117 original sequences), the TriZOD test set and the
-retired test chains** at 30% identity / 80% coverage of either chain and ≥ 27
-bits, searched in both directions (since 2026-11-17; until then E ≤ 10⁻³ with
-the training chains as queries — see `dataset-construction.md`, "The
-significance condition"), in two stages
-(cluster-membership removal + `easy-search`); 1,381 / 1,341 / 1,183 / 714
-training sequences are dropped per tier (of which 159 / 152 / 129 / 54 are
-transitive leaks caught only by stage-1). The TriZOD test set is itself
-constructed (with a fixed seed) from strict-tier clusters containing no CheZOD
-sequence (CheZOD117 and CheZOD1325). Therefore a model trained on any
-`train_<tier>` set can be evaluated on CheZOD117 (or the TriZOD test set)
-**with no train/test leakage** — the basis for the UdonPred benchmark. The
-training sets are *not* reduced against the larger CheZOD1325 set, which enters
-only the test-set selection; evaluating on CheZOD1325 is therefore not
-leakage-free. A release-time gate in `package_release.py` asserts that no test
-ID or exact test sequence appears in any training set; it passes with **0 shared
-IDs and 0 exact-sequence matches** against 575 test sequences.
+**Class balance.**
 
-**Test-set stability across releases.** The TriZOD test set was **redrawn**
-for this release, so it is NOT ID-comparable with v0.3.0's 365-chain set —
-numbers computed against that set must be regenerated. v0.3.0's pin came from a
-strict pool the filter corrections dissolved; resolving it forward left 364
-chains of which 17 no longer met strict criteria, one needed an ID substitution
-and one was dropped at 70 % TFE, so it was redrawn by the original seeded recipe
-once the filter policy was final: **460 sequences**, all strict.
+{{class_balance_table}}
 
-The result is pinned at `trizod/dataset/pinned/TriZOD_test_set.fasta` (seed 42,
-sample fraction 0.25, redrawn 2026-08-11) and re-resolved **by sequence**
-against the current strict pool at every rebuild, so entry IDs stay valid as
-the snapshot evolves (until 2026-11 the pool was tolerant). A pinned sequence
-that no longer meets strict is retired: listed in `TriZOD_test_retired.fasta`
-and as `split = test_retired` in the Parquet, not tested on, but still a
-leakage target, so training is what it would be with the full pin. Since
-2026-11-17 a strict chain is also retired when it meets the leakage criterion
-against CheZOD117 (`chezod117_overlap`; `19481_1_1_1` contains CheZOD117 19482)
-or is the shorter of two test chains at ≥ 50 % identity over ≥ 80 % of either
-chain (`within_test_duplicate`; `6439_1_1_1` inside `6440_1_1_1`); the reason is
-in the labels table and the Parquet column `retired_reason`. The test set is
-CheZOD-disjoint at cluster level, not "CheZOD-free": `chezod1325_overlap` and
-`chezod1174_overlap` mark the test chains a CheZOD-trained predictor has seen
-relatives of. In this release all 460 resolve, 0 are dropped, 0 are
-ID-substituted and all 460 still satisfy `strict`. `TriZOD_test_set_labels.tsv`
-(`test_id`, `pinned_id`, `substituted`, `label_tier`, `length`) ships beside the
-test FASTA: `label_tier` records the strictest tier each test chain still
-passes, so a later filter change that demotes a chain is visible rather than
-silent, and any ID-based join against another release can be repaired through
-it.
+{{class_balance_notes}}
 
-## 5. Recommended use
+**Is anything confidential or about people?** No. The data describe proteins;
+no personal data are involved. Annotator demographics: not applicable.
 
-- **Training a sequence→disorder predictor**: use `train_<tier>_best.fasta` as
-  inputs and the matching `scores/<tier>/scores.json` records (joined by `ID`)
-  for per-residue targets. Use the **G-score** as the target (k-independent,
-  0–1); mask residues where `k == 0` / the target is `null`.
-- **Tier choice**: `moderate` balances size and quality; `strict` is cleanest;
-  `unfiltered` is largest/noisiest. Tiers are nested.
-- **Cluster-aware CV**: group by cluster from `clusters_best.tsv`.
+## 3. Collection
 
-## 6. Limitations & caveats
+**Source.** BMRB NMR-STAR v3 entries, snapshot `{{snapshot_name}}`
+({{snapshot_n_entries}} entries, retrieved {{snapshot_retrieved}}, entry-list
+SHA-256 `{{entry_list_sha256}}`). BMRB offers no versioned access to single
+entries, so `bmrb_files.sha256` records the SHA-256 of every entry file read.
+UniProt/PDB links also come from three dated public files (BMRB's BMRB–PDB match
+list, wwPDB SEQRES, SIFTS), pinned by SHA-256 in the Parquet metadata
+`xref_sources` and in `MANIFEST.json`.
 
-- Z-scores are unbounded below and their magnitude grows with shift count `k`
-  (encodes NMR experiment coverage); prefer G-scores as a training target.
-- CheZOD117 here is 115 BMRB-mapped sequences (2 of 117 did not map cleanly at
-  95% id / 90% cov).
-- Homo-oligomers are retained and may carry inter-chain shift perturbations.
-  `n_entity_assembly_rows` and `n_copies` let you filter them, but `n_copies` is
-  **both an under- and an over-count**: under-annotated homodimers list a single
-  `_Entity_assembly` row, while alternative-conformer depositions (cis/trans,
-  major/minor, folded/unfolded) list several rows for one molecule. It is not a
-  stoichiometry guarantee in either direction; `has_conformational_isomer` marks
-  the rows where the ambiguity is known to apply.
-- `physical_state` is depositor free text with a long tail (47 distinct non-null
-  values). The deny list is an **exact** match, so a new spelling silently stops
-  matching; the pipeline logs a warning for any unrecognised value occurring on
-  ≥ 5 rows.
-- Membrane mimetics (SDS, DPC, bicelles, nanodiscs, …) are annotated at every
-  tier and, since 2026-11, **excluded from moderate and strict** by the class
-  rule of `trizod/bmrb/membrane.py` (`docs/filtering.md`). Its recall is limited
-  by what the deposition states: a mimetic named only in a title is caught only
-  for the entries reviewed into `trizod/dataset/data/membrane_overrides.tsv`.
-- Sequences hold the 20 standard residues plus X, U and Z (see
-  `dataset-construction.md` §8).
-- **`trizod_shifts.parquet` is re-referenced in three different regimes**, and
-  `offset_source` is the column that tells you which one a row is in. `val_ppm`
-  is always as deposited; `val_corrected_ppm = val_ppm − offset_applied_ppm`.
-  1. **Backbone** (8,380,186 rows) — the full correction the scorer used,
-     `total_off_<atom>_ppm`. Degenerate partners (HB2/HB3, ALA HB1, GLY HA2/HA3)
-     carry the offset of the slot the scorer averages them into (HB, HA). Every
-     backbone row in this release has a corrected value.
-  2. **Side-chain ¹³C** (946,575 rows) — **LACS only**, `val_ppm −
-     lacs_off_CA_ppm`. The POTENCI residual is *not* propagated: it is a bias in
-     the backbone-vs-POTENCI comparison rather than a spectrometer referencing
-     error, and its transfer slope to side chains is only 0.093 (CA) / 0.081
-     (CB) / 0.050 (C). The LACS carbon offset transfers at β = 0.785
-     [0.767, 0.806] and lowers side-chain ¹³C MSE ×0.79 (RMSE 0.919 → 0.818
-     ppm); an offset helps iff β > 0.5.
-  3. **Side-chain ¹H and ¹⁵N** (2,512,276 rows) — **left RAW**, with
-     `val_corrected_ppm` NULL and `offset_source = 'not_transferable'`. Applying
-     the backbone offset measurably *inflates* the error (MSE ×1.131 for ¹H,
-     ×1.075 for ¹⁵N; β = 0.079 [0.057, 0.102] and 0.366 [0.330, 0.407] against a
-     0.5 break-even; PANAV and an IV disattenuation put ¹⁵N at 0.394 and 0.499
-     [0.430, 0.555], i.e. at the break-even, not above it). This is a positive
-     finding about *transfer*, not an absence of signal: a real per-chain
-     side-chain ¹H referencing constant exists (split-half reliability 0.812),
-     but the backbone amide offset explains only 1.3 % of its variance.
+**Who measured the data?** The depositors of each BMRB entry; citations are in
+`citation_title` and `citation_doi`.
 
-  Side-chain ¹³C is additionally withheld (NULL, `not_transferable`) on the 13
-  chains with |`lacs_off_CA_ppm`| > 5 ppm — 927 rows over the 9 of them that
-  carry side-chain carbons — because only 5 of those 9 demonstrably transfer and
-  the difference cannot be adjudicated per chain.
-- `max-offset` filtering removes large post-LACS residuals (3/3/2 per tier).
-  The threshold is compared against `off_<atom>_sigma`, which is in **sigma
-  units** (multiples of the per-atom POTENCI RMSD), **not ppm**:
-  `off_<atom>_sigma` is the mean of
-  `(observed − POTENCI) / REFINED_WEIGHTS[atom]`. A `max-offset` of 3 is
-  therefore ~0.59 ppm for CA and ~0.08 ppm for HA. 1,433 of the 16,851
-  unfiltered records (8.5 %) exceed 3 sigma on some atom after LACS and are
-  flagged.
-  `lacs_off_<atom>_ppm`, by contrast, **is** raw ppm — it is subtracted directly
-  from the deposited shifts. Do not add the two columns together (up to 21.2 ppm
-  of error); subtract the published `total_off_<atom>_ppm` instead.
-- Scores reflect the deposited shifts and conditions; re-referencing corrects
-  systematic referencing errors but cannot fix fundamentally wrong depositions.
-- **Gross deposition errors are flagged, not removed.** 5,807 backbone
-  heavy-atom shifts (0.13 % of 4,589,165) in 1,674 chains lie beyond Sandro
-  Kuppel's limits of 8 raw MADs (C, CA, N) or 12 (CB) from their residue × atom
-  median and carry `is_far_outlier = true` in `trizod_shifts.parquet`; 1,848 of
-  them are in 512 strict-tier chains. They still feed the scores, where the
-  per-atom deviation cap bounds their pull. Protons, side chains and the
-  N-terminal amine are not assessed (NULL): a naive side-chain flag would also
-  catch real physics, such as paramagnetic shifts and folded Arg Nε peaks. The
-  medians and MADs are frozen in `trizod/shifts/mad_reference.csv`.
+## 4. Preprocessing and labelling
 
-## 7. Licensing & citation
+1. **Parse** every entry with integrity checks; read the sample conditions of
+   the shift list's own condition list. A trailing non-letter of a deposited
+   sequence is dropped, an internal one becomes X.
+2. **Filter** per tier: temperature, pH and ionic-strength windows, backbone-shift
+   coverage, non-canonical residue caps, experiment method, paramagnetic
+   samples, keyword and perturbing-cosolvent lists, the `Physical_state` deny
+   list, and the 2026-11 condition rules (pressure ≥ 400 bar out of tolerant and
+   up; membrane-mimetic samples out of moderate and strict; strict ionic
+   strength ≤ 0.5 M; a deposited 273 K read as not deposited).
+3. **Re-reference** with LACS, then a POTENCI/AIC residual offset
+   (`--rereference-mode both`).
+4. **Score** each residue: Z-score and G-score against POTENCI random-coil
+   predictions (machine annotation: POTENCI, LACS, the G-score).
+5. **Build the training sets**: remove bound complexes and chains under 20
+   residues, keep the best record per exact sequence, separate every training
+   chain from the test sets (stage 1: no shared 30 %/80 % cluster; stage 2: no
+   alignment at {{leakage_rule}}, mmseqs2), cluster at 50 %/80 % and keep the
+   quality-best member per cluster.
+6. **Gate** the packaged bundle: no training or redundant row shares an ID, a
+   sequence, an exact substring of ≥ 20 residues, or an alignment under the same
+   rule with any test sequence.
 
-License: MIT (see repository). Derived from BMRB (https://bmrb.io/).
-Cite via `CITATION.cff`; dataset DOI: *pending first Zenodo deposit*.
+**Cuts on G** (metadata, not label columns): ordered G < {{cut_ordered}},
+disordered G ≥ {{cut_disordered}} (the binary call), confidently disordered
+G ≥ {{cut_confident}}; {{cut_rule}}. Each is the smallest G at which the
+posterior of disorder reaches 0.10, 0.50 or 0.90 on {{calibration_set}}, where
+π = {{calibration_pi}}:
 
-## 8. Files
+{{calibration_table}}
 
-See `MANIFEST.json` in the bundle for the exact file list with byte sizes,
-SHA-256 checksums, and record/sequence counts. Layout:
+Threshold framework commit `{{framework_commit}}`, results.json SHA-256
+`{{results_sha256}}`. Because a fixed cut is a fixed likelihood ratio, the
+posterior at a cut depends on the prevalence of the set it is applied to: see
+the per-split π and posteriors in the class-balance table.
 
-```
-trizod-dataset-<version>/
-├── README.md                     (the shipped datasheet + changelog)
-├── MANIFEST.json
-├── train/<tier>/                 train_<tier>_best.fasta, train_<tier>.fasta,
-│                                 clusters_best.tsv, clusters.tsv
-├── scores/<tier>/scores.json     per-residue Z/G/k + offsets (the labels)
-├── test/                         CheZOD117_test_set.fasta, TriZOD_test_set.fasta
-├── trizod_dataset.parquet        the whole release as one table (70 columns)
-└── trizod_shifts.parquet         every assigned shift on a canonical residue,
-                                  backbone + side chain, raw and re-referenced
-```
+**Raw data.** The deposited shifts ship in `trizod_shifts.parquet` (`val_ppm`,
+exactly as deposited) beside the re-referenced value.
 
-`MANIFEST.json` covers the FASTA/JSON layer (24 files, 139,790,629 bytes); the
-two Parquet files are built from it afterwards by
-`scripts/build_parquet_dataset.py`.
+## 5. Uses
 
-The re-referenced backbone-shift NMR-STAR (`.str`) files (~1.4 GB) are an
-optional separate component for NMR users (`--include-str`).
+**Intended.** Training and evaluating sequence-based disorder predictors on the
+continuous G-score; selecting cleaner subsets by tier; benchmarking on
+{{test_set_name}} and CheZOD117; NMR-side analyses of re-referenced shifts.
 
-## 9. Changelog
+**Recommended practice.**
 
-Release `2026-08` follows an external review of the filtering code by **Sandro
-Kuppel (Helmholtz Munich)**, with input from **Reid Alderson** and **Iva
-Pritisanac**. The full changelog — six filter-behaviour corrections, the policy
-changes, the new columns, the complete chemical-shift companion and the offset
-columns renamed for unit safety (`off_<a>` → `off_<a>_sigma`, `lacs_off_<a>` →
-`lacs_off_<a>_ppm`, plus the new `total_off_<a>_ppm`) — is in
-`bundle-README.md`, which ships as the bundle `README.md` and doubles as the
-Zenodo description.
+- Train on `gscores` with `mask`; default tier tolerant
+  ({{n_train_tolerant}} training representatives); group cross-validation by
+  `cluster_repr`.
+- Weight or filter by `k` if label reproducibility matters: replicate agreement
+  {{k_kappa}}; disordered-zone flip rate {{k_flip}}.
+- Report pooled and per-chain Spearman, AUC at G ≥ {{cut_disordered}} on all,
+  confident-only and k ≥ 10 residues, with chain- or cluster-level resampling.
+- Compare with an earlier model only on the clean subset (README, "Earlier test
+  sets are not comparable"); CheZOD-trained predictors on the test chains whose
+  `chezod1325_overlap` / `chezod1174_overlap` is false.
+
+**Not intended.** As a structural ground truth for single residues: the G-score
+summarises the solution ensemble under the deposited conditions. Strict-tier
+performance estimates performance under native conditions, not under
+denaturants, high pressure or in membrane mimetics.
+
+## 6. Limitations
+
+- Labels depend on the deposited sample conditions and metadata, which carry
+  errors (CHANGELOG, known issues): pH* and pD stored as pH, Celsius entered as
+  kelvin, pressure unit errors, ionic strength contradicting the sample.
+- Z-scores grow with `k`; prefer G.
+- Homo-oligomers are retained; `n_copies` is a conservative bound, not a
+  stoichiometry.
+- `membrane_mimetic_sample` is false also when no sample component could be
+  read; recall is limited by what the deposition states.
+- About a sixth of the training residues come from uniformly ²H-labelled
+  protein, whose isotope shifts are not corrected; some labelled residues lie
+  outside the UniProt-aligned span (tags).
+- Homology between training and test is controlled at {{leakage_rule}}, not
+  eliminated; nearly every sequence is in the corpora protein language models are
+  pretrained on.
+- **Offsets come in three units.** `off_<atom>_sigma` is in multiples of the
+  per-atom POTENCI RMSD (`--max-offset` is compared against it),
+  `lacs_off_<atom>_ppm` is ppm, and `total_off_<atom>_ppm =
+  lacs_off_<atom>_ppm + off_<atom>_sigma × REFINED_WEIGHTS[atom]` is the ppm
+  total to subtract from a deposited shift. Never add the first two.
+- **Side-chain shifts are re-referenced in three regimes** (`offset_source`):
+  backbone shifts get the full offset the scorer used; side-chain ¹³C only the
+  LACS offset, which transfers to side chains (measured on the 2026-08 build:
+  slope β ≈ 0.79, lowering side-chain ¹³C error), while the POTENCI residual does
+  not (β < 0.1); side-chain ¹H and ¹⁵N stay raw, because applying the backbone
+  offset increased their error (β ≈ 0.08 and 0.37, below the 0.5 break-even).
+  Side-chain ¹³C is withheld on chains with |`lacs_off_CA_ppm`| > 5 ppm.
+- **Gross deposition errors are flagged, not removed**: C, CA, CB and N shifts
+  beyond 8 (12 for CB) raw MADs of their residue × atom median carry
+  `is_far_outlier`; the reference medians are frozen in the code repository.
+
+## 7. Distribution and licence
+
+Zenodo, concept DOI {{concept_doi}} (cite the version DOI of the record you
+downloaded; `CITATION.cff`). Data: {{data_license}} ({{data_license_url}}).
+Code: {{code_license}}, {{repository}}. {{bmrb_acknowledgement}}
+
+Integrity: `MANIFEST.json` lists every file with SHA-256, size and counts;
+`sha256sum -c SHA256SUMS` checks a download. Built by TriZOD `{{code_commit}}`.
+
+## 8. Maintenance
+
+The test set may only shrink: a chain that no longer qualifies is retired and
+stays a leakage target. A recalibration of the cuts changes the metadata and
+the documentation, not the labels. Every version is a separate Zenodo record
+with its own DOI and a `CHANGELOG.md` entry; issues go to {{repository}}.

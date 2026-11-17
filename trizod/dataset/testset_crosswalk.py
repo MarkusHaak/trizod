@@ -330,8 +330,10 @@ def run(sets, release_rows, out, release_source: dict) -> dict:
             "train": "a training representative (train_tier: strictest tier)",
             "redundant": "in a training pool, clustered (50 %/80 %) under a "
             "training representative (release_cluster_repr)",
-            "retired": "split == test_retired: pinned test chain that no longer "
-            "meets strict; neither test nor training",
+            "retired": "split == test_retired: pinned test chain retired "
+            "(retired_reason: not_strict, chezod117_overlap or "
+            "within_test_duplicate); neither test nor training, still a "
+            "leakage target",
             "excluded": "scored but in no tier's training pool",
             "absent": "no release row has this exact sequence",
             "priority": list(STATUS_PRIORITY),
@@ -346,6 +348,36 @@ def run(sets, release_rows, out, release_source: dict) -> dict:
     }
     (out / "test_set_crosswalk.json").write_text(json.dumps(payload, indent=2) + "\n")
     return payload
+
+
+def load_sets(specs, repo: Path | None = None) -> list[HeldOutSet]:
+    """The earlier sets of ``specs`` (``(name, source spec, description)``,
+    e.g. :func:`default_set_specs`), each with its source checksum."""
+    repo = Path(repo or paths.repo_root())
+    sets = []
+    for name, spec, desc in specs:
+        kind, _, loc = spec.partition(":")
+        if kind in ("fasta", "parquet") and not Path(loc).is_file():
+            raise SystemExit(
+                f"{name}: {loc} not found -- pass --root <checkout with data/> "
+                "or --set NAME=SPEC"
+            )
+        source = {"spec": spec, **describe_source(spec, repo)}
+        sets.append(HeldOutSet(name, desc, source, load_source(spec, repo)))
+    return sets
+
+
+def run_on_parquet(sets, parquet, out, release_path: str | None = None) -> dict:
+    """:func:`run` against a release Parquet; ``release_path`` is how the JSON
+    names it (default: its resolved path)."""
+    parquet = Path(parquet)
+    release_rows, meta = read_release(parquet, columns=_RELEASE_COLUMNS)
+    release_source = {
+        "path": release_path or str(parquet.resolve()),
+        "sha256": hashlib.sha256(parquet.read_bytes()).hexdigest(),
+        "split_values": meta.get("split_values"),
+    }
+    return run(sets, release_rows, out, release_source)
 
 
 def main(argv=None) -> None:
@@ -384,25 +416,9 @@ def main(argv=None) -> None:
     else:
         specs = default_set_specs(args.root or repo)
 
-    sets = []
-    for name, spec, desc in specs:
-        kind, _, loc = spec.partition(":")
-        if kind in ("fasta", "parquet") and not Path(loc).is_file():
-            raise SystemExit(
-                f"{name}: {loc} not found -- pass --root <checkout with data/> "
-                "or --set NAME=SPEC"
-            )
-        source = {"spec": spec, **describe_source(spec, repo)}
-        sets.append(HeldOutSet(name, desc, source, load_source(spec, repo)))
-
-    release_rows, meta = read_release(args.parquet, columns=_RELEASE_COLUMNS)
-    release_source = {
-        "path": str(args.parquet.resolve()),
-        "sha256": hashlib.sha256(args.parquet.read_bytes()).hexdigest(),
-        "split_values": meta.get("split_values"),
-    }
+    sets = load_sets(specs, repo)
     out = args.out or args.parquet.parent / "crosswalk"
-    payload = run(sets, release_rows, out, release_source)
+    payload = run_on_parquet(sets, args.parquet, out)
 
     print(f"Wrote test-set crosswalk ({payload['n_sequences']} sequences) -> {out}")
     print(f"  match: {MATCH_RULE}")

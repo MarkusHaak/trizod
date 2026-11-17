@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Assemble the TriZOD dataset release bundle for Zenodo.
+"""Stage the TriZOD package bundle and run the release leakage gate.
 
-Gathers the canonical training sets, per-residue score labels, frozen test
-sets, and the datasheet into a single staging directory, and writes a
-``MANIFEST.json`` with byte sizes, SHA-256 checksums and record/sequence
-counts for every file.
+Gathers the canonical training sets, per-residue score labels and frozen test
+sets into a single staging directory, and writes a ``MANIFEST.json`` with
+byte sizes, SHA-256 checksums and record/sequence counts for every file. The
+bundle is the input of ``scripts/build_parquet_dataset.py`` (the release
+Parquet) and of ``trizod dataset finalize`` (:mod:`trizod.dataset.finalize`),
+which assembles the deposit -- Parquet, views, test FASTAs, rendered README /
+datasheet / CHANGELOG and one MANIFEST over all of it.
 
 Core bundle (~115 MB):
   train/<tier>/   train_<tier>_best.fasta (canonical), train_<tier>.fasta,
@@ -15,7 +18,6 @@ Core bundle (~115 MB):
                   targets), TriZOD_test_set.fasta, TriZOD_test_retired.fasta
                   (retired test chains: leakage targets, not tested on),
                   TriZOD_test_set_labels.tsv
-  README.md       (the datasheet)
   MANIFEST.json
 
 Optional (--include-str, ~1.4 GB): str/<tier>/  re-referenced NMR-STAR files.
@@ -31,7 +33,7 @@ Usage
         [--work-dir DIR] [--root DIR] [--leakage-rule {test,either}]
 
 The output directory defaults under the work dir (gitignored). Nothing is
-uploaded; this only stages files locally for a manual Zenodo deposit.
+uploaded.
 
 Before the manifest is written, a leakage gate checks the staged bundle and
 fails the step when any training record -- every record of every
@@ -80,13 +82,14 @@ from trizod.dataset.mmseqs import (
     read_leakage_record,
 )
 from trizod.dataset.paths import resolve_paths
+from trizod.dataset.release_info import DATASET_VERSION
 from trizod.dataset.testset import RETIRED_FASTA
 from trizod.io.fasta import count_fasta, read_fasta, write_fasta
 from trizod.provenance import file_sha256, pipeline_version
 from trizod.shifts import SHIFTS_PARQUET_NAME
 
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]
-DEFAULT_VERSION = "2026-07"
+DEFAULT_VERSION = DATASET_VERSION
 #: Bundle name of the original CheZOD117 sequences (``paths.chezod117_original``).
 CHEZOD117_ORIGINAL_FASTA = "CheZOD117_original_sequences.fasta"
 
@@ -484,10 +487,8 @@ def main(argv=None) -> None:
 
     planned: list[tuple[Path, str]] = []  # (source, relative path in bundle)
 
-    # Compact dataset README -> README.md
-    if not paths.bundle_readme.exists():
-        raise SystemExit(f"bundle README not found: {paths.bundle_readme}")
-    planned.append((paths.bundle_readme, "README.md"))
+    # No README here: docs/dataset/bundle-README.md is a template that
+    # `trizod dataset finalize` renders with this build's counts.
 
     trizod_test = paths.testset / "TriZOD_test_set.fasta"
     for tier in TIERS:
@@ -566,8 +567,8 @@ def main(argv=None) -> None:
         manifest.update(record_entry(rel, dst))
         total += dst.stat().st_size
 
-    # Release gate: enforce the train/test leakage guarantee on the staged
-    # bundle before it can be deposited, under the rule the build used.
+    # Release gate: check the staged bundle against the test sets under the
+    # rule the build used before it can be deposited.
     assert_no_leakage(bundle, rule)
 
     summary = {
