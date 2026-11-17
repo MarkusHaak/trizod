@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Modern disorder scores for BMRB data"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 authors = [
     { name = "Markus Haak", email = "markus.haak@tum.de" },
     { name = "Tobias Senoner", email = "tobias.senoner@tum.de" },
@@ -27,7 +27,7 @@ dependencies = [
     "pynmrstar>=3.5.0",
     "scipy>=1.13.1",
     "tqdm>=4.67.3",
-    "typer>=0.12,<0.24",
+    "typer>=0.13",
 ]
 
 # matplotlib is imported only by trizod/figures/ (manuscript figure generators);
@@ -51,7 +51,7 @@ markers = [
 addopts = "-m 'not slow'"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM"]
@@ -64,7 +64,15 @@ ignore = [
     "E741",   # ambiguous variable name (l, I, E — standard in scientific code)
     "E501",   # line too long (formatter handles what it can; remaining are data/strings)
     "SIM115", # open file with context handler (POTENCI CSV I/O)
+    # zip() without strict= (newly active at py310+). The existing zip() calls have
+    # not been audited for equal lengths; strict=True would raise where they
+    # currently truncate, so adopting it is a separate, behaviour-changing change.
+    "B905",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# str+Enum -> StrEnum would change str()/format() of the Typer CLI enums.
+"trizod/cli/main.py" = ["UP042"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["trizod"]

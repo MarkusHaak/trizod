@@ -13,7 +13,6 @@ import logging
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
 
 import numpy as np
 import typer
@@ -110,7 +109,7 @@ def score(
         "--no-shift-averaging",
         help="Do not average over Proton groups for HA and HB shifts.",
     ),
-    emit_str: Optional[str] = typer.Option(
+    emit_str: str | None = typer.Option(
         None,
         "--emit-str",
         help=(
@@ -123,68 +122,68 @@ def score(
         "--filter-defaults",
         help="Sets defaults for all filter options, from unfiltered to strict.",
     ),
-    temperature_range: Optional[tuple[float, float]] = typer.Option(
+    temperature_range: tuple[float, float] | None = typer.Option(
         None, "--temperature-range", help="Minimum and maximum temperature in Kelvin."
     ),
-    ionic_strength_range: Optional[tuple[float, float]] = typer.Option(
+    ionic_strength_range: tuple[float, float] | None = typer.Option(
         None,
         "--ionic-strength-range",
         help="Minimum and maximum ionic strength in Mol.",
     ),
-    ph_range: Optional[tuple[float, float]] = typer.Option(
+    ph_range: tuple[float, float] | None = typer.Option(
         None, "--pH-range", help="Minimum and maximum pH."
     ),
-    unit_assumptions: Optional[bool] = typer.Option(
+    unit_assumptions: bool | None = typer.Option(
         None,
         "--unit-assumptions/--no-unit-assumptions",
         help="Assume units for Temp., Ionic str. and pH if they are not given and exclude entries instead.",
     ),
-    unit_corrections: Optional[bool] = typer.Option(
+    unit_corrections: bool | None = typer.Option(
         None,
         "--unit-corrections/--no-unit-corrections",
         help="Correct values for Temp., Ionic str. and pH if units are most likely wrong.",
     ),
-    default_conditions: Optional[bool] = typer.Option(
+    default_conditions: bool | None = typer.Option(
         None,
         "--default-conditions/--no-default-conditions",
         help="Assume standard conditions if pH (7), ionic strength (0.1 M) or temperature (298 K) are missing and exclude entries instead.",
     ),
-    peptide_length_range: Optional[list[int]] = typer.Option(
+    peptide_length_range: list[int] | None = typer.Option(
         None,
         "--peptide-length-range",
         help="Minimum (and optionally maximum) peptide sequence length.",
     ),
-    min_backbone_shift_types: Optional[int] = typer.Option(
+    min_backbone_shift_types: int | None = typer.Option(
         None,
         "--min-backbone-shift-types",
         help="Minimum number of different backbone shift types (max 7).",
     ),
-    min_backbone_shift_positions: Optional[int] = typer.Option(
+    min_backbone_shift_positions: int | None = typer.Option(
         None,
         "--min-backbone-shift-positions",
         help="Minimum number of positions with at least one backbone shift.",
     ),
-    min_backbone_shift_fraction: Optional[float] = typer.Option(
+    min_backbone_shift_fraction: float | None = typer.Option(
         None,
         "--min-backbone-shift-fraction",
         help="Minimum fraction of positions with at least one backbone shift.",
     ),
-    max_noncanonical_fraction: Optional[float] = typer.Option(
+    max_noncanonical_fraction: float | None = typer.Option(
         None,
         "--max-noncanonical-fraction",
         help="Maximum fraction of non-canonical amino acids (X count as arbitrary canonical) in the amino acid sequence.",
     ),
-    max_x_fraction: Optional[float] = typer.Option(
+    max_x_fraction: float | None = typer.Option(
         None,
         "--max-x-fraction",
         help="Maximum fraction of X letters (arbitrary canonical amino acid) in the amino acid sequence.",
     ),
-    keywords_blacklist: Optional[list[str]] = typer.Option(
+    keywords_blacklist: list[str] | None = typer.Option(
         None,
         "--keywords-blacklist",
         help="Exclude entries with any of these keywords as a substring of a searched free-text field, case ignored. See --keyword-search-scope.",
     ),
-    keyword_search_scope: Optional[KeywordSearchScope] = typer.Option(
+    keyword_search_scope: KeywordSearchScope | None = typer.Option(
         None,
         "--keyword-search-scope",
         help=(
@@ -195,12 +194,12 @@ def score(
             "describe the publication rather than the NMR tube."
         ),
     ),
-    physical_state_blacklist: Optional[list[str]] = typer.Option(
+    physical_state_blacklist: list[str] | None = typer.Option(
         None,
         "--physical-state-blacklist",
         help="Exclude entries whose _Entity_assembly.Physical_state EXACTLY equals one of these values, case ignored.",
     ),
-    perturbing_cosolvents: Optional[list[str]] = typer.Option(
+    perturbing_cosolvents: list[str] | None = typer.Option(
         None,
         "--perturbing-cosolvents",
         help=(
@@ -213,23 +212,23 @@ def score(
             "glycerol are deliberately not in this family."
         ),
     ),
-    chemical_denaturants: Optional[list[str]] = typer.Option(
+    chemical_denaturants: list[str] | None = typer.Option(
         None,
         "--chemical-denaturants",
         hidden=True,
         help="DEPRECATED alias of --perturbing-cosolvents. Will be removed after one release.",
     ),
-    exp_method_whitelist: Optional[list[str]] = typer.Option(
+    exp_method_whitelist: list[str] | None = typer.Option(
         None,
         "--exp-method-whitelist",
         help="Include only entries with any of these keywords as substring of the experiment subtype, case ignored.",
     ),
-    exp_method_blacklist: Optional[list[str]] = typer.Option(
+    exp_method_blacklist: list[str] | None = typer.Option(
         None,
         "--exp-method-blacklist",
         help="Exclude entries with any of these keywords as substring of the experiment subtype, case ignored.",
     ),
-    method_fallback: Optional[MethodFallback] = typer.Option(
+    method_fallback: MethodFallback | None = typer.Option(
         None,
         "--method-fallback",
         help=(
@@ -241,7 +240,7 @@ def score(
             "are admitted only on positive solution evidence."
         ),
     ),
-    exclude_paramagnetic: Optional[bool] = typer.Option(
+    exclude_paramagnetic: bool | None = typer.Option(
         None,
         "--exclude-paramagnetic/--no-exclude-paramagnetic",
         help="Exclude entries flagged as paramagnetic in the BMRB assembly or entity metadata.",
@@ -265,7 +264,7 @@ def score(
             "detection only. 'both' (default): LACS pre-correction followed by POTENCI/AIC residual."
         ),
     ),
-    max_offset: Optional[float] = typer.Option(
+    max_offset: float | None = typer.Option(
         None,
         "--max-offset",
         help=(
@@ -274,7 +273,7 @@ def score(
             "ppm. Compared against the emitted off_<atom>_sigma column."
         ),
     ),
-    reject_shift_type_only: Optional[bool] = typer.Option(
+    reject_shift_type_only: bool | None = typer.Option(
         None,
         "--reject-shift-type-only/--no-reject-shift-type-only",
         help="Upon exceeding the maximal offset set by <--max-offset>, exclude only the backbone shifts exceeding the offset instead of the whole entry.",
@@ -460,8 +459,8 @@ def _wd_argv(work_dir, root):
 
 @dataset_app.command("build")
 def _dataset_build(
-    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
-    root: Optional[str] = typer.Option(None, "--root"),
+    work_dir: str | None = typer.Option(None, "--work-dir"),
+    root: str | None = typer.Option(None, "--root"),
     exclude_homo_oligomers: bool = typer.Option(
         False,
         "--exclude-homo-oligomers",
@@ -483,8 +482,8 @@ def _dataset_build(
 
 @dataset_app.command("test-set")
 def _dataset_testset(
-    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
-    root: Optional[str] = typer.Option(None, "--root"),
+    work_dir: str | None = typer.Option(None, "--work-dir"),
+    root: str | None = typer.Option(None, "--root"),
     redraw: bool = typer.Option(
         False,
         "--redraw",
@@ -518,9 +517,9 @@ _LEAKAGE_RULE_HELP = f"Stage-2 test-set leakage rule ({LEAKAGE_RULES_HELP})."
 
 @dataset_app.command("redundancy")
 def _dataset_redundancy(
-    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
-    root: Optional[str] = typer.Option(None, "--root"),
-    leakage_rule: Optional[LeakageRule] = typer.Option(
+    work_dir: str | None = typer.Option(None, "--work-dir"),
+    root: str | None = typer.Option(None, "--root"),
+    leakage_rule: LeakageRule | None = typer.Option(
         None,
         "--leakage-rule",
         help=(
@@ -540,8 +539,8 @@ def _dataset_redundancy(
 
 @dataset_app.command("representatives")
 def _dataset_representatives(
-    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
-    root: Optional[str] = typer.Option(None, "--root"),
+    work_dir: str | None = typer.Option(None, "--work-dir"),
+    root: str | None = typer.Option(None, "--root"),
 ):
     """Override mmseqs cluster reps with the quality-best cluster member."""
     from trizod.dataset import representatives
@@ -553,10 +552,10 @@ def _dataset_representatives(
 def _dataset_package(
     version: str = typer.Option("2026-07", "--version"),
     include_str: bool = typer.Option(False, "--include-str"),
-    out: Optional[str] = typer.Option(None, "--out"),
-    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
-    root: Optional[str] = typer.Option(None, "--root"),
-    leakage_rule: Optional[LeakageRule] = typer.Option(
+    out: str | None = typer.Option(None, "--out"),
+    work_dir: str | None = typer.Option(None, "--work-dir"),
+    root: str | None = typer.Option(None, "--root"),
+    leakage_rule: LeakageRule | None = typer.Option(
         None,
         "--leakage-rule",
         help=_LEAKAGE_RULE_HELP
@@ -582,9 +581,9 @@ def _dataset_deploy(
     tier: str = typer.Option("tolerant", "--tier"),
     val_fraction: float = typer.Option(0.0, "--val-fraction"),
     seed: int = typer.Option(42, "--seed"),
-    out: Optional[str] = typer.Option(None, "--out"),
-    work_dir: Optional[str] = typer.Option(None, "--work-dir"),
-    root: Optional[str] = typer.Option(None, "--root"),
+    out: str | None = typer.Option(None, "--out"),
+    work_dir: str | None = typer.Option(None, "--work-dir"),
+    root: str | None = typer.Option(None, "--root"),
 ):
     """Build the UdonPred-handoff deployment FASTA (per-residue G-score labels)."""
     from trizod.dataset import deploy_fasta
