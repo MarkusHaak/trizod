@@ -769,8 +769,9 @@ def render_readme(summary: dict) -> str:
         '`split == "test_trizod"`, identical in every tier folder. '
         "Retired test chains "
         "(`test_retired`: pinned test chains that no longer meet strict, "
-        "overlap CheZOD117 or duplicate another test chain; see "
-        "`retired_reason`) are neither test nor training and appear in no file.",
+        "overlap CheZOD117, duplicate another test chain or share a construct "
+        "with training; see `retired_reason`) are neither test nor training and "
+        "appear in no file.",
         "",
         "## Labels and cuts",
         "",

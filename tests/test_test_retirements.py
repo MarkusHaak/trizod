@@ -7,6 +7,12 @@ chains once the expression tags are set aside (52047_1_1_1 GB1 + N-myc TAD,
 retired them as ``test_retired`` with the reason ``shared_construct``: not
 tested on, still leakage targets. The decision lives in a committed, reviewed
 table read by :mod:`trizod.dataset.testset`; the pin itself is not edited.
+
+Release validation 2026-11-17c (E26): one written criterion for every test
+chain sharing a construct with training (an identical run of >= 30 residues
+after tag stripping that covers >= 50 % of the test chain's scored residues,
+:mod:`trizod.dataset.shared_constructs`) retires a fifth chain, 7070_1_1_1
+(83-residue run with training 16243_1_1_1, 51.9 %).
 """
 
 from __future__ import annotations
@@ -26,7 +32,13 @@ requires_mmseqs = pytest.mark.skipif(
     shutil.which("mmseqs") is None, reason="mmseqs binary not found in PATH"
 )
 
-DECIDED = {"52047_1_1_1", "27176_1_1_1", "10214_1_1_1", "53299_1_1_1"}
+DECIDED = {
+    "52047_1_1_1",
+    "27176_1_1_1",
+    "10214_1_1_1",
+    "53299_1_1_1",
+    "7070_1_1_1",  # validation 2026-11-17c, E26 criterion
+}
 HEADER = "\t".join(testset.RETIREMENT_COLUMNS) + "\n"
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -36,7 +48,7 @@ AA = "ACDEFGHIKLMNPQRSTVWY"
 # --------------------------------------------------------------------------- #
 
 
-def test_the_committed_table_retires_the_four_decided_chains():
+def test_the_committed_table_retires_the_decided_chains():
     rows = testset.load_test_retirements()
     assert {r.id for r in rows} == DECIDED
     assert testset.SHARED_CONSTRUCT == "shared_construct"

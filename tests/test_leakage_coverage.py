@@ -159,7 +159,9 @@ def test_leakage_search_cmd_requires_test_chain_coverage(tmp_path):
     # no coverage threshold inside mmseqs: any -c > 0 also skips a pair by
     # length ratio before alignment; the 80 % is applied to the parsed span
     assert cmd[cmd.index("-c") + 1] == "0"
-    assert cmd[cmd.index("--min-seq-id") + 1] == "0.3"
+    # no identity threshold inside mmseqs either (validation 2026-11-17c,
+    # E20/E22): the 30 % is applied to every parsed alignment by is_leak
+    assert cmd[cmd.index("--min-seq-id") + 1] == "0"
     # the rest of the shared option block is unchanged
     for flag, val in [
         ("--alignment-mode", "3"),

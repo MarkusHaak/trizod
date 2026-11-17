@@ -845,3 +845,82 @@ def test_deposited_entries(entry_id, expected, label):
     assert row["membrane_mimetic_sample"] is expected
     if label is not None:
         assert label in row["membrane_mimetic"].split(";")
+
+
+# --------------------------------------------------------------------------- #
+# release validation 2026-11-17c, C8: the 28 undetected moderate/strict chains
+# --------------------------------------------------------------------------- #
+
+#: Reviewed against the raw NMR-STAR files of the 2026-11-11 snapshot: the
+#: mimetic is named in the file but outside the class table or the fields the
+#: rule reads (detergents the table lacks, a detergent in _Sample.Details, a
+#: chain name).
+C8_DEFINITE = {
+    "27093": "micelle",  # sulfobetaine-12 30-50 mM
+    "18026": "OG",  # 50 mM octyl glucoside in _Sample.Details
+    "51492": "micelle",  # 3 % SB3-10
+    "26936": "micelle",  # LMNG 0.01 % + CHS
+    "26937": "micelle",
+    "27502": "micelle",  # C14 betaine 100 mM
+    "19603": "DPC",  # 'ctrdpc', twin of 19597 (SDS)
+}
+#: Integral membrane proteins measured by solution NMR whose deposition names
+#: no mimetic (probable): class "unnamed mimetic".
+C8_PROBABLE = {
+    "19637",
+    "51063",
+    "18648",
+    "15019",
+    "7340",
+    "19126",
+    "19994",
+    "27438",
+    "18494",
+    "19379",
+    "26617",
+    "51026",
+    "18706",
+    "16497",
+    "26624",
+}
+#: Reviewed and not listed: no mimetic evidence that attaches to the scored
+#: sample (5376: free peptide over native disk membranes, the shift list cites
+#: no sample; 4151 and 6056: probably organic solvent, not a mimetic).
+C8_REJECTED = {"5376", "4151", "6056"}
+
+
+def test_the_c8_definite_residuals_are_overridden_with_their_class():
+    overrides = membrane.load_overrides()
+    for key, label in C8_DEFINITE.items():
+        assert overrides[key].label == label, key
+
+
+def test_the_c8_probable_membrane_proteins_carry_the_unnamed_class():
+    overrides = membrane.load_overrides()
+    for key in C8_PROBABLE:
+        assert overrides[key].label == "unnamed mimetic", key
+        assert "probable" in overrides[key].reason, key
+
+
+def test_the_rejected_c8_residuals_are_documented_not_listed():
+    overrides = membrane.load_overrides()
+    text = membrane.MEMBRANE_OVERRIDES_TSV.read_text()
+    comments = "".join(ln for ln in text.splitlines(True) if ln.startswith("#"))
+    for key in C8_REJECTED | {"7176"}:
+        assert key not in overrides, key
+        assert key in comments, key
+
+
+def test_the_unnamed_class_matches_no_component_or_text():
+    cls = membrane.MIMETIC_CLASSES_BY_LABEL["unnamed mimetic"]
+    for name in ("unnamed mimetic", "membrane", "micelle", "DPC", "", "protein"):
+        assert membrane.classify_component(name) is not cls
+    assert cls not in membrane.explicit_classes("in an unnamed mimetic")
+
+
+def test_an_unnamed_override_flags_the_chain(monkeypatch):
+    override = membrane.MembraneOverride("1", "unnamed mimetic", "probable")
+    monkeypatch.setattr(membrane, "load_overrides", lambda path=None: {"1": override})
+    row = fill(Entry({"1": Sample([_component("sodium phosphate")])}))
+    assert row["membrane_mimetic_sample"] is True
+    assert row["membrane_mimetic"] == "unnamed mimetic"

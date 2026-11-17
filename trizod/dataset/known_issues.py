@@ -24,6 +24,7 @@ build's BMRB pickle cache, or a table finalize is given; none is typed:
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import math
@@ -43,6 +44,13 @@ STRICT_IONIC_CAP_M = 0.5
 DG_TOL = 1e-6
 #: Group sizes up to which the CHANGELOG names the chains of a cause inline.
 NAME_UP_TO = 5
+#: A pressure deposited in Pa below this value is a placeholder for one
+#: atmosphere (release validation 2026-11-17c, G39: 86 chains deposit "1 Pa",
+#: one "1.013 Pa"); it is stored as deposited, about 1e-5 bar.
+PRESSURE_PLACEHOLDER_PA_MAX = 10.0
+#: Where finalize ships the per-chain tables it was given (G36 e): every
+#: known_issues.tsv row that cites one names its path in the deposit.
+INPUTS_DIR = "known_issues_inputs"
 
 
 def _fmt(n) -> str:
@@ -456,7 +464,12 @@ def classify_conditions(cond) -> list[tuple[str, str]]:
     kelvin (or without a unit), a pressure without a (known) unit."""
     import numpy as np
 
-    from trizod.bmrb.bmrb import PD_TO_PH_STAR_OFFSET, PRESSURE_UNITS_TO_BAR, _key
+    from trizod.bmrb.bmrb import (
+        HPA_AS_BAR_RANGE,
+        PD_TO_PH_STAR_OFFSET,
+        PRESSURE_UNITS_TO_BAR,
+        _key,
+    )
 
     out = []
     scale = cond.get_pH_scale()
@@ -507,6 +520,26 @@ def classify_conditions(cond) -> list[tuple[str, str]]:
                 "high_pressure are null (passes as ambient)",
             )
         )
+    elif text and text not in (".", "?"):
+        num = cond.convert_val(text)
+        bar = cond.get_pressure_bar()
+        if _key(punit) == "pa" and 0 < num < PRESSURE_PLACEHOLDER_PA_MAX:
+            out.append(
+                (
+                    "pressure_placeholder_pa",
+                    f"pressure {text} Pa deposited (almost certainly one "
+                    f"atmosphere), stored as deposited: pressure_bar {bar:.3g}; far "
+                    "below the 400 bar cap, so no tier is affected",
+                )
+            )
+        elif _key(punit) == "bar" and HPA_AS_BAR_RANGE[0] <= num <= HPA_AS_BAR_RANGE[1]:
+            out.append(
+                (
+                    "pressure_hpa_as_bar",
+                    f"pressure {text} deposited in bar, read as hPa (one "
+                    f"atmosphere): pressure_bar {bar:.4g}",
+                )
+            )
     return out
 
 
@@ -556,6 +589,8 @@ def condition_text(issues: list[tuple], cur: dict, rows_by_id: dict) -> dict:
         str(rows_by_id[c]["entry_id"]) for c in below_100 if c in rows_by_id
     }
     pressure = by_issue["pressure_unit_missing"]
+    placeholder_pa = by_issue["pressure_placeholder_pa"]
+    hpa = by_issue["pressure_hpa_as_bar"]
     unread = by_issue["conditions_unread"]
     return {
         "ph": (
@@ -576,7 +611,16 @@ def condition_text(issues: list[tuple], cur: dict, rows_by_id: dict) -> dict:
             f"{_fmt(len(pressure))} released chains deposited a pressure without "
             "a unit or in an unknown one; it reads as not recorded"
             + (f" ({_ids(pressure, 12)})" if pressure else "")
-            + "."
+            + ". "
+            f"{_fmt(len(placeholder_pa))} released chains deposited a pressure of "
+            "about 1 Pa (1 or 1.013 Pa, almost certainly one atmosphere); it is "
+            "stored as deposited, about 1e-5 bar (`pressure_placeholder_pa`"
+            + (f": {_ids(placeholder_pa, 12)}" if placeholder_pa else "")
+            + f"). {_fmt(len(hpa))} deposited 1013 bar, read as hPa, i.e. one "
+            "atmosphere (`pressure_hpa_as_bar`"
+            + (f": {_ids(hpa)}" if hpa else "")
+            + "). Every one of these values is far below the 400 bar cap, so no "
+            "tier is affected."
         ),
         "unread": len(unread),
     }
@@ -592,19 +636,59 @@ def _read_tsv(path) -> list[dict]:
         return list(csv.DictReader(fh, delimiter="\t"))
 
 
-def snapshot_drift(path, rows_by_id: dict) -> dict:
+def changed_entries(old_dir, new_dir) -> dict[str, set[str]]:
+    """Entries of two BMRB snapshots (``bmr<ID>/bmr<ID>_3.str``): ``changed``
+    (in both, file bytes differ), ``added`` and ``withdrawn``."""
+    import filecmp
+
+    def entries(root):
+        root = Path(root)
+        return {
+            d.name[3:]
+            for d in root.iterdir()
+            if re.fullmatch(r"bmr\d+", d.name) and (d / f"{d.name}_3.str").is_file()
+        }
+
+    old, new = entries(old_dir), entries(new_dir)
+    changed = {
+        e
+        for e in old & new
+        if not filecmp.cmp(
+            Path(old_dir) / f"bmr{e}" / f"bmr{e}_3.str",
+            Path(new_dir) / f"bmr{e}" / f"bmr{e}_3.str",
+            shallow=False,
+        )
+    }
+    return {"changed": changed, "added": new - old, "withdrawn": old - new}
+
+
+def _drift_fields(per_tier: dict) -> set[str]:
+    out = set()
+    for v in per_tier.values():
+        if isinstance(v, dict):
+            out.update(v.get("fields") or ())
+    return out
+
+
+def snapshot_drift(path, rows_by_id: dict, changed: dict | None = None) -> dict:
     """Rows of a snapshot-drift table (an audit's ``id``, ``released``,
-    ``label_or_tier_change``, ``per_tier`` JSON): the chains whose labels or
-    tiers changed between the two snapshots."""
+    ``label_or_tier_change``, ``per_tier`` JSON; one row per chain whose
+    release record differs between the two snapshots): the chains whose labels
+    or tiers changed. ``changed`` (:func:`changed_entries`) adds every chain
+    of the changed entries, so the text says what the counts are of."""
     recs = _read_tsv(path)
-    out_rows, changed, test_hit = [], [], []
+    out_rows, changed_ids, test_hit = [], [], []
+    meta_only, meta_fields = [], set()
     for r in recs:
         if str(r.get("label_or_tier_change")).lower() != "true":
+            meta_only.append(r["id"])
+            with contextlib.suppress(ValueError):
+                meta_fields |= _drift_fields(json.loads(r.get("per_tier") or "{}"))
             continue
         cid = r["id"]
-        changed.append(cid)
+        changed_ids.append(cid)
         row = rows_by_id.get(cid)
-        if row is not None and row["split"].startswith("test"):
+        if row is not None and str(row.get("split")).startswith("test"):
             test_hit.append(cid)
         try:
             per_tier = json.loads(r.get("per_tier") or "{}")
@@ -620,16 +704,48 @@ def snapshot_drift(path, rows_by_id: dict) -> dict:
                     f"{tier}: max |ΔG| {g.get('max_abs_dG')}, "
                     f"{g.get('mask_flips')} mask flips"
                 )
-        where = row["split"] if row is not None else "no longer released"
+        where = (
+            row.get("split", "released") if row is not None else "no longer released"
+        )
         out_rows.append(
             (cid, "snapshot_drift", f"{'; '.join(bits) or 'changed'}; now {where}")
         )
-    return {
+    out = {
         "n_rows": len(recs),
-        "changed": sorted(changed, key=_id_key),
+        "changed": sorted(changed_ids, key=_id_key),
+        "metadata_only": sorted(meta_only, key=_id_key),
+        "metadata_fields": sorted(meta_fields),
         "test_affected": sorted(test_hit, key=_id_key),
         "rows": out_rows,
+        "entries": None,
     }
+    if changed is not None:
+        ents = set(changed["changed"])
+        released = {
+            cid: row
+            for cid, row in rows_by_id.items()
+            if str((row or {}).get("entry_id")) in ents
+        }
+        gone = sorted({r["id"] for r in recs if r["id"] not in rows_by_id}, key=_id_key)
+        out["entries"] = {
+            "changed": len(ents),
+            "added": len(changed["added"]),
+            "withdrawn": len(changed["withdrawn"]),
+            "released_chains": len(released),
+            "released_by_split": dict(
+                sorted(Counter(r.get("split") for r in released.values()).items())
+            ),
+            "gone": gone,
+            "test_chains": sorted(
+                (
+                    c
+                    for c, r in released.items()
+                    if str(r.get("split")).startswith("test")
+                ),
+                key=_id_key,
+            ),
+        }
+    return out
 
 
 def snapshot_drift_text(drift: dict | None) -> str:
@@ -638,25 +754,106 @@ def snapshot_drift_text(drift: dict | None) -> str:
             "Per-chain snapshot drift was not assessed for this deposit "
             "(finalize ran without --snapshot-drift)."
         )
-    return (
-        f"Of {_fmt(drift['n_rows'])} released or formerly released chains of "
-        "entries whose file changed between the two snapshots, "
-        f"{_fmt(len(drift['changed']))} changed labels or tiers "
-        f"({_ids(drift['changed'])}); "
-        + (
-            f"test chains affected: {_ids(drift['test_affected'])}."
-            if drift["test_affected"]
-            else "no test chain is affected."
+    fields = ", ".join(drift["metadata_fields"])
+    differ = (
+        f"{_fmt(len(drift['metadata_only']))} only in metadata"
+        + (f" ({fields})" if fields else "")
+        + f" and {_fmt(len(drift['changed']))} in labels or tiers"
+        + (f" ({_ids(drift['changed'])})" if drift["changed"] else "")
+    )
+    e = drift.get("entries")
+    if e is None:
+        return (
+            f"Of {_fmt(drift['n_rows'])} chains whose record differs between the "
+            f"two snapshots, {differ}; "
+            + (
+                f"test chains with changed labels: {_ids(drift['test_affected'])}."
+                if drift["test_affected"]
+                else "no test chain changed its labels."
+            )
+            + " The chains of the changed entries were not counted (finalize ran "
+            "without --previous-bmrb-dir)."
         )
+    n_chains = e["released_chains"] + len(e["gone"])
+    splits = ", ".join(f"{_fmt(n)} {s}" for s, n in e["released_by_split"].items())
+    tests = e["test_chains"]
+    labelled = set(drift["test_affected"])
+    test_text = (
+        (
+            f"The {_fmt(len(tests))} test chains of changed entries ({_ids(tests)}) "
+            + (
+                "have identical labels."
+                if not labelled
+                else f"include {_ids(labelled)}, whose labels or tiers changed."
+            )
+        )
+        if tests
+        else "No test chain belongs to a changed entry."
+    )
+    return (
+        f"Between the two snapshots {_fmt(e['changed'])} entries changed in place "
+        f"({_fmt(e['added'])} added, {_fmt(e['withdrawn'])} withdrawn). The changed "
+        f"entries hold {_fmt(n_chains)} chains: {_fmt(e['released_chains'])} "
+        f"released now ({splits})"
+        + (f", and {_ids(e['gone'])}, no longer released" if e["gone"] else "")
+        + f". {_fmt(drift['n_rows'])} of them have a record that differs: "
+        f"{differ}. {test_text}"
     )
 
 
-def construct_caveats(path, rows: list[dict]) -> dict:
+#: Construct caveat classes that concern single residues: their share is
+#: reported at residue level (affected labelled residues over the labelled
+#: residues assessed), never as the scored residues of the chains listed
+#: (release validation 2026-11-17c, G43). The other classes concern whole
+#: chains (a deuterated or paramagnetic sample).
+RESIDUE_LEVEL_CLASSES = (
+    "outside_uniprot_span_sifts",
+    "nonstandard_letter_in_sequence",
+    "nonstandard_residue",
+)
+CONSTRUCT_CLASS_DESCRIPTIONS = {
+    "deut_uniform_2H": "uniformly 2H-labelled protein (isotope shifts not corrected)",
+    "heme_spin_state_dependent": "heme protein whose shifts depend on the heme "
+    "spin state",
+    "nonstandard_letter_in_sequence": "the sequence holds X, U or Z",
+    "nonstandard_residue": "the deposited polymer holds a non-standard residue",
+    "outside_uniprot_span_sifts": "labelled residues outside the SIFTS UniProt "
+    "span (tags, linkers, fusion partners)",
+    "paramagnetic_definite": "paramagnetic sample",
+}
+CONSTRUCT_INPUT = f"{INPUTS_DIR}/construct_caveats.tsv"
+
+
+def _nonstandard_positions(row) -> tuple[list[int], int]:
+    std = set("ACDEFGHIKLMNPQRSTVWY")
+    pos = [i + 1 for i, ch in enumerate(row["sequence"]) if ch not in std]
+    mask = row.get("mask") or []
+    scored = sum(1 for p in pos if p - 1 < len(mask) and mask[p - 1])
+    return pos, scored
+
+
+def construct_caveats(
+    path, rows: list[dict], residue_counts: dict[str, dict] | None = None
+) -> dict:
     """Counts of an audit's construct / sample caveat table (``class``,
-    ``id``): chains and the share of scored residues per class, in all
-    training representatives, the tolerant training set and the test set."""
+    ``id``): per class, in all training representatives, the tolerant
+    training set and the test set, the chains listed and -- for a whole-chain
+    class -- the share of scored residues they hold, or -- for a residue-level
+    class (``RESIDUE_LEVEL_CLASSES``) -- the affected labelled residues over
+    the labelled residues assessed, from ``residue_counts`` (``{class: {chain:
+    (affected, assessed)}}``; :mod:`trizod.dataset.construct_span` measures
+    ``outside_uniprot_span_sifts``, the X/U/Z positions come from the
+    sequence). Every row's evidence names the class, what was measured for the
+    chain and the shipped input table."""
     recs = _read_tsv(path)
     rows_by_id = {r["id"]: r for r in rows}
+    residue_counts = dict(residue_counts or {})
+    if "nonstandard_letter_in_sequence" not in residue_counts:
+        residue_counts["nonstandard_letter_in_sequence"] = {
+            r["id"]: (_nonstandard_positions(r)[1], sum(1 for m in r["mask"] if m))
+            for r in rows
+            if r["split"] in ("train", "test_trizod")
+        }
     groups = {
         "training": lambda r: r["split"] == "train",
         "tolerant training": lambda r: (
@@ -680,6 +877,7 @@ def construct_caveats(path, rows: list[dict]) -> dict:
     summary = {}
     for cls, ids in sorted(by_class.items()):
         d = {}
+        counts = residue_counts.get(cls) if cls in RESIDUE_LEVEL_CLASSES else None
         for g, f in groups.items():
             sel = [rows_by_id[i] for i in ids if f(rows_by_id[i])]
             res = sum(scored(r) for r in sel)
@@ -687,9 +885,45 @@ def construct_caveats(path, rows: list[dict]) -> dict:
                 "chains": len(sel),
                 "share": res / denom[g] if denom[g] else None,
             }
-        summary[cls] = d
+            if counts is not None:
+                assessed = [r for r in rows if f(r) and r["id"] in counts]
+                d[g]["assessed_chains"] = len(assessed)
+                d[g]["affected"] = sum(counts[r["id"]][0] for r in assessed)
+                d[g]["assessed"] = sum(counts[r["id"]][1] for r in assessed)
+                d[g]["affected_chains"] = sum(
+                    1 for r in assessed if counts[r["id"]][0] > 0
+                )
+        summary[cls] = {
+            "level": "residue" if cls in RESIDUE_LEVEL_CLASSES else "chain",
+            "measured": counts is not None,
+            **d,
+        }
+
+    def evidence(cls, cid):
+        desc = CONSTRUCT_CLASS_DESCRIPTIONS.get(cls, cls.replace("_", " "))
+        bits = [desc]
+        row = rows_by_id[cid]
+        if cls == "nonstandard_letter_in_sequence":
+            pos, sc = _nonstandard_positions(row)
+            bits.append(
+                f"X/U/Z at position(s) {', '.join(map(str, pos[:12]))}"
+                + (f", … ({len(pos)} in all)" if len(pos) > 12 else "")
+                + f"; {sc} of them scored"
+            )
+        counts = residue_counts.get(cls) if cls in RESIDUE_LEVEL_CLASSES else None
+        if counts is not None and cls != "nonstandard_letter_in_sequence":
+            if cid in counts:
+                bits.append(
+                    f"{counts[cid][0]} of {counts[cid][1]} labelled residues "
+                    "outside the span"
+                )
+            else:
+                bits.append("not assessed at residue level")
+        bits.append(f"listed by {CONSTRUCT_INPUT}")
+        return "; ".join(bits)
+
     out_rows = [
-        (cid, f"construct_{cls}", f"listed by {Path(path).name}")
+        (cid, f"construct_{cls}", evidence(cls, cid))
         for cls, ids in sorted(by_class.items())
         for cid in sorted(ids, key=_id_key)
     ]
@@ -706,22 +940,30 @@ def nonstandard_counts(rows: list[dict]) -> dict:
     def odd(r):
         return set(r["sequence"]) - std
 
-    def pos(rs):
-        return sum(sum(1 for ch in r["sequence"] if ch not in std) for r in rs)
-
+    odd_train = [r for r in train if odd(r)]
     return {
-        "train_chains": sum(1 for r in train if odd(r)),
-        "train_positions": pos(train),
+        "train_chains": len(odd_train),
+        "train_positions": sum(len(_nonstandard_positions(r)[0]) for r in odd_train),
+        "train_scored_positions": sum(_nonstandard_positions(r)[1] for r in odd_train),
+        "train_chain_residues": sum(len(r["sequence"]) for r in odd_train),
         "train_residues": sum(len(r["sequence"]) for r in train),
         "test_chains": sum(1 for r in test if odd(r)),
     }
 
 
+def _pct(a, b) -> str:
+    if not b:
+        return "–"
+    share = 100 * a / b
+    return f"{share:.2f} %" if 0 < share < 0.1 else f"{share:.1f} %"
+
+
 def construct_text(caveats: dict | None, nonstd: dict) -> str:
     x = (
         f"{_fmt(nonstd['train_chains'])} training representatives hold a "
-        f"non-standard letter (X, U or Z; {_fmt(nonstd['train_positions'])} of "
-        f"their {_fmt(nonstd['train_residues'])} residues), "
+        f"non-standard letter (X, U or Z): {_fmt(nonstd['train_positions'])} X/U/Z "
+        f"positions ({_fmt(nonstd.get('train_scored_positions', 0))} scored) in the "
+        f"{_fmt(nonstd.get('train_chain_residues', 0))} residues of these chains; "
         f"{_fmt(nonstd['test_chains'])} test chains"
     )
     if caveats is None:
@@ -734,13 +976,36 @@ def construct_text(caveats: dict | None, nonstd: dict) -> str:
     parts = []
     for cls, d in caveats["summary"].items():
         bits = []
-        for g in ("training", "tolerant training", "test"):
-            v = d[g]
-            share = f"{100 * v['share']:.1f} %" if v["share"] is not None else "–"
-            bits.append(f"{g} {_fmt(v['chains'])} chains ({share} of scored residues)")
-        parts.append(f"`{cls}`: " + ", ".join(bits))
+        groups = ("training", "tolerant training", "test")
+        if d["level"] == "chain":
+            for g in groups:
+                v = d[g]
+                share = f"{100 * v['share']:.1f} %" if v["share"] is not None else "–"
+                bits.append(
+                    f"{g} {_fmt(v['chains'])} chains ({share} of scored residues)"
+                )
+            parts.append(f"`{cls}` (whole chains): " + ", ".join(bits))
+        elif d["measured"]:
+            for g in groups:
+                v = d[g]
+                bits.append(
+                    f"{g} {_fmt(v['affected'])} of {_fmt(v['assessed'])} labelled "
+                    f"residues ({_pct(v['affected'], v['assessed'])}) of the "
+                    f"{_fmt(v['assessed_chains'])} assessed chains, in "
+                    f"{_fmt(v['affected_chains'])} chains"
+                )
+            parts.append(f"`{cls}` (residue level): " + ", ".join(bits))
+        else:
+            for g in groups:
+                bits.append(f"{g} {_fmt(d[g]['chains'])} chains")
+            parts.append(
+                f"`{cls}` (chains listed; residue-level share not measured): "
+                + ", ".join(bits)
+            )
     return (
-        f"{x}. Per caveat class (`known_issues.tsv`, issue `construct_<class>`): "
+        f"{x}. Per caveat class (`known_issues.tsv`, issue `construct_<class>`; "
+        "a whole-chain class gives the share of scored residues in the chains "
+        "listed, a residue-level class the affected labelled residues): "
         + "; ".join(parts)
         + ". No flag column marks these yet; flag columns are deferred to a "
         "later release."

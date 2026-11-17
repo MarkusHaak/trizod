@@ -940,9 +940,10 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
     ),
     "membrane_mimetic": _doc(
         "';'-joined membrane-mimetic classes recognised in the chain's samples "
-        "(phospholipid, bicelle, nanodisc, SDS, DPC, CHAPS, …), counted by the "
-        "class rule or not. Descriptive; the filter reads "
-        "`membrane_mimetic_sample`",
+        "(phospholipid, bicelle, nanodisc, LPS, SDS, DPC, CHAPS, …), counted by "
+        "the class rule or not, or set by a reviewed override (`unnamed "
+        "mimetic`: an integral membrane protein whose deposition names no "
+        "mimetic). Descriptive; the filter reads `membrane_mimetic_sample`",
         "null when none is recognised",
     ),
     "n_entities": _doc(
@@ -996,7 +997,11 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
     ),
     "pressure_bar": _doc(
         "Sample pressure in bar from the shift list's sample condition list, "
-        "converted from the deposited unit",
+        "converted from the deposited unit. A deposited '1 Pa' or '1.013 Pa' "
+        "(almost certainly one atmosphere) is stored as deposited, about 1e-5 "
+        "bar; '1013 bar' is read as hPa (one atmosphere). `known_issues.tsv` "
+        "lists both (`pressure_placeholder_pa`, `pressure_hpa_as_bar`); no tier "
+        "is affected",
         "null when not recorded or the unit is unknown (passes as ambient)",
     ),
     "label_tier_source": _doc(
@@ -1025,7 +1030,8 @@ COLUMN_DOCS: dict[str, ColumnDoc] = {
     "membrane_mimetic_sample": _doc(
         "Class-rule verdict: the chain's sample is a membrane mimetic "
         "(metadata `membrane_mimetic_sample_semantics`); excluded from moderate "
-        "and strict. False also when no sample component could be read",
+        "and strict. Lipopolysaccharide (LPS) micelles and bilayers count as "
+        "membrane mimetics. False also when no sample component could be read",
         "null only if the build's scores.json record lacks the field",
     ),
     "temperature_placeholder": _doc(
@@ -1515,8 +1521,8 @@ def table_metadata(
         b"composition_join": b"composition columns (n_entities .. is_bound) are per BMRB ENTRY, joined on entry_id, from trizod.dataset.composition.detect_bound; n_entities counts distinct _Entity records, so a homodimer is 1 -- see n_copies / n_entity_assembly_rows for stoichiometry",
         b"composition_list_columns": b"metal_comp_ids, ligand_comp_ids and ligand_names are list<string>; an empty list is a measured absence, null is an unclassified entry",
         b"n_copies_semantics": b"conservative lower bound on copies of one entity in an assembly (magnetic-equivalence groups, then physical state, then conformer naming); null where the classifier errored",
-        b"membrane_mimetic_semantics": b"';'-joined membrane-mimetic classes (trizod.bmrb.membrane: phospholipid, bicelle, nanodisc, liposome, membrane, SDS, DPC, DHPC, LMPG, LDAO, CHAPS, DDM, ...) recognised in the samples the scored shift table references -- among their components (a non-polymer one by the whole class table, one linked to a polymer entity only by an explicit mimetic name), in _Sample.Type, or as explicit mimetic words in _Sample.Details / Solvent_system / Name -- or set by the reviewed override table trizod/dataset/data/membrane_overrides.tsv; counted or not (a sub-CMC CHAPS is named), null when none. Descriptive; the moderate/strict filter reads membrane_mimetic_sample",
-        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a component that is a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always), CnEm/n-alkanol alignment media not counted; or a sample whose _Sample.Type (micelle, bicelle, liposome, membrane, nanodisc; not reverse micelle) or free text (Details, Solvent_system, Name) names an explicit mimetic, unless it serves only anisotropic (RDC alignment) experiments; or an entry/chain listed, after review of its raw file, in trizod/dataset/data/membrane_overrides.tsv (title-only evidence). Excluded from the moderate and strict tiers. "
+        b"membrane_mimetic_semantics": b"';'-joined membrane-mimetic classes (trizod.bmrb.membrane: phospholipid, bicelle, nanodisc, liposome, LPS (lipopolysaccharide micelles and bilayers), membrane, SDS, DPC, DHPC, LMPG, LDAO, CHAPS, DDM, ...; 'unnamed mimetic' only from a reviewed override: an integral membrane protein measured by solution NMR whose deposition names no mimetic) recognised in the samples the scored shift table references -- among their components (a non-polymer one by the whole class table, one linked to a polymer entity only by an explicit mimetic name), in _Sample.Type, or as explicit mimetic words in _Sample.Details / Solvent_system / Name -- or set by the reviewed override table trizod/dataset/data/membrane_overrides.tsv; counted or not (a sub-CMC CHAPS is named), null when none. Descriptive; the moderate/strict filter reads membrane_mimetic_sample",
+        b"membrane_mimetic_sample_semantics": b"true when the chain's sample is a membrane mimetic by the class rule: a component that is a bilayer lipid or assembly (phospholipid, bicelle, nanodisc, liposome, lipopolysaccharide (LPS) micelles and bilayers) or a dedicated micelle former (SDS, alkylphosphocholines, lysophospholipids, short-chain phosphocholines, LDAO, lauroyl sarcosine, CnEm) at any concentration, or an additive-class detergent (CHAPS, CHAPSO, octyl glucoside/maltoside, DM, DDM, Triton X-100, Tween-20) at or above its CMC in water or with no convertible concentration (digitonin always), CnEm/n-alkanol alignment media not counted; or a sample whose _Sample.Type (micelle, bicelle, liposome, membrane, nanodisc; not reverse micelle) or free text (Details, Solvent_system, Name) names an explicit mimetic, unless it serves only anisotropic (RDC alignment) experiments; or an entry/chain listed, after review of its raw file, in trizod/dataset/data/membrane_overrides.tsv (evidence outside the fields the rule reads, a detergent outside the class table, or an integral membrane protein measured by solution NMR whose deposition names no mimetic: class 'unnamed mimetic'). Lipopolysaccharide (LPS) micelles and bilayers count as membrane mimetics. Excluded from the moderate and strict tiers. "
         + _null_note(cols, "membrane_mimetic_sample").encode(),
         b"temperature_placeholder_semantics": b"true when the deposited temperature was exactly 273 K (the text '273' or '273.0', unit K or none) with no statement of 0 C in the entry's own text, and was read as not deposited: temperature then holds the 298 K default and the strict tier excludes the chain. "
         + _null_note(cols, "temperature_placeholder").encode(),
@@ -1526,7 +1532,7 @@ def table_metadata(
             LABEL_SOURCE_RULE + " (scores.json: the build-internal per-tier score "
             "file each row is read from; it is not shipped.)"
         ).encode(),
-        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm; 900-1100 deposited as 'bar' is read as hPa); null when not recorded or the unit is missing/unknown. The tolerant, moderate and strict tiers exclude >= 400 bar (high_pressure); an unrecorded pressure passes as ambient",
+        b"pressure_bar_semantics": b"sample pressure in bar from the scored shift table's own sample condition list, converted from the deposited unit (bar, atm, Pa, kPa, MPa, hPa, mbar, mmHg, Torr, psi; 'ambient' = 1 atm; 900-1100 deposited as 'bar' is read as hPa, i.e. one atmosphere: known issue pressure_hpa_as_bar); a deposited '1 Pa' or '1.013 Pa' (almost certainly one atmosphere) is stored as deposited, about 1e-5 bar (known issue pressure_placeholder_pa; far below the cap, so no tier is affected); null when not recorded or the unit is missing/unknown. The tolerant, moderate and strict tiers exclude >= 400 bar (high_pressure); an unrecorded pressure passes as ambient",
         b"offset_columns": OFFSET_COLUMNS_DOC.encode(),
         b"sort_order": sort_order_doc(
             row_group_size, straddling_entries(cols, row_group_size)

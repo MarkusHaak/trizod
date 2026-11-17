@@ -47,7 +47,11 @@ in the original TriZOD report (Senoner & Heinzinger, 2024):
            alignment counts, the best one or one of up to 10 alternative
            ones (``--alt-ali 10``; release re-audit 2026-11-17b: a repeat or
            tandem construct can meet the rule on its second alignment only,
-           e.g. 51068_1_1_1 ~ test 51080_1_1_1). A test chain
+           e.g. 51068_1_1_1 ~ test 51080_1_1_1), at any identity: the search
+           runs with ``--min-seq-id 0`` and the 30 % is applied to each
+           alignment, because mmseqs computes no alternative behind a best
+           alignment below ``--min-seq-id`` (release validation 2026-11-17c:
+           36490_1_1_1 and 50596_1_1_1). A test chain
            is never removed here. Coverage is the aligned span, gaps included
            (--cov-mode 1 -c 0 with the 80 % applied to the parsed spans, see
            ``trizod.dataset.mmseqs.leakage_search_cmd`` / ``is_leak``). This

@@ -11,6 +11,7 @@ import pytest
 
 from trizod.dataset import finalize
 from trizod.dataset import release_info as ri
+from trizod.dataset import shared_constructs as sc
 
 from ._release_fixtures import (
     CHAINS,
@@ -44,6 +45,9 @@ EXPECTED_FILES = {
     "test/CheZOD117_test_set.fasta",
     "test/CheZOD117_original_sequences.fasta",
     "test/TriZOD_test_set_labels.tsv",
+    "test/TriZOD_test_set_components.tsv",
+    "test/test_training_shared_accessions.tsv",
+    "test/shared_construct_review.tsv",
     "README.md",
     "datasheet.md",
     "CHANGELOG.md",
@@ -51,6 +55,7 @@ EXPECTED_FILES = {
     "class_balance.tsv",
     "known_issues.tsv",
     "VALIDATION.json",
+    "VALIDATION.md",
     "bmrb_files.sha256",
     "LICENSE.md",
     "CITATION.cff",
@@ -115,6 +120,10 @@ def inputs(tmp_path_factory):
     )
     validation = root / "VALIDATION.json"
     validation.write_text('{"audit": "synthetic"}\n')
+    # the committed shared-construct review names real chains; a synthetic
+    # release gets an empty review (header only)
+    construct_review = root / "shared_construct_review.tsv"
+    construct_review.write_text("\t".join(sc.REVIEW_COLUMNS) + "\n")
     return {
         "root": root,
         "bundle": bundle,
@@ -125,6 +134,7 @@ def inputs(tmp_path_factory):
         "shifts": shifts,
         "reviewed": reviewed,
         "validation": validation,
+        "construct_review": construct_review,
         "specs": [("pin_old_3", f"fasta:{earlier}", "an earlier pin")],
     }
 
@@ -134,6 +144,7 @@ def _assemble(inputs, out, **kw):
     kw.setdefault("validation", inputs["validation"])
     kw.setdefault("previous_build", inputs["previous"])
     kw.setdefault("previous_label", "the synthetic earlier build")
+    kw.setdefault("construct_review", inputs["construct_review"])
     return finalize.assemble(
         inputs["parquet"],
         inputs["bundle"],
@@ -317,6 +328,7 @@ def test_refuses_a_parquet_without_calibration(inputs, tmp_path):
         "bmrb_dir": inputs["snapshot"],
         "crosswalk_specs": inputs["specs"],
         "reviewed": inputs["reviewed"],
+        "construct_review": inputs["construct_review"],
     }
     with pytest.raises(SystemExit, match="calibration"):
         finalize.assemble(parquet, inputs["bundle"], tmp_path / "out", **kw)
@@ -400,6 +412,7 @@ def test_calibration_input_with_the_same_data_is_accepted(inputs, tmp_path):
         "bmrb_dir": inputs["snapshot"],
         "crosswalk_specs": inputs["specs"],
         "reviewed": inputs["reviewed"],
+        "construct_review": inputs["construct_review"],
     }
     # the Parquet records the input by file name only (no machine path) ...
     assert (
@@ -629,3 +642,103 @@ def test_retired_reasons_are_explained_generically():
     assert finalize._retired_explained({"a_new_reason": 2}).startswith(
         "`a_new_reason` (2): no description recorded"
     )
+
+
+# --------------------------------------------------------------------------- #
+# release validation 2026-11-17c: residual similarity, VALIDATION.md, inputs
+# --------------------------------------------------------------------------- #
+
+
+def test_the_validation_decisions_ship_beside_the_results(release):
+    out, manifest = release["out"], release["manifest"]
+    text = (out / "VALIDATION.md").read_text()
+    assert "{{" not in text and "<!-- Template" not in text
+    for check in ("A3", "E21", "E20 / E22", "E26", "C8", "C12", "G37"):
+        assert f"## {check}" in text, check
+    assert "Pending" in text and "TriZOD-test v1.0" in text
+    assert manifest["validation"]["decisions"] == "VALIDATION.md"
+    assert "VALIDATION.md" in manifest["files"]
+
+
+def test_the_test_components_are_the_stated_resampling_unit(release):
+    out, manifest = release["out"], release["manifest"]
+    lines = (out / "test" / "TriZOD_test_set_components.tsv").read_text().splitlines()
+    assert lines[0] == "id\tcomponent\tcomponent_size"
+    assert len(lines) - 1 == manifest["parquet"]["split_counts"]["test_trizod"]
+    block = manifest["residual_similarity"]["test_components"]
+    assert block["components"] == len({ln.split("\t")[1] for ln in lines[1:]})
+    assert "bootstrap_unit" in manifest["test_set"]
+    readme = " ".join((out / "README.md").read_text().split())
+    assert "homology components under the leakage rule" in readme
+    assert "not chains or residues" in readme
+    assert "resample chains or clusters" not in readme
+
+
+def test_the_leakage_claim_is_the_searched_rule(release):
+    readme = " ".join((release["out"] / "README.md").read_text().split())
+    assert "no training chain aligns to a test chain" not in readme
+    assert "no alignment that mmseqs2 reports between a training chain" in readme
+    assert "--min-seq-id 0" in readme
+    assert "CheZOD-disjoint at cluster level" not in readme
+    assert "lipopolysaccharide (LPS) micelles and bilayers" in readme
+
+
+def test_residual_similarity_is_documented_and_counted(release):
+    out, manifest = release["out"], release["manifest"]
+    block = manifest["residual_similarity"]
+    assert set(block) == {
+        "test_components",
+        "shared_accessions",
+        "remote_homologs",
+        "shared_constructs",
+    }
+    assert block["shared_accessions"]["pairs_meeting_rule"] == 0
+    header = (out / "test" / "test_training_shared_accessions.tsv").read_text()
+    assert header.splitlines()[0].split("\t")[-1] == "decision"
+    changelog = " ".join((out / "CHANGELOG.md").read_text().split())
+    assert "tolerant training representatives" in changelog
+    assert "share a UniProt accession" in changelog
+    assert "decided by one criterion" in changelog
+    assert "retired test chains still in the strict tier" in changelog
+
+
+def test_known_issue_inputs_ship_under_their_role(tmp_path):
+    src = tmp_path / "v_b6_e2e_rows.tsv"
+    src.write_text("id\tlabel_or_tier_change\n1_1_1_1\tTrue\n")
+    out = tmp_path / "out"
+    got = finalize.ship_known_issue_inputs(
+        out, {"snapshot_drift": src, "construct_caveats": None}
+    )
+    assert got == {
+        "snapshot_drift": {
+            "file": "known_issues_inputs/snapshot_drift.tsv",
+            "source": "v_b6_e2e_rows.tsv",
+            "sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
+        }
+    }
+    assert (out / "known_issues_inputs" / "snapshot_drift.tsv").read_text() == (
+        src.read_text()
+    )
+
+
+def test_the_cli_passes_the_round4_options_through(monkeypatch):
+    from typer.testing import CliRunner
+
+    from trizod.cli.main import app
+
+    seen = {}
+    monkeypatch.setattr(finalize, "main", lambda argv: seen.setdefault("argv", argv))
+    result = CliRunner().invoke(
+        app,
+        ["dataset", "finalize", "--parquet", "p", "--shifts", "s", "--bundle", "b",
+         "--bmrb-dir", "d", "--out", "o", "--previous-bmrb-dir", "old",
+         "--xref-sources", "x", "--construct-review", "r"],
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    argv = seen["argv"]
+    for flag, value in (
+        ("--previous-bmrb-dir", "old"),
+        ("--xref-sources", "x"),
+        ("--construct-review", "r"),
+    ):
+        assert argv[argv.index(flag) + 1] == value

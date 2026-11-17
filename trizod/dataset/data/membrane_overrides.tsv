@@ -2,7 +2,13 @@
 # no _Sample_component, _Sample.Type, _Sample.Details, _Sample.Solvent_system or
 # _Sample.Name of the chain's samples names the mimetic; only the entry title (or
 # the assembly name, the entry details, the sample-condition details, the
-# citation, the structure keywords, or a shift list's name or values) does.
+# citation, the structure keywords, or a shift list's name or values) does; or a
+# sample field names a detergent the class table does not hold (sulfobetaines,
+# LMNG, alkyl betaines) or names it only in _Sample.Details with a
+# concentration; or the deposition names no mimetic at all although the chain
+# is an integral membrane protein measured by solution NMR (class "unnamed
+# mimetic", marked "probable": it was solubilised in a mimetic, the file does
+# not say which).
 # Each row was reviewed against the raw NMR-STAR file of the 2026-11-11 snapshot
 # (release audit C8, 2026-11-17; re-audit 2026-11-17b: 52446, 18557, 26857,
 # 15305_2_1_1, 51798_2_1_1 and the LPS rows). Titles are never matched
@@ -21,6 +27,23 @@
 # names a protein (lipid-transfer/-binding proteins, StAR lipid-transfer
 # domains, Sds3, lipid-free apoE).
 #
+# Release validation 2026-11-17c (C8): the 28 moderate/strict chains the rule
+# left unflagged although they look like membrane-mimetic samples were reviewed
+# against their raw files. Listed below: the 7 definite entries (27093, 18026,
+# 51492, 26936, 26937, 27502, 19603; the mimetic is in the file) and the 15
+# integral membrane proteins measured by solution NMR with no mimetic deposited
+# (19637, 51063, 18648, 15019, 7340, 19126, 19994, 27438, 18494, 19379, 26617,
+# 51026, 18706, 16497, 26624; class "unnamed mimetic", probable). Reviewed and
+# NOT listed: 5376 (the transducin peptide is 2.6 mM in fast exchange over
+# 0.063 mM rhodopsin in native disk membranes; the shift list cites no sample
+# and the entry also holds the peptide alone in solution, so the shifts are
+# those of the free peptide); 4151 (F1Fo ATP synthase subunit c, the sample
+# lists the protein only; this protein is studied in chloroform/methanol/water,
+# an organic solvent rather than a mimetic -- a known issue, not a mimetic);
+# 6056 (Ost4p, protein only, pH* reading: probably a mixed organic solvent, not
+# a mimetic). Reviewed for the LPS policy and NOT listed: 7176 (Fowlicidin-3,
+# whose citation names lipopolysaccharide; the sample is 50 % TFE, no LPS).
+#
 # LPS policy (re-audit 2026-11-17b, item 4): lipopolysaccharide micelles and
 # bilayers are membrane mimetics, everywhere and consistently. An LPS sample
 # component, _Sample.Type or sample text is classified by the rule (class LPS in
@@ -38,6 +61,8 @@ id	class	reason
 1343	micelle	title: "Mitochondrial Signal Peptide Bound to a Micelle"; no sample component deposited
 2249	DPC	title: "Epidermal Growth Factor Bound to Perdeuterated Dodecylphosphocholine Micelles"
 6857_3_1_1	DPC	shift list 3 is recorded under sample conditions "conditions of FF2 in DPC" (study "MBP immunodomiant peptide in 100mM DPC-d38"), though its experiment cites the aqueous sample 1
+7340	unnamed mimetic	diacylglycerol kinase, "40 kDa membrane protein" (title, citation; as 15019), solution NMR; the sample lists DAGK only (probable; validation 2026-11-17c, C8)
+15019	unnamed mimetic	diacylglycerol kinase, "40 kDa membrane protein" (title, citation), solution NMR; the sample lists DAGK only (probable; validation 2026-11-17c, C8)
 15305_2_1_1	DPC	shift list 2 cites experiment 1 (aqueous sample 1), but its shifts match the micelle lists: mean |dH| 0.027 ppm to list 3 (sample 3, 50 mM DPC) against 0.071 ppm to list 1; sample 2 is "CTX_A3_in_SGC_DPC_micelle" (45 mM DPC, 5 mM sulfatide)
 15413	LPS	title: "High resolution NMR structure of YW12D in the presence of Lipopolysaccharide (LPS)"; experiment "TOCSY, transferred-NOESY" on the one sample
 15460	LPS	title: "High resolution structure of AK12 in the presence of Lipopolysaccharide (LPS)"; trNOESY on the one sample
@@ -52,15 +77,25 @@ id	class	reason
 15980	LPS	title: "Lipopolysaccharide Bound Structures of the Active Fragments of Fowlicidin-1"; keywords "LPS", "trNOE", "STD"
 16012	micelle	title: "BNIP3 transmembrane peptide dimer in detergent micelles"
 16074	micelle	title: "Solution structure of micelle-bound kalata B2"
+16497	unnamed mimetic	integrin alphaIIb-beta3 transmembrane complex (title, assembly name, entity names), solution NMR; the samples list the two TM segments and HEPES only (probable; both chains; validation 2026-11-17c, C8)
 16726	bicelle	title: "in membrane bound form"; sample conditions: "membrane(15%) prepared from mixture of DMPC and DHPC in the ratio of 3:1"
 17424	micelle	title: "Integrin 1 in Detergent Micelles"; keyword "Detergent micelle"
+18026	OG	_Sample.Details of all three samples: "The sample also includes 5mM CaCl2, 5mM MgCl2, and 50mM octyl b-D-glucopyranoside" (above the 18 mM OG CMC); no sample component lists it (validation 2026-11-17c, C8)
+18494	unnamed mimetic	"alpha-Helical Membrane Protein TM0026" (title, entry details, citation), solution NMR; the sample lists the protein only (probable; validation 2026-11-17c, C8)
 18557	OG	sample-condition details: "20 mM HEPES, 50 mM NaCl, 30 mM octyl-glucoside, pH 6.5" (above the 18 mM OG CMC); no sample component lists it
+18648	unnamed mimetic	APP transmembrane domain V44M dimer ('APPTM'; related entry 18649 'Transmembrane domain of Amyloid precursor protein WT'), solution NMR; the sample lists the peptide only (probable; validation 2026-11-17c, C8)
+18706	unnamed mimetic	influenza A M2 S31N (19-49), the transmembrane channel peptide (citation: "M2 ion channel"), solution NMR; the six samples list the peptide only (probable; validation 2026-11-17c, C8)
 18796	nanodisc	title and assembly name: "OmpX in phopspholipid nanodiscs"
 18817	micelle	title: "intact KCNE2 in detergent micelles"; keyword "detergent micelle"
 18958	bicelle	title: "The Integrin L Transmembrane Domain in Bicelles"
+19126	unnamed mimetic	full-length transmembrane domains of the human glycine receptor alpha1 (title; keyword 'transmembrane domain'), solution NMR; the seven samples list the protein only (probable; validation 2026-11-17c, C8)
 19334	LPS	title and assembly name: "Temporin-1 Ta in lipopolysaccharide micelles"
+19379	unnamed mimetic	alpha7 nAChR transmembrane domain (title; keyword 'transmembrane domain'), solution NMR; the sample lists protein, NaCl and acetate only (probable; validation 2026-11-17c, C8)
 19597	SDS	assembly name: "Ctrr_sds"; title: "model membrane interactions of Ctriporin"
+19603	DPC	assembly, entity and component name 'ctrdpc' (Ctriporin in DPC; '(?<![a-z])dpc' cannot match inside the word); title: "model membrane interactions of Ctriporin"; its twin entry 19597 'ctr in SDS' is the SDS override (validation 2026-11-17c, C8)
+19637	unnamed mimetic	E. coli outer membrane protein W, a beta-barrel (title; keywords 'integral membrane protein', 'outer membrane protein'), solution NMR; the sample lists OmpW only (probable; validation 2026-11-17c, C8)
 19941	DPC	title: "TM domain of LAMP-2A in DPC micelles"
+19994	unnamed mimetic	transmembrane domain of the full-length inner membrane protein YgaP (title; citation: "Integral Membrane Protein YgaP"), solution NMR; the samples list the protein only (probable; validation 2026-11-17c, C8)
 20044	SDS	title: "Interleukin-8 C-terminal domain in solution with SDS micelles"; keyword "micelle"
 20057	LPS	title: "designed peptide, YI12WF in the presence of Lipopolysaccharide"; trNOESY on the one sample
 20058	LPS	title: "designed peptide, YI12WW in the presence of Lipopolysaccharide"; trNOESY on the one sample
@@ -83,8 +118,15 @@ id	class	reason
 26049	liposome	title and assembly name: "DK17 IN GM1 LUVS"
 26050	liposome	title and assembly name: "DK17 IN POPC:POPG:CHOLESTEROL:GM1 LUVS"
 26554	SDS	title: "K2 dehydrin in the presence of SDS micelles"
+26617	unnamed mimetic	non-selective ion channel NaK tetramer (title), solution NMR; the sample lists the protein only (probable; validation 2026-11-17c, C8)
+26624	unnamed mimetic	integrin beta1 transmembrane and cytoplasmic domain (title; entity details: "the membrane and cytoplasmic domain of integrin beta1"), solution NMR; the sample lists the protein only (probable; validation 2026-11-17c, C8)
 26857	bicelle	integral membrane protein LspA (lipoprotein signal peptidase) with globomycin; citation: "From Nanodiscs to Isotropic Bicelles: A Procedure for Solution NMR Studies of Detergent-Sensitive Integral Membrane Proteins"; the deposited sample lists protein and acetate buffer only (probable)
+26936	micelle	components LMNG 0.01 % (about 0.1 mM, ten times its 0.01 mM CMC) and cholesteryl hemisuccinate 0.001 %, a GPCR detergent micelle around nanobody Nb33; LMNG is not in the class table (validation 2026-11-17c, C8)
+26937	micelle	components LMNG 0.01 % (about 0.1 mM, ten times its 0.01 mM CMC) and cholesteryl hemisuccinate 0.001 %, as 26936, around nanobody Nb39 (validation 2026-11-17c, C8)
+27093	micelle	component 'sulfobetaine-12' (Zwittergent 3-12) 30-50 mM in sample 1 and 50 mM (d25) in sample 2, 10-25 times its CMC (2-4 mM); sulfobetaines are not in the class table (validation 2026-11-17c, C8)
 27107	DPC	title: "complexin-1 CTD in the presence of dodecylphosphocholine micelles"; sample conditions: "with ~55 mM dodecylphosphocholine (DPC)"
+27438	unnamed mimetic	PIRT, a two-transmembrane-helix regulator of the TRPM8 channel (citation: "Phosphoinositide-interacting regulator of TRP"), solution NMR; the sample lists the protein only (probable; validation 2026-11-17c, C8)
+27502	micelle	component 'C14 betaine' 100 mM [U-2H] (tetradecyl betaine detergent micelles) with the NsaS transmembrane domain; citation: "Structure and Function of the Transmembrane Domain of NsaS" (validation 2026-11-17c, C8)
 30761	DPC	title: "NMR structure of Ost4 in DPC micelles"
 30834	DPC	title: "Nav1.5 DIV S3b-S4a paddle motif in DPC micelle"
 34645	DPC	title: "HIV-1 and SIVmac p6 ... in the presence of DPC micelles"
@@ -97,5 +139,8 @@ id	class	reason
 36450	bicelle	title and assembly name: "Escherichia coli Total Lipid Extract Bicelle bound VR18 Antimicrobial Peptide"
 36451	LPS	title and assembly name: "Pseudomonas aeruginosa Lipopolysaccharide (LPS) Bicelle bound VR18"
 50744	nanodisc	title: "Nanodisc reconstitution of flavin mononucleotide binding domain"; assembly name "Protein-lipid-nanodisc"
+51026	unnamed mimetic	S64V-EmrE, a multidrug-resistance efflux pump (four transmembrane helices; citation: "multidrug resistance efflux pump"), with TPP, solution NMR; the sample lists protein, TPP and MES buffer only (probable; both chains; validation 2026-11-17c, C8)
+51063	unnamed mimetic	NaK channel pore NaKd18 (citation: "non-selective cation channel"), solution NMR; the samples list protein, MOPS and KCl only (probable; validation 2026-11-17c, C8)
+51492	micelle	component 'sulfobetaine 3-10' 3 % (about 98 mM; SB3-10 CMC 25-40 mM); sample name 'TDP43_3%SB3-10'; title 'NTD TDP-43 with 3% SB3-10'; both chains share the one sample (validation 2026-11-17c, C8)
 51798_2_1_1	SDS	shift list 2 is named "N-terminal disordered domain of Tetrahymena telomerase protein p65 with SDS", like sample 2 (25 mM SDS), but its experiments cite only sample 1
 52446	DPC	_Entry.Details: "1H 13C 15N Backbone assignment and 19F-Phe assignment of the SARS-CoV-2 Fusion Domain mutant K825A in DPC micelle at pH5.0"; the samples list no DPC

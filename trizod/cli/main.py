@@ -774,6 +774,23 @@ def _dataset_finalize(
         "--calibration-input",
         help="The Parquet the threshold framework calibrated on.",
     ),
+    previous_bmrb_dir: str | None = typer.Option(
+        None,
+        "--previous-bmrb-dir",
+        help="The previous build's BMRB snapshot: the drift text counts every "
+        "chain of the entries that changed between the two.",
+    ),
+    xref_sources: str | None = typer.Option(
+        None,
+        "--xref-sources",
+        help="The dated cross-reference sources (SEQRES, SIFTS): the "
+        "outside-UniProt-span caveat is measured at residue level.",
+    ),
+    construct_review: str | None = typer.Option(
+        None,
+        "--construct-review",
+        help="The shared-construct review (default: the committed table).",
+    ),
 ):
     """Assemble the deposit: Parquet, views, crosswalk, test FASTAs, rendered
     docs, class balance, known issues, snapshot hashes, MANIFEST.json and
@@ -813,6 +830,9 @@ def _dataset_finalize(
         ("--ionic-drivers", ionic_drivers),
         ("--scoring-commit", scoring_commit),
         ("--calibration-input", calibration_input),
+        ("--previous-bmrb-dir", previous_bmrb_dir),
+        ("--xref-sources", xref_sources),
+        ("--construct-review", construct_review),
     ):
         if value is not None:
             argv += [flag, value]

@@ -1,0 +1,72 @@
+# Test chains that share a construct with training once expression tags are set
+# aside: the reviewed outcome of every candidate pair (release validation
+# 2026-11-17c, check E26; decision of 17 November 2026).
+#
+# Criterion (trizod/dataset/shared_constructs.py, docs/dataset/dataset-construction.md):
+# a pinned test chain is retired as shared_construct when, after the expression
+# tags of both chains are removed (N- and C-terminal His tags, thrombin, TEV and
+# HRV-3C sites, a GB1 fusion, the RIKEN GSSGSSG/SGPSSG flanks), an identical run
+# of >= 30 residues with a training chain (split train or redundant) covers
+# >= 50 % of the test chain's scored residues. Otherwise it stays a test chain.
+#
+# Candidates: every test x training pair whose stripped sequences share an
+# identical run of >= 30 residues (source identical_run; an exhaustive 30-mer
+# scan), and the 35 pairs on 23 test chains that meet the leakage rule only
+# after stripping (source tag_stripped_homology: the union of the auditor's 34
+# pairs and the verifier's 34, which differ by one chain, 5764 vs 15457;
+# leakage/verify/out/v_e26_stripped_pairs.tsv). Computed on the 2026-11-17c
+# release Parquet with `python -m trizod.dataset.shared_constructs`; finalize
+# re-derives every row from the release it ships and refuses a stale one.
+#
+# test_tags / training_tags: the tags removed; run: longest identical run after
+# stripping; test_scored: scored residues of the test chain; scored_in_run: those
+# inside the run; coverage: scored_in_run / test_scored; outcome: retire / keep.
+#
+# Outcome: 7070_1_1_1 (Prp24 RRM1-2) is retired: an 83-residue run identical to
+# training 16243_1_1_1 (Prp24 RRM2-3) holds 82 of its 158 scored residues
+# (51.9 %); its row is in test_retirements.tsv. Every other pair is kept: the
+# longest other runs are 37 (52143_1_1_1 ~ 53627_1_1_1, 13.7 %) and 34 residues
+# (19777_1_1_1 ~ 50256_1_1_1, 16.8 %), and no tag-stripped homology pair shares
+# more than 6 identical residues. 30007_1_1_1 ~ 50596_1_1_1 meets the leakage
+# rule on an alternative alignment (E20/E22): the training chain 50596_1_1_1 is
+# removed by stage 2 since the search runs with --min-seq-id 0; the test chain
+# stays.
+test_id	training_id	source	test_tags	training_tags	run	test_scored	scored_in_run	coverage	outcome
+5764_1_1_1	16444_1_1_1	tag_stripped_homology	-	GB1	4	104	4	0.038	keep
+6081_1_1_1	18880_1_1_1	tag_stripped_homology	-	N-His,N-thrombin	3	157	3	0.019	keep
+7070_1_1_1	16243_1_1_1	identical_run	-	C-His	83	158	82	0.519	retire
+7101_1_1_1	15478_1_1_1	tag_stripped_homology	C-His	-	4	57	4	0.070	keep
+10028_1_1_1	5305_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	N-His,N-thrombin	6	43	6	0.140	keep
+10028_1_1_1	6086_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	5	43	5	0.116	keep
+10028_1_1_1	27579_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	6	43	6	0.140	keep
+10028_1_1_1	27930_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	4	43	4	0.093	keep
+10028_1_1_1	30857_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	6	43	6	0.140	keep
+10028_1_1_1	30858_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	6	43	6	0.140	keep
+10028_1_1_1	36114_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	43	3	0.070	keep
+10028_1_1_1	36115_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	43	3	0.070	keep
+10028_1_1_1	51198_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	6	43	6	0.140	keep
+10100_1_1_1	53371_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	96	3	0.031	keep
+10124_1_1_1	50451_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	87	3	0.034	keep
+10124_1_1_1	50453_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	87	3	0.034	keep
+10269_1_1_1	28060_1_1_1	tag_stripped_homology	RIKEN-N	N-His	2	58	2	0.034	keep
+10276_1_1_1	17673_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	71	3	0.042	keep
+11210_1_1_1	17515_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	94	3	0.032	keep
+11216_1_1_1	16879_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	3	96	3	0.031	keep
+15197_1_1_1	18880_1_1_1	tag_stripped_homology	-	N-His,N-thrombin	4	155	4	0.026	keep
+15457_1_1_1	19779_1_2_1	tag_stripped_homology	-	N-His	3	172	3	0.017	keep
+17306_1_1_1	27747_1_1_1	tag_stripped_homology	C-His	-	6	106	6	0.057	keep
+17306_1_1_1	53200_1_1_1	tag_stripped_homology	C-His	-	6	106	6	0.057	keep
+18612_1_1_1	10261_1_1_1	tag_stripped_homology	-	RIKEN-N,RIKEN-C	6	165	6	0.036	keep
+19710_1_1_1	18920_1_1_1	tag_stripped_homology	-	N-His	6	62	6	0.097	keep
+19777_1_1_1	50256_1_1_1	identical_run	-	-	34	197	33	0.168	keep
+25036_1_1_1	11266_1_1_1	tag_stripped_homology	-	RIKEN-N,RIKEN-C	3	86	3	0.035	keep
+25036_1_1_1	51647_1_1_1	tag_stripped_homology	-	N-TEV	3	86	3	0.035	keep
+30007_1_1_1	50596_1_1_1	tag_stripped_homology	-	-	6	92	6	0.065	keep
+30655_1_1_1	10033_1_1_1	tag_stripped_homology	-	RIKEN-N,RIKEN-C	4	183	4	0.022	keep
+30655_1_1_1	11144_1_1_1	tag_stripped_homology	-	RIKEN-N,RIKEN-C	3	183	3	0.016	keep
+36179_1_1_1	18880_1_1_1	tag_stripped_homology	-	N-His,N-thrombin	3	147	3	0.020	keep
+36430_1_1_1	34429_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	5	93	5	0.054	keep
+36431_1_1_1	34429_1_1_1	tag_stripped_homology	RIKEN-N,RIKEN-C	-	5	102	5	0.049	keep
+50098_1_1_1	19569_1_1_1	tag_stripped_homology	C-His	-	4	99	3	0.030	keep
+50148_1_1_1	15057_1_1_1	tag_stripped_homology	-	C-His	5	125	5	0.040	keep
+52143_1_1_1	53627_1_1_1	identical_run	-	-	37	271	37	0.137	keep

@@ -54,8 +54,21 @@ span of the previous one, so a pair can need either direction for its second
 alignment too. The same search serves the stage-2 removal
 in :mod:`trizod.dataset.redundancy`, the release gate in
 :mod:`trizod.dataset.package_release`, the test-set checks in
-:mod:`trizod.dataset.testset` and the CheZOD-overlap flags of the Parquet. The
-exact >= 20 aa substring check of the release gate needs no score at all.
+:mod:`trizod.dataset.testset` (CheZOD117 overlap, within-test duplicates), the
+CheZOD-overlap flags of the Parquet and the homology components of the
+UdonPred validation split (:mod:`trizod.dataset.export_jsonl`). The exact
+>= 20 aa substring check of the release gate needs no score at all.
+
+The 30 % identity is NOT passed to mmseqs either (``--min-seq-id 0``,
+``LEAKAGE_SEARCH_MIN_SEQ_ID``): mmseqs computes a pair's alternative
+alignments only behind a best alignment that passes ``--min-seq-id``, so with
+0.3 a pair whose best alignment is below 30 % identity was dropped with all
+its alternatives (release validation 2026-11-17c, E20/E22, decision option a:
+36490_1_1_1 ~ retired 53299_1_1_1, best 25.8 % at 38 bits, second 32.9 % over
+81.9 % of 36490 at 32 bits; 50596_1_1_1 ~ test 30007_1_1_1, best 28.5 %,
+second 35.0 % over 80.0 % of 30007). :func:`is_leak` applies the identity
+floor to every reported alignment instead (``pident``, printed by mmseqs to
+three decimals).
 
 Coverage is the mmseqs definition, the aligned span ``(end - start + 1) /
 length``, gaps included. ``--cov-mode 0`` would demand 80 % of both chains, so
@@ -97,6 +110,11 @@ COMMON = [
 # Test-set leakage criterion: >= 30 % identity over >= 80 % of the test chain
 # (rule "test") or of either chain (rule "either").
 LEAKAGE_MIN_SEQ_ID = 0.3
+#: mmseqs --min-seq-id of every leakage search: 0, so that mmseqs computes the
+#: alternative alignments of a pair whose best alignment is below the rule's
+#: identity (validation 2026-11-17c, E20/E22). The rule's identity
+#: (LEAKAGE_MIN_SEQ_ID, or WITHIN_TEST_MIN_SEQ_ID) is applied by is_leak.
+LEAKAGE_SEARCH_MIN_SEQ_ID = 0
 LEAKAGE_MIN_TEST_COV = 0.8
 LEAKAGE_MIN_COV = LEAKAGE_MIN_TEST_COV
 LEAKAGE_RULES = ("test", "either")
@@ -183,7 +201,8 @@ def describe_rule(rule: str) -> str:
         f">= {LEAKAGE_MIN_SEQ_ID * 100:g} % identity over "
         f">= {LEAKAGE_MIN_TEST_COV * 100:g} % of {LEAKAGE_RULE_COVERAGE_OF[rule]}"
         f", >= {LEAKAGE_MIN_BITS:g} bits, either search direction, "
-        f"every reported alignment (--alt-ali {LEAKAGE_ALT_ALI})"
+        f"every reported alignment (--alt-ali {LEAKAGE_ALT_ALI}, "
+        f"--min-seq-id {LEAKAGE_SEARCH_MIN_SEQ_ID:g})"
     )
 
 
@@ -216,17 +235,18 @@ def leakage_search_cmd(
     target_fa: Path,
     out_tsv: Path,
     tmp: Path,
-    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
+    min_seq_id: float = LEAKAGE_SEARCH_MIN_SEQ_ID,
 ) -> list[str]:
     """``mmseqs easy-search`` for the test-set leakage criterion, one direction.
 
     The forward search has the training chains as ``query_fa`` and the test
     chains as ``target_fa``; :func:`search_both_directions` adds the reverse.
-    ``--min-seq-id 0.3``, ``--cov-mode 1 -c 0``, a permissive ``-e`` and
+    ``--min-seq-id 0``, ``--cov-mode 1 -c 0``, a permissive ``-e`` and
     ``--alt-ali 10`` (every alternative alignment of a pair is reported, not
-    only the best); every other option is the shared ``COMMON`` block. mmseqs
-    gets no coverage threshold, so it aligns every pair whatever the length
-    ratio; the >= 80 % coverage of the chosen rule and the bit floor are
+    only the best, also behind a best alignment below 30 % identity); every
+    other option is the shared ``COMMON`` block. mmseqs gets no identity and no
+    coverage threshold, so it aligns every pair whatever the length ratio; the
+    identity, the >= 80 % coverage of the chosen rule and the bit floor are
     applied to every parsed alignment (:func:`is_leak`). The command is the
     same for every rule.
     """
@@ -242,14 +262,14 @@ def leakage_search_cmd(
 
 
 def leakage_search_options(
-    min_seq_id: float = LEAKAGE_MIN_SEQ_ID, alt_ali: int = LEAKAGE_ALT_ALI
+    min_seq_id: float = LEAKAGE_SEARCH_MIN_SEQ_ID, alt_ali: int = LEAKAGE_ALT_ALI
 ) -> list[str]:
     """The options of :func:`leakage_search_cmd` (everything after the paths).
     ``alt_ali=0`` drops ``--alt-ali`` (best alignment per pair only): for a
     control, never for the release."""
     return [
         "--min-seq-id",
-        str(min_seq_id),
+        f"{min_seq_id:g}",
         "-c",
         str(LEAKAGE_MMSEQS_COV),
         *with_cov_mode(COMMON, LEAKAGE_COV_MODE),
@@ -324,12 +344,17 @@ def is_leak(
     hit: LeakageHit,
     rule: str = DEFAULT_LEAKAGE_RULE,
     min_bits: float = LEAKAGE_MIN_BITS,
+    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
 ) -> bool:
-    """The leakage criterion on one reported alignment: >= ``min_bits`` bits,
-    and >= 80 % coverage of the test chain (rule ``"test"``) or of the test or
-    the training chain (rule ``"either"``). Identity is enforced by mmseqs
-    (``--min-seq-id``: an alignment below it is never reported)."""
+    """The leakage criterion on one reported alignment: >= ``min_seq_id``
+    identity (30 %; the within-test check passes ``WITHIN_TEST_MIN_SEQ_ID``),
+    >= ``min_bits`` bits, and >= 80 % coverage of the test chain (rule
+    ``"test"``) or of the test or the training chain (rule ``"either"``).
+    mmseqs reports alignments of any identity (``--min-seq-id 0``), so the
+    identity is checked here, on each alignment."""
     check_rule(rule)
+    if hit.pident < 100 * min_seq_id - 1e-9:
+        return False
     if hit.bits < min_bits:
         return False
     if hit.test_cov >= LEAKAGE_MIN_COV:
@@ -397,11 +422,13 @@ def search_both_directions(
     out_tsv: Path,
     tmp: Path,
     log: Path,
-    min_seq_id: float = LEAKAGE_MIN_SEQ_ID,
+    min_seq_id: float = LEAKAGE_SEARCH_MIN_SEQ_ID,
 ) -> list[LeakageHit]:
     """Every alignment of the forward search (training chains as queries,
     hits in ``out_tsv``) and of the reverse search (test chains as queries,
-    hits in :func:`reverse_hits_path`), keyed (training, test) either way."""
+    hits in :func:`reverse_hits_path`), keyed (training, test) either way.
+    ``min_seq_id`` is mmseqs' ``--min-seq-id`` (0 for every leakage search;
+    a criterion's identity is applied afterwards, :func:`is_leak`)."""
     reverse_tsv = reverse_hits_path(out_tsv)
     tmp = Path(tmp)
     for direction in (FORWARD, REVERSE):  # mmseqs makes one level, not two
@@ -438,13 +465,16 @@ def find_leaks(
 ) -> list[LeakageHit]:
     """Every training/test pair with at least one reported alignment -- the
     best or an alternative one, in either search direction -- that meets the
-    leakage criterion of ``rule``; one hit per pair, the first qualifying
-    alignment (forward before reverse, best-scoring first). ``out_tsv``
-    (forward) and its ``_reverse`` sibling keep every alignment mmseqs
-    reported, including those below the thresholds."""
+    leakage criterion of ``rule`` at identity ``min_seq_id``; one hit per pair,
+    the first qualifying alignment (forward before reverse, best-scoring
+    first). ``out_tsv`` (forward) and its ``_reverse`` sibling keep every
+    alignment mmseqs reported (``--min-seq-id 0``), including those below the
+    thresholds."""
     check_rule(rule)
-    hits = search_both_directions(train_fa, test_fa, out_tsv, tmp, log, min_seq_id)
-    return strongest_per_pair(h for h in hits if is_leak(h, rule))
+    hits = search_both_directions(train_fa, test_fa, out_tsv, tmp, log)
+    return strongest_per_pair(
+        h for h in hits if is_leak(h, rule, min_seq_id=min_seq_id)
+    )
 
 
 def find_self_leaks(
@@ -457,18 +487,19 @@ def find_self_leaks(
 ) -> list[LeakageHit]:
     """All-vs-all: every pair of distinct chains of ``fa`` with a reported
     alignment -- the best or an alternative one -- that meets the leakage
-    criterion of ``rule``, one hit per unordered pair (the first qualifying
-    alignment). One search covers both directions: every chain is a query and
-    a target. In a hit the query is ``train_id`` and the target ``test_id``.
-    Used to keep the UdonPred validation split apart from training
-    (:mod:`trizod.dataset.export_jsonl`)."""
+    criterion of ``rule`` at identity ``min_seq_id``, one hit per unordered
+    pair (the first qualifying alignment). One search covers both directions:
+    every chain is a query and a target. In a hit the query is ``train_id``
+    and the target ``test_id``. Used to keep the UdonPred validation split
+    apart from training (:mod:`trizod.dataset.export_jsonl`) and for the
+    homology components of the test set (:mod:`trizod.dataset.finalize`)."""
     check_rule(rule)
     Path(tmp).mkdir(parents=True, exist_ok=True)
-    run(leakage_search_cmd(fa, fa, out_tsv, tmp, min_seq_id), log)
+    run(leakage_search_cmd(fa, fa, out_tsv, tmp), log)
     check_evalue_headroom(out_tsv, fa)
     pairs: dict[frozenset, LeakageHit] = {}
     for h in parse_leakage_hits(out_tsv):
-        if h.train_id != h.test_id and is_leak(h, rule):
+        if h.train_id != h.test_id and is_leak(h, rule, min_seq_id=min_seq_id):
             pairs.setdefault(frozenset((h.train_id, h.test_id)), h)
     return list(pairs.values())
 
@@ -498,6 +529,13 @@ def leakage_rule_record(rule: str) -> dict:
     return {
         "rule": rule,
         "min_seq_id": LEAKAGE_MIN_SEQ_ID,
+        "search_min_seq_id": LEAKAGE_SEARCH_MIN_SEQ_ID,
+        "identity": f">= {LEAKAGE_MIN_SEQ_ID * 100:g} % identity, applied after the "
+        "search to every alignment mmseqs reports; the search runs with "
+        f"--min-seq-id {LEAKAGE_SEARCH_MIN_SEQ_ID:g}, so that mmseqs also computes "
+        "the alternative alignments behind a best alignment below "
+        f"{LEAKAGE_MIN_SEQ_ID * 100:g} % (with --min-seq-id "
+        f"{LEAKAGE_MIN_SEQ_ID:g} such a pair was dropped with all its alternatives)",
         "min_coverage": LEAKAGE_MIN_COV,
         "coverage_of": LEAKAGE_RULE_COVERAGE_OF[rule],
         "coverage_definition": "aligned span / chain length, gaps included",

@@ -143,6 +143,13 @@ _COSOLVENT_PREFIX_TOKENS = (
 #:   'CDCl3/2-propanol') and ``isopropyl alcohol`` (bmr17810, 25 %); the
 #:   DSS-guarded alkanes (bmr25640 pentane reverse micelle, bmr5387 'd-pentane'
 #:   98 %) and the percentage-gated ``dioxane`` (see ``DIOXANE_PATTERN``).
+#: * Release validation 2026-11-17c, the isopropanol abbreviations: ``isoPrOH``
+#:   (bmr50767, a moderate training representative in 50 % v/v, component and
+#:   solvent system '50% H2O/50% isoPrOH') and ``IPA`` (bmr15380 '15% IPA',
+#:   bmr30088 'H20/MPD/IPA'), found by a scan of every sample frame of the
+#:   2026-11-11 snapshot; ``iPrOH`` and ``i-PrOH`` are the other standard
+#:   spellings (forward cover, no deposit today). Whole words, so 'IPTG',
+#:   'diisopropyl...' and 'ipamorelin' stay out.
 ORGANIC_SOLVENT_TOKENS = (
     "methanol",
     "ethanol",
@@ -159,6 +166,10 @@ ORGANIC_SOLVENT_TOKENS = (
     "isopropanol",
     "2-propanol",
     "isopropyl alcohol",
+    "isoPrOH",
+    "iPrOH",
+    "i-PrOH",
+    "IPA",
     "n-propanol",
     "1-propanol",
     "hexane",
@@ -170,10 +181,12 @@ ORGANIC_SOLVENT_TOKENS = (
 #: 17.5 % v/v), ``trifluorethanol`` (bmr26679), ``trifluroethanol``,
 #: ``trifluethanol`` (bmr5837, 30 %), ``Trifluoro Ethanol D2OH`` (bmr15559),
 #: ``trifluoro-ethanol``, and the formula ``CF3CD2OH`` / ``CF3CH2OH`` (bmr4723,
-#: bmr4724 and bmr15937, 50 %). Lower-case source: compile it IGNORECASE or
-#: match it against lower-cased text.
+#: bmr4724 and bmr15937, 50 %), also hyphenated: ``THF (CF3-CD2-OH)`` (bmr31073,
+#: 50 % v/v, the depositor's 'THF' a slip for TFE; release validation
+#: 2026-11-17c). Lower-case source: compile it IGNORECASE or match it against
+#: lower-cased text.
 TRIFLUOROETHANOL_PATTERN = (
-    r"(?:trifl?(?:uo|ou|u|o)r?[\s-]*o?[\s-]*ethanol|cf3c[hd]2o[hd])"
+    r"(?:trifl?(?:uo|ou|u|o)r?[\s-]*o?[\s-]*ethanol|cf3-?c[hd]2-?o[hd])"
 )
 
 #: Substituents that turn methanol/ethanol into a different compound when they

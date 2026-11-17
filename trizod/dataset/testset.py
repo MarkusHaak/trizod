@@ -620,7 +620,9 @@ def find_within_test_pairs(
     test_recs: dict[str, str], work: Path
 ) -> list[mm.LeakageHit]:
     """Pairs of distinct test chains at >= 50 % identity over >= 80 % of
-    either chain (and the bit floor), one hit per unordered pair."""
+    either chain (and the bit floor), one hit per unordered pair. The search
+    reports alignments of any identity (``--min-seq-id 0``, so alternatives
+    behind a weaker best alignment are seen); the 50 % is applied to each."""
     work.mkdir(parents=True, exist_ok=True)
     fa = work / "trizod_test.fasta"
     write_fasta(test_recs, fa)
@@ -630,11 +632,12 @@ def find_within_test_pairs(
         work / "within_test_hits.tsv",
         work / "tmp_within_test",
         work / "within_test_search.log",
-        min_seq_id=mm.WITHIN_TEST_MIN_SEQ_ID,
     )
     pairs: dict[frozenset, mm.LeakageHit] = {}
     for h in hits:
-        if h.train_id != h.test_id and mm.is_leak(h, rule="either"):
+        if h.train_id != h.test_id and mm.is_leak(
+            h, rule="either", min_seq_id=mm.WITHIN_TEST_MIN_SEQ_ID
+        ):
             pairs.setdefault(frozenset((h.train_id, h.test_id)), h)
     return list(pairs.values())
 

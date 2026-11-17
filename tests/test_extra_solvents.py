@@ -110,6 +110,9 @@ _LEGACY_COSOLVENT_TOKENS = (
     "CDCl3", "CHCl3", "isopropanol", "2-propanol", "isopropyl alcohol",
     "n-propanol", "1-propanol", "hexane", "pentane", "dioxane",
 )  # fmt: skip
+#: Added by the release validation 2026-11-17c (isopropanol abbreviations),
+#: after "isopropyl alcohol"; whole words like the other plain solvents.
+_ADDED_2026_11_17C = ("isoPrOH", "iPrOH", "i-PrOH", "IPA")
 _LEGACY_WORD_BOUNDARY_COSOLVENTS = frozenset(
     {
         "urea", "hfip", "methanol", "ethanol", "cd3oh", "cd3od", "meoh", "etoh",
@@ -176,8 +179,15 @@ def _rule(token):
 
 
 def test_derived_tier_token_list_is_unchanged():
-    # same tokens, same spelling (they name the columns), same order
-    assert COSOLVENT_TOKENS == _LEGACY_COSOLVENT_TOKENS
+    # same tokens, same spelling (they name the columns), same order; the
+    # 2026-11-17c isopropanol abbreviations follow "isopropyl alcohol"
+    at = _LEGACY_COSOLVENT_TOKENS.index("isopropyl alcohol") + 1
+    expected = (
+        _LEGACY_COSOLVENT_TOKENS[:at]
+        + _ADDED_2026_11_17C
+        + _LEGACY_COSOLVENT_TOKENS[at:]
+    )
+    assert expected == COSOLVENT_TOKENS
     assert set(sample_state.ORGANIC_SOLVENT_WORD_TOKENS) <= {
         t.lower() for t in COSOLVENT_TOKENS
     }
@@ -189,8 +199,13 @@ def test_dropped_word_boundary_entries_were_shadowed_by_patterns():
     dropped = _LEGACY_WORD_BOUNDARY_COSOLVENTS - WORD_BOUNDARY_COSOLVENTS
     assert len(dropped) == 9
     assert dropped <= set(COSOLVENT_PATTERN_RES)
-    assert WORD_BOUNDARY_COSOLVENTS <= _LEGACY_WORD_BOUNDARY_COSOLVENTS
+    added = {t.lower() for t in _ADDED_2026_11_17C}
+    assert WORD_BOUNDARY_COSOLVENTS - added <= _LEGACY_WORD_BOUNDARY_COSOLVENTS
+    assert added <= WORD_BOUNDARY_COSOLVENTS
     for token in COSOLVENT_TOKENS:
+        if token in _ADDED_2026_11_17C:
+            assert _rule(token.lower()) == "word", token
+            continue
         assert _rule(token.lower()) == _legacy_rule(token.lower()), token
 
 
@@ -224,8 +239,15 @@ def test_cosolvent_evidence_matches_as_before_without_the_trifluoroethanol_word(
         re.IGNORECASE,
     )
     words = tuple(t for t in _LEGACY_EVIDENCE_WORD_TOKENS if t != "trifluoroethanol")
-    assert words == sample_state._COSOLVENT_WORD_TOKENS
+    added = tuple(t.lower() for t in _ADDED_2026_11_17C)
+    at = words.index("isopropyl alcohol") + 1
+    assert words[:at] + added + words[at:] == sample_state._COSOLVENT_WORD_TOKENS
     for text in _MATCH_CORPUS + [t.upper() for t in _MATCH_CORPUS]:
+        if any(
+            re.search(rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])", text.lower())
+            for a in added
+        ):
+            continue  # a 2026-11-17c spelling: newly evidence, on purpose
         expected = legacy.search(text) is not None
         assert sample_state.has_cosolvent_evidence([text]) is expected, text
 
@@ -545,3 +567,77 @@ def test_real_organic_solvent_samples_are_flagged(entry_id, token):
 def test_real_reference_compound_samples_are_not_flagged_by_new_tokens(entry_id):
     row = _fill_real(entry_id)
     assert [token for token in NEW_TOKENS if row[token]] == []
+
+
+# --------------------------------------------------------------------------- #
+# release validation 2026-11-17c (C8 verifier aside): spelling gaps
+# --------------------------------------------------------------------------- #
+#
+# bmr50767 (a moderate training representative) is in 50 % isopropanol, deposited
+# as the component 'isoPrOH' and the solvent system '50% H2O/50% isoPrOH': no
+# token matched the abbreviation. The corpus scan of every sample frame for the
+# same gap found 'IPA' (bmr15380 '15% IPA', bmr30088 'H20/MPD/IPA') and, for TFE,
+# the hyphenated formula 'THF (CF3-CD2-OH)' of bmr31073 (50 % v/v, a moderate
+# training representative; 'THF' is the depositor's slip for TFE).
+
+SPELLING_GAP_TOKENS = ["isoPrOH", "iPrOH", "i-PrOH", "IPA"]
+
+
+@pytest.mark.parametrize(
+    ("name", "token"),
+    [
+        ("isoPrOH", "isoPrOH"),  # bmr50767, 50 % v/v
+        ("iPrOH", "iPrOH"),
+        ("i-PrOH-d8", "i-PrOH"),
+        ("IPA", "IPA"),
+        ("THF (CF3-CD2-OH)", "trifluoroethanol"),  # bmr31073, 50 % v/v
+        ("CF3-CH2-OH", "trifluoroethanol"),
+    ],
+)
+def test_the_isopropanol_and_tfe_spelling_gaps_are_closed(name, token):
+    assert token in STRICT_TOKENS
+    row = _fill(components=[_component(name)])
+    assert row[token] is True
+    assert sample_state.has_cosolvent_evidence([name])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "50% H2O/50% isoPrOH",  # bmr50767 _Sample.Solvent_system
+        "of 55% MPD, 15% IPA and 50 mM NaCl in 7.5 mM sodium acetate",  # bmr15380
+        "H20/MPD/IPA",  # bmr30088 _Sample.Solvent_system
+        "50 % v/v THF (CF3-CD2-OH), 0.25 mM DSS",  # bmr31073 _Sample.Details
+    ],
+)
+def test_the_spelling_gaps_are_found_in_sample_text(text):
+    row = _fill(components=[], details=text)
+    assert _flagged(row), text
+    assert sample_state.has_cosolvent_evidence([text])
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "IPTG",
+        "isopropyl-beta-D-thiogalactopyranoside (IPTG)",
+        "diisopropylfluorophosphatase",
+        "tipa",
+        "ipamorelin",
+        "CF3COOH",
+        "tetrahydrofolate",
+    ],
+)
+def test_the_spelling_gap_tokens_do_not_fire_on_lookalikes(name):
+    row = _fill(components=[_component(name)])
+    assert not any(row[t] for t in SPELLING_GAP_TOKENS + ["trifluoroethanol"]), name
+
+
+@requires_bmrb_data
+@pytest.mark.parametrize(
+    ("entry_id", "token"), [("50767", "isoPrOH"), ("31073", "trifluoroethanol")]
+)
+def test_the_deposited_spelling_gap_entries_are_flagged(entry_id, token):
+    row = fill_real(entry_id, perturbing_cosolvents=STRICT_TOKENS)
+    assert row[token] is True
+    assert row["cosolvent_evidence"] is True

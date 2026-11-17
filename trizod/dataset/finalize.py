@@ -19,11 +19,25 @@ package``), the shift table and the BMRB snapshot, and writes into ``--out``::
                                     retired chains, CheZOD117 and its original
                                     sequences), the test-set labels table and
                                     the pin provenance
+    test/TriZOD_test_set_components.tsv
+                                    homology components of the test set under
+                                    the leakage rule, the resampling unit (E24)
+    test/test_training_shared_accessions.tsv
+                                    test x training pairs sharing a UniProt
+                                    accession, with the decision (E22)
+    test/shared_construct_review.tsv
+                                    the reviewed shared-construct pairs (E26)
     class_balance.tsv               per-split label distribution (F33)
     known_issues.tsv                per-chain known issues and changes
                                     (chain_id, issue, evidence; G39)
+    known_issues_inputs/            the per-chain tables finalize was given
+                                    (snapshot drift, construct caveats, ionic
+                                    drivers), cited by known_issues.tsv
     bmrb_files.sha256               per-file SHA-256 of the BMRB snapshot (B4)
-    VALIDATION.json                 the final audit's results (--validation)
+    VALIDATION.json, VALIDATION.md  the final audit's results and the human
+                                    decisions it asks for (--validation;
+                                    VALIDATION.md is rendered from
+                                    docs/dataset/VALIDATION_decisions.md)
     README.md, datasheet.md,        rendered from docs/dataset/ templates with
     CHANGELOG.md                    the counts of this build (G36, G39)
     columns.md                      the column dictionary (D14)
@@ -65,6 +79,7 @@ Usage
         [--snapshot-drift <TSV>] [--construct-caveats <TSV>] \\
         [--scoring-commit <sha>] [--calibration-input <calibrated Parquet>] \\
         [--crosswalk-root <checkout holding data/>] [--set NAME=SPEC ...] \\
+        [--previous-bmrb-dir <previous snapshot>] [--xref-sources <dir>] \\
         [--validation <VALIDATION.json>] [--force]
 """
 
@@ -80,9 +95,11 @@ from pathlib import Path
 
 from trizod import paths as repo_paths
 from trizod.dataset import class_balance as cb
-from trizod.dataset import deploy_fasta, export_jsonl, testset_crosswalk
+from trizod.dataset import construct_span, deploy_fasta, export_jsonl, testset_crosswalk
 from trizod.dataset import known_issues as ki
 from trizod.dataset import release_info as ri
+from trizod.dataset import residual_similarity as rsim
+from trizod.dataset import shared_constructs as sc
 from trizod.dataset.mmseqs import describe_rule
 from trizod.dataset.testset import RETIRED_FASTA
 from trizod.dataset.tiers import TIER_ORDER
@@ -95,6 +112,9 @@ TEMPLATES = {
     "CHANGELOG.md": "CHANGELOG.md",
 }
 COLUMNS_DOC = "columns.md"
+#: The human decisions of the final audit, rendered into the deposit's
+#: VALIDATION.md beside VALIDATION.json (release validation 2026-11-17c, G35).
+VALIDATION_DECISIONS = "VALIDATION_decisions.md"
 #: The v0.3.0 layout is the first 42 columns (offset names as renamed in 2026-08).
 N_COLUMNS_V030 = 42
 #: v0.3.0 (Zenodo, 2026-07-15) counts, for the CHANGELOG: scored records and
@@ -144,6 +164,9 @@ _READ = (
     "cosolvent_evidence",
     "is_bound",
     "physical_state",
+    "uniprot_ids",
+    "uniprot_source",
+    "xrefs",
 )
 STRICT_IONIC_CAP_M = ki.STRICT_IONIC_CAP_M
 #: What ``total_bytes`` of MANIFEST.json covers.
@@ -281,6 +304,12 @@ def summarise_rows(rows: list[dict], names: list[str]) -> dict:
             name: sum(1 for r in test if r.get(f"{name}_overlap") is False)
             for name in ("chezod1325", "chezod1174")
         },
+        "retired_strict": sum(
+            1
+            for r in rows
+            if r["split"] == "test_retired"
+            and (r.get("retired_reason") or "") != "not_strict"
+        ),
         "scored_residues": scored,
         "share_k_lt_10": k_low / scored if scored else None,
         "new_columns": names[N_COLUMNS_V030:],
@@ -693,11 +722,19 @@ def changes_and_issues(
     provenance: dict | None = None,
     reviewed: Path | None = None,
     ionic_drivers: Path | None = None,
+    previous_bmrb_dir: Path | None = None,
+    xref_sources: Path | None = None,
+    extra_issues: list[tuple[str, str, str]] | None = None,
 ) -> tuple[dict[str, str], list[tuple[str, str, str]], dict]:
     """The CHANGELOG / README values of the changes and known issues, the rows
-    of ``known_issues.tsv`` and a summary for MANIFEST (:mod:`known_issues`)."""
+    of ``known_issues.tsv`` and a summary for MANIFEST (:mod:`known_issues`).
+    ``previous_bmrb_dir`` (the previous build's snapshot) lets the drift text
+    count every chain of the changed entries; ``xref_sources`` measures the
+    outside-span construct caveat at residue level
+    (:mod:`trizod.dataset.construct_span`); ``extra_issues`` are rows computed
+    elsewhere (the residual-similarity rows), counted with the rest."""
     rows_by_id = {r["id"]: r for r in rows}
-    issues: list[tuple[str, str, str]] = []
+    issues: list[tuple[str, str, str]] = list(extra_issues or [])
     assessed = {}
     cur = ki.load_build(bundle)
     if previous_build is not None:
@@ -749,13 +786,31 @@ def changes_and_issues(
         )
     drift = None
     if snapshot_drift is not None:
-        drift = ki.snapshot_drift(snapshot_drift, rows_by_id)
+        changed = (
+            ki.changed_entries(previous_bmrb_dir, bmrb_dir)
+            if previous_bmrb_dir is not None and bmrb_dir is not None
+            else None
+        )
+        drift = ki.snapshot_drift(snapshot_drift, rows_by_id, changed)
         issues += drift["rows"]
         assessed["snapshot_drift"] = Path(snapshot_drift).name
+        if changed is not None:
+            assessed["snapshot_drift_entries"] = (
+                f"changed entries computed against {Path(previous_bmrb_dir).name}"
+            )
     values["snapshot_drift_summary"] = ki.snapshot_drift_text(drift)
     caveats = None
     if construct_caveats is not None:
-        caveats = ki.construct_caveats(construct_caveats, rows)
+        residue_counts = {}
+        if xref_sources is not None:
+            residue_counts["outside_uniprot_span_sifts"] = construct_span.outside_span(
+                rows, xref_sources
+            )
+            assessed["construct_caveats_residue_level"] = (
+                "outside_uniprot_span_sifts measured against the xref sources "
+                f"{Path(xref_sources).name} (trizod.dataset.construct_span)"
+            )
+        caveats = ki.construct_caveats(construct_caveats, rows, residue_counts)
         issues += caveats["rows"]
         assessed["construct_caveats"] = Path(construct_caveats).name
     values["construct_caveats"] = ki.construct_text(
@@ -800,6 +855,111 @@ def changes_and_issues(
     )
     summary = {"file": "known_issues.tsv", "by_issue": by_issue, "inputs": assessed}
     return values, issues, summary
+
+
+def read_construct_review(rows: list[dict], path: Path | None = None) -> dict:
+    """The shared-construct review (default: the committed table), checked
+    against the release (:func:`residual_similarity.shared_construct_issues`);
+    read before the output folder is touched."""
+    path = Path(path) if path else sc.REVIEW_TSV
+    return {"path": path, **rsim.shared_construct_issues(sc.read_review(path), rows)}
+
+
+def residual_outputs(rows: list[dict], test_out: Path, constructs: dict) -> dict:
+    """What remains below the leakage rule (:mod:`residual_similarity`):
+    writes ``TriZOD_test_set_components.tsv``,
+    ``test_training_shared_accessions.tsv`` and ``shared_construct_review.tsv``
+    (``constructs``: :func:`read_construct_review`) into ``test_out``; returns
+    the doc values, the known-issue rows and the MANIFEST block."""
+    n_test = sum(1 for r in rows if r["split"] == "test_trizod")
+    comp = rsim.test_components(rows)
+    rsim.write_components(comp, test_out / "TriZOD_test_set_components.tsv")
+    acc = rsim.shared_accessions(rows)
+    rsim.write_shared_accessions(acc, test_out / "test_training_shared_accessions.tsv")
+    acc_summary = rsim.shared_accession_summary(acc)
+    _check(
+        acc_summary["pairs_meeting_rule"] == 0,
+        "a test x training pair sharing a UniProt accession meets the leakage "
+        "rule: the release gate should have failed",
+    )
+    remote = rsim.remote_homologs(rows)
+    _copy(constructs["path"], test_out / "shared_construct_review.tsv")
+    values = {
+        "n_test_components": _fmt(comp["n"]),
+        "test_components": rsim.components_text(comp, n_test),
+        "shared_accessions": rsim.shared_accession_text(acc_summary),
+        "remote_homologs": rsim.remote_homolog_text(remote),
+        "shared_constructs": constructs["text"],
+    }
+    issue_rows = (
+        rsim.shared_accession_rows(acc)
+        + rsim.remote_homolog_rows(remote)
+        + constructs["rows"]
+    )
+    manifest = {
+        "test_components": {
+            "file": "test/TriZOD_test_set_components.tsv",
+            "rule": describe_rule("either"),
+            "components": comp["n"],
+            "singletons": comp["singletons"],
+            "largest": comp["largest"],
+        },
+        "shared_accessions": acc_summary,
+        "remote_homologs": {
+            "issue": "remote_homolog_profile",
+            "search": (
+                f"mmseqs2 search, test chains as queries, --num-iterations "
+                f"{rsim.PROFILE_ITERATIONS} -s 7.5 -a -e {rsim.PROFILE_EVALUE:g}, "
+                "against the tolerant training representatives; a hit at > "
+                f"{rsim.PROFILE_MIN_ID:g} % identity over >= "
+                f"{rsim.PROFILE_MIN_COV * 100:g} % of either chain"
+            ),
+            "test_chains": len(remote["best"]),
+            "test_chains_searched": remote["n_test"],
+            "scored_residues_in_hit_chains": remote["hit_scored"],
+            "scored_residues": remote["n_scored"],
+        },
+        "shared_constructs": {
+            "file": "test/shared_construct_review.tsv",
+            "criterion": (
+                f"retire a test chain when, after tag stripping, an identical run "
+                f"of >= {sc.RUN_MIN} residues with a training chain covers >= "
+                f"{sc.COVERAGE_MIN * 100:g} % of its scored residues"
+            ),
+            **{
+                k: v
+                for k, v in constructs["summary"].items()
+                if k in ("pairs", "test_chains", "retired", "kept_test_chains")
+            },
+        },
+    }
+    return {"values": values, "rows": issue_rows, "manifest": manifest}
+
+
+#: ``finalize`` option -> the file name its table ships under in
+#: ``known_issues_inputs/`` (G36 e: every input known_issues.tsv cites ships).
+KNOWN_ISSUE_INPUTS = {
+    "snapshot_drift": "snapshot_drift.tsv",
+    "construct_caveats": "construct_caveats.tsv",
+    "ionic_drivers": "ionic_drivers.tsv",
+}
+
+
+def ship_known_issue_inputs(out: Path, given: dict[str, Path | None]) -> dict:
+    """Copy every per-chain table finalize was given into
+    ``known_issues_inputs/``; returns ``{role: {"file", "source", "sha256"}}``."""
+    shipped = {}
+    for role, src in given.items():
+        if src is None:
+            continue
+        dst = out / ki.INPUTS_DIR / KNOWN_ISSUE_INPUTS[role]
+        _copy(Path(src), dst)
+        shipped[role] = {
+            "file": dst.relative_to(out).as_posix(),
+            "source": Path(src).name,
+            "sha256": ri.sha256_file(dst),
+        }
+    return shipped
 
 
 def doc_values(
@@ -851,6 +1011,12 @@ def doc_values(
         "n_chezod117": _fmt(split.get("test_chezod117", 0)),
         "n_test_clean_chezod1325": _fmt(summary["test_clean_vs"]["chezod1325"]),
         "n_test_clean_chezod1174": _fmt(summary["test_clean_vs"]["chezod1174"]),
+        "n_test_overlap_chezod1325": _fmt(
+            split.get("test_trizod", 0) - summary["test_clean_vs"]["chezod1325"]
+        ),
+        "n_test_overlap_chezod1174": _fmt(
+            split.get("test_trizod", 0) - summary["test_clean_vs"]["chezod1174"]
+        ),
         "n_rows": _fmt(summary["rows"]),
         "n_columns": _fmt(summary["columns"]),
         "n_columns_previous": _fmt(V030["columns"]),
@@ -896,10 +1062,19 @@ def doc_values(
             else "one row group"
         ),
         "validation_row": (
-            "| `VALIDATION.json` | Results of the release audit this deposit "
-            "passed, check by check |"
+            "| `VALIDATION.json`, `VALIDATION.md` | Results of the release audit "
+            "this deposit passed, check by check, and the human decisions it "
+            "records |"
             if validation
             else ""
+        ),
+        "n_retired_strict": _fmt(summary.get("retired_strict", 0)),
+        "threshold_fit_retired": (
+            "The threshold calibration holds out the test chains (`test_trizod`, "
+            f"`test_chezod117`); the {_fmt(summary.get('retired_strict', 0))} "
+            "retired test chains still in the strict tier (retired for a reason "
+            "other than `not_strict`) are fit chains like any other strict "
+            "chain, which leaves the test set untouched"
         ),
         "snapshot_name": snap.get("name", "not recorded"),
         "snapshot_n_entries": (
@@ -1132,10 +1307,15 @@ def assemble(
     calibration_input: Path | None = None,
     reviewed: Path | None = None,
     ionic_drivers: Path | None = None,
+    previous_bmrb_dir: Path | None = None,
+    xref_sources: Path | None = None,
+    construct_review: Path | None = None,
 ) -> dict:
     """Assemble the deposit into ``out``; returns the MANIFEST. ``reviewed`` is
     the hand-reviewed known-issue table (default:
-    ``docs/dataset/known_issues_reviewed.tsv`` of ``root``)."""
+    ``docs/dataset/known_issues_reviewed.tsv`` of ``root``);
+    ``construct_review`` the shared-construct review (default: the committed
+    ``trizod/dataset/data/shared_construct_review.tsv``)."""
     parquet, bundle, out = Path(parquet), Path(bundle), Path(out)
     root = Path(root) if root is not None else repo_paths.repo_root()
     docs = root / "docs" / "dataset"
@@ -1201,6 +1381,8 @@ def assemble(
             f"Parquet names records {snapshot['n_entries']}",
         )
 
+    constructs = read_construct_review(rows, construct_review)
+
     if out.exists() and any(out.iterdir()):
         _check(force, f"{out} is not empty (pass --force to replace it)")
         shutil.rmtree(out)
@@ -1222,6 +1404,7 @@ def assemble(
     provenance = provenance / "TriZOD_test_set.provenance.json"
     if provenance.exists():
         _copy(provenance, test_out / provenance.name)
+    residual = residual_outputs(rows, test_out, constructs)
 
     # 3. views, regenerated from this build
     deploy_fasta.main(
@@ -1280,6 +1463,7 @@ def assemble(
             "file": "VALIDATION.json",
             "source_sha256": ri.sha256_file(validation),
             "paths_rewritten": scrub_json_paths(out / "VALIDATION.json", anchors),
+            "decisions": "VALIDATION.md",
         }
     pin_provenance = test_out / "TriZOD_test_set.provenance.json"
     changes, issue_rows, issues_summary = changes_and_issues(
@@ -1297,8 +1481,29 @@ def assemble(
         ),
         reviewed=reviewed,
         ionic_drivers=ionic_drivers,
+        previous_bmrb_dir=previous_bmrb_dir,
+        xref_sources=xref_sources,
+        extra_issues=residual["rows"],
     )
     ki.write_tsv(issue_rows, out / "known_issues.tsv")
+    shipped_inputs = ship_known_issue_inputs(
+        out,
+        {
+            "snapshot_drift": snapshot_drift,
+            "construct_caveats": construct_caveats,
+            "ionic_drivers": ionic_drivers,
+        },
+    )
+    issues_summary["inputs_shipped"] = shipped_inputs
+    changes.update(residual["values"])
+    changes["known_issues_inputs_row"] = (
+        f"| `{ki.INPUTS_DIR}/` | The per-chain tables of the release audit that "
+        "`known_issues.tsv` cites ("
+        + ", ".join(f"`{Path(v['file']).name}`" for v in shipped_inputs.values())
+        + "), as finalize read them |"
+        if shipped_inputs
+        else ""
+    )
 
     # 5. documents
     values = doc_values(
@@ -1318,6 +1523,11 @@ def assemble(
     for template, name in TEMPLATES.items():
         text = (docs / template).read_text()
         (out / name).write_text(render_template(text, values, template))
+    if validation is not None:
+        text = (docs / VALIDATION_DECISIONS).read_text()
+        (out / "VALIDATION.md").write_text(
+            render_template(text, values, VALIDATION_DECISIONS)
+        )
     columns = (docs / COLUMNS_DOC).read_text()
     missing = [c for c in names if f"`{c}`" not in columns]
     _check(not missing, f"{COLUMNS_DOC} does not document {missing}")
@@ -1342,7 +1552,15 @@ def assemble(
         },
         "version_doi": doi,
         "concept_doi": ri.CONCEPT_DOI,
-        "test_set": _meta_json(meta, "test_set"),
+        "test_set": {
+            **(_meta_json(meta, "test_set") or {}),
+            "bootstrap_unit": (
+                "the homology components of the test set under the leakage rule "
+                f"({residual['manifest']['test_components']['components']} "
+                "components; test/TriZOD_test_set_components.tsv): resample "
+                "components, not chains or residues"
+            ),
+        },
         "cuts": _meta_json(meta, "cuts"),
         "code": {
             "scoring": scoring,
@@ -1382,6 +1600,7 @@ def assemble(
         },
         "xref_sources": _meta_json(meta, "xref_sources"),
         "leakage": bundle_manifest.get("leakage"),
+        "residual_similarity": residual["manifest"],
         "parquet": {
             "data_sha256": data_fingerprint(out / "trizod_dataset.parquet"),
             "data_sha256_definition": "SHA-256 of the table's data alone "
@@ -1524,6 +1743,27 @@ def main(argv=None) -> None:
         "I_deposited_strict_M, I_implied_M, implied_parts)",
     )
     ap.add_argument(
+        "--previous-bmrb-dir",
+        type=Path,
+        default=None,
+        help="the previous build's BMRB snapshot: the snapshot-drift text then "
+        "counts every chain of the entries that changed between the two",
+    )
+    ap.add_argument(
+        "--xref-sources",
+        type=Path,
+        default=None,
+        help="the dated cross-reference sources (SEQRES, SIFTS): the "
+        "outside-UniProt-span caveat is then measured at residue level",
+    )
+    ap.add_argument(
+        "--construct-review",
+        type=Path,
+        default=None,
+        help="the shared-construct review (default: the committed "
+        "trizod/dataset/data/shared_construct_review.tsv)",
+    )
+    ap.add_argument(
         "--scoring-commit",
         default=None,
         help="commit that scored the entries and wrote the bundle (default: the "
@@ -1559,6 +1799,9 @@ def main(argv=None) -> None:
         ionic_drivers=args.ionic_drivers,
         scoring_commit=args.scoring_commit,
         calibration_input=args.calibration_input,
+        previous_bmrb_dir=args.previous_bmrb_dir,
+        xref_sources=args.xref_sources,
+        construct_review=args.construct_review,
     )
     print(f"\nAssembled TriZOD v{manifest['version']} -> {args.out}")
     print(

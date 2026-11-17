@@ -76,9 +76,15 @@ Which components and which sample fields are read (release audit C8,
   Titles are never matched automatically.
 
 Known recall limits: a mimetic named only in free text the rule does not read
-(the citation, a bare "detergent"), or only in a title not yet reviewed; and a
-bare "MSP" linked to a polymer (scaffold protein or merozoite antigen, the
-name cannot tell -- bmr30639). Known false positive: bmr34151.
+(the citation, a bare "detergent"), or only in a title not yet reviewed; a
+detergent outside the class table (sulfobetaines, LMNG, alkyl betaines, all
+reviewed overrides since the 2026-11-17c validation); an integral membrane
+protein whose deposition names no mimetic at all (class ``unnamed mimetic``,
+reviewed overrides only); and a bare "MSP" linked to a polymer (scaffold
+protein or merozoite antigen, the name cannot tell -- bmr30639). Known false
+positive: bmr34151 (its C12E5 sample 4 is the RDC alignment sample, but it
+serves an isotropic IPAP-HSQC as well and lists no n-alkanol, so neither the
+anisotropic-sample nor the CnEm/n-alkanol exception applies).
 """
 
 from __future__ import annotations
@@ -341,6 +347,13 @@ MIMETIC_CLASSES: tuple[MimeticClass, ...] = (
     MimeticClass("Triton X-100", ADDITIVE, 0.24, 625.0, r"triton"),
     MimeticClass("Tween-20", ADDITIVE, 0.06, 1228.0, r"tween|polysorbate"),
     MimeticClass("digitonin", ADDITIVE, None, 1229.3, r"digitonin"),
+    # --- set by a reviewed override only ------------------------------------
+    # An integral membrane protein (or its transmembrane domain) measured by
+    # solution NMR whose deposition names no mimetic: it was solubilised in one,
+    # the file does not say which (release validation 2026-11-17c, C8). The
+    # pattern matches nothing; only trizod/dataset/data/membrane_overrides.tsv
+    # assigns it.
+    MimeticClass("unnamed mimetic", BILAYER, None, None, r"(?!)"),
 )
 
 MIMETIC_CLASSES_BY_LABEL = {cls.label: cls for cls in MIMETIC_CLASSES}

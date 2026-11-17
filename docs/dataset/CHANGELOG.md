@@ -6,9 +6,10 @@ notes. Every placeholder in double braces is filled from the release; type no
 counts of the current release into this file. Counts of earlier releases and
 of dated audit builds are historical and stated as such. The change and
 known-issue paragraphs come from trizod.dataset.known_issues (finalize
---previous-build, --pkl-dir, --snapshot-drift, --construct-caveats and
-docs/dataset/known_issues_reviewed.tsv); a missing input renders as "not
-assessed". -->
+--previous-build, --pkl-dir, --snapshot-drift with --previous-bmrb-dir,
+--construct-caveats with --xref-sources, and
+docs/dataset/known_issues_reviewed.tsv) and trizod.dataset.residual_similarity;
+a missing input renders as "not assessed". -->
 
 ## v{{version}}
 
@@ -32,6 +33,9 @@ below.
   {{pin_trimmed}}
 - **Retired:** {{n_retired}} chains ({{retired_by_reason}}).
   {{retired_reasons_explained}}.
+- **Shared constructs.** {{shared_constructs}}.
+- **Resampling unit.** Test chains are not independent: {{test_components}};
+  resample components for confidence intervals.
 - **Earlier test sets are not comparable**: UdonPred's published Trizod348
   results, v0.2.0, v{{previous_version}}, and the chains trimmed from the pin
   (now in training or other splits, see above). The new `crosswalk/` lists
@@ -127,11 +131,35 @@ reliability cut.
   bits that does not depend on database size; the gate reads every training
   and redundant row. Before, a one-directional search missed pairs that only
   the reverse search finds.
+- **Every alignment of a pair.** The leakage searches (stage 2, the gate, the
+  CheZOD-overlap flags, the within-test check, the UdonPred validation split)
+  report up to 10 alternative alignments per pair besides the best
+  (`--alt-ali 10`) and run with `--min-seq-id 0`: mmseqs2 computes the
+  alternatives of a pair only behind a best alignment that passes
+  `--min-seq-id`, so with 0.3 a pair whose best alignment was below 30 %
+  identity was dropped with all its alternatives. The rule (30 % identity over
+  80 % of either chain, 27 bits) is applied to every reported alignment. The
+  alternative alignments removed three training representatives that met the
+  rule only on the second alignment of a repeat or tandem construct
+  (51068_1_1_1, 4029_1_1_1, 6280_1_1_1); `--min-seq-id 0` removed two more,
+  whose best alignment was below 30 % (36490_1_1_1 against retired 53299_1_1_1,
+  50596_1_1_1 against test chain 30007_1_1_1).
 - **CheZOD117 as leakage targets**: all 117 original sequences, including the
   two that map to no release chain; test chains overlapping CheZOD117 are
   retired.
 - **Membrane-mimetic recall**: entity-linked detergents, sample types and sample
-  text are read; reviewed title-only cases are listed in the code repository.
+  text are read; reviewed cases the rule cannot see are listed in the code
+  repository (`trizod/dataset/data/membrane_overrides.tsv`): a mimetic named
+  only in the title, assembly name or citation; a detergent outside the class
+  table (sulfobetaines, LMNG, alkyl betaines) or named only in sample text or a
+  chain name; and integral membrane proteins measured by solution NMR whose
+  deposition names no mimetic (class `unnamed mimetic`, probable).
+  Lipopolysaccharide (LPS) micelles and bilayers count as membrane mimetics,
+  everywhere and by rule (class `LPS`).
+- **Cosolvent spellings**: the isopropanol abbreviations `isoPrOH` and `IPA`
+  (and `iPrOH`, `i-PrOH`) and the hyphenated TFE formula `CF3-CD2-OH` are read
+  as perturbing cosolvents; before, 50 % isopropanol (50767_1_1_1) and 50 % TFE
+  (31073_1_1_1) passed the moderate tier.
 - **Sequence alphabet**: a trailing stop codon or apostrophe of a deposited
   sequence is dropped, an internal non-letter becomes X. Sequences hold the 20
   standard residues plus X, U and Z. {{alphabet_changes}}
@@ -148,9 +176,7 @@ reliability cut.
 ### Snapshot and licence
 
 - BMRB snapshot `{{snapshot_name}}` ({{snapshot_n_entries}} entries) replaces
-  the snapshot of 2025-12-01. Measured between the two by the 2026-11-17
-  release audit: 680 entries added, 10 withdrawn, and a few deposited shift
-  lists changed in place; BMRB serves only the current file, so
+  the snapshot of 2025-12-01. BMRB serves only the current file, so
   `bmrb_files.sha256` now records every file read. {{snapshot_drift_summary}}
 - The data are now licensed {{data_license}} (v{{previous_version}}: MIT); the
   code stays {{code_license}}. {{bmrb_acknowledgement}}
@@ -166,17 +192,22 @@ In short:
   pressure ceiling.
 - **Flags**: `membrane_mimetic_sample` is false also where no sample component
   could be read; `high_pressure` is null, not false, where no pressure was
-  recorded (filter with `high_pressure IS NOT TRUE`). A few membrane-mimetic
-  depositions named only in free text remain undetected.
+  recorded (filter with `high_pressure IS NOT TRUE`). Membrane-mimetic recall
+  is limited to what the deposition states: the gaps the rule cannot see
+  (detergents outside the class table, a detergent named only in text or a
+  chain name, integral membrane proteins with no mimetic deposited) are
+  reviewed overrides; chains reviewed and left unflagged are
+  `membrane_mimetic_reviewed_not_listed`, the known false positive 34151_1_1_1
+  is `membrane_class_false_positive`. LPS micelles and bilayers count as
+  membrane mimetics.
 - **CheZOD117.** {{chezod117_conditions}}
 - **Labels**: a residue with shifts can be unscored (mask on `mask`, not on
   `k`); a residue with k < 10 is less reproducible; {{few_scored_training}}.
 - **Sample and construct.** {{construct_caveats}}
 - **Reviewed chains.** {{reviewed_issues}}
-- **Residual similarity**: homology is controlled at the 30 %/80 % rule, not
-  eliminated; a profile search finds remote homologues of some test chains in
-  training, and some test chains share a UniProt accession with a training
-  chain (another construct).
+- **Residual similarity**: homology is controlled at the searched rule, not
+  eliminated. {{remote_homologs}}. {{shared_accessions}}. Resampling unit:
+  {{test_components}}. {{threshold_fit_retired}}.
 - **Croissant**: no `croissant.json` (ML-dataset metadata) ships yet; it is
   deferred to a later release.
 - **Shift table**: a few shift keys repeat, the same value under two

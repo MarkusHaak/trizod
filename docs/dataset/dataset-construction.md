@@ -39,6 +39,27 @@ etc.), **re-referenced** (LACS pre-correction then POTENCI/AIC residual
 correction, `--rereference-mode both`), and scored (per-residue Z-score and the
 0–1 **G-score**). One record per `ID = entryID_stID_entityAssemID_entityID`.
 
+**Membrane mimetics and cosolvents (release validation 2026-11-17c, C8).** The
+membrane class rule (`trizod/bmrb/membrane.py`) reads the sample components,
+types and sample text; lipopolysaccharide (LPS) micelles and bilayers count as
+membrane mimetics, by rule. What the rule cannot see is reviewed against the
+raw NMR-STAR file and listed in `trizod/dataset/data/membrane_overrides.tsv`:
+a mimetic named only in the title, assembly name or citation; a detergent
+outside the class table (sulfobetaines, LMNG, alkyl betaines) or named only
+in `_Sample.Details` or a chain name; and integral membrane proteins measured
+by solution NMR whose deposition names no mimetic at all (class `unnamed
+mimetic`, marked probable). Of the 28 moderate/strict chains the 2026-11-17c
+validation found unflagged, 25 are now listed (7 definite, 15 probable entries);
+5376, 4151 and 6056 were reviewed and not listed, and 34151_1_1_1 is the known
+false positive (`docs/dataset/known_issues_reviewed.tsv`). The cosolvent
+tokens gained the isopropanol abbreviations `isoPrOH` and `IPA` (50767_1_1_1
+in 50 % isopropanol was a moderate training representative) and the
+hyphenated TFE formula `CF3-CD2-OH` (31073_1_1_1, 50 % TFE). Estimated on the
+cached entries of the 2026-11-17c build, these changes move 27 chains out of
+moderate (25 by the overrides, 2 by the cosolvent spellings, which also leave
+tolerant) and 10 out of strict: training representatives moderate −12,
+strict −3, tolerant −2; no test chain.
+
 | | strict | moderate | tolerant | unfiltered |
 |---|--:|--:|--:|--:|
 | **scored records** | 4,108 | 11,159 | 15,080 | 16,851 |
@@ -128,15 +149,43 @@ Two more reasons retire a chain that is still strict (release audit
 | `not_strict` | the pinned sequence is no longer in the strict pool (above) |
 | `chezod117_overlap` | the chain meets the leakage criterion (§4: ≥ 30 % identity over ≥ 80 % of either chain, ≥ 27 bits, either search direction) against a CheZOD117 sequence — a released CheZOD117 chain or one of the 117 original sequences (§4). `19481_1_1_1` contains CheZOD117 `19482` as an exact 91-residue substring, so the two test sets overlapped |
 | `within_test_duplicate` | the remaining test chains are searched against each other at ≥ 50 % identity over ≥ 80 % of **either** chain (the coverage the release uses everywhere else; until 2026-11-17 within-test redundancy was controlled only at both-chain coverage by the 50 %/80 % recluster of the draw). Of every such pair the shorter chain is retired — the contained one for an exact substring (`6439_1_1_1` inside `6440_1_1_1`), the lower entry ID kept on a tie — greedily from the longest chain down, so no two remaining test chains form a pair and no chain is retired for a partner that is itself retired |
-| `shared_construct` | a reviewed decision, not a rule (re-audit 2026-11-17b, E26): the chain meets no leakage criterion on its deposited sequence but is a near-copy of training chains once its expression tag or fusion partner is set aside, so its labels are largely training labels. The chains, their training partners and the evidence are listed in `trizod/dataset/data/test_retirements.tsv` |
+| `shared_construct` | the chain meets no leakage criterion on its deposited sequence but is a near-copy of training chains once its expression tag or fusion partner is set aside, so its labels are largely training labels. Decided by one written criterion (below); the chains, their training partners and the evidence are listed in `trizod/dataset/data/test_retirements.tsv` |
+
+**The shared-construct criterion** (decision of 17 November 2026, release
+validation 2026-11-17c, E26; `trizod/dataset/shared_constructs.py`). A pinned
+test chain is retired as `shared_construct` when, after the expression tags of
+both chains are removed — an N-terminal His tag (within the first 30 residues)
+and everything before it; an N-terminal thrombin (`LVPRGS`, first 45
+residues), TEV (`ENLYFQ[GS]`) or HRV-3C (`LEVLFQGP`, first 60 residues) site
+and everything before it; the RIKEN `GSSGSSG` / `SGPSSG` flanks; a GB1 fusion
+(from 4 residues before its first strand `KL[IA]LNGKTLKGETT` to the end of
+`DDATKTFTVTE`); a C-terminal His tag (last 20 residues) with everything after
+it, the `LE` linker and a protease site in the 20 residues before it — an
+**identical run of ≥ 30 residues with a training chain** (`split` train or
+redundant) **covers ≥ 50 % of the test chain's scored residues**. Otherwise it
+stays a test chain. The run is the longest common substring of the stripped
+sequences, mapped back to the deposited test sequence; the coverage counts the
+scored residues (`mask`) inside it. The criterion was applied to every test ×
+training pair with such a run (an exhaustive 30-mer scan) and to the 35 pairs
+on 23 test chains that meet the leakage rule only after tag stripping; every
+pair's outcome (tags removed, run, scored residues, coverage, retire / keep)
+is in `trizod/dataset/data/shared_construct_review.tsv`, which finalize
+re-derives from the release and ships as `test/shared_construct_review.tsv`.
+It retires `7070_1_1_1` (Prp24 RRM1-2: an 83-residue run identical to training
+`16243_1_1_1`, Prp24 RRM2-3, holds 82 of its 158 scored residues, 51.9 %) and
+keeps every other chain: the next-longest runs are 37 residues
+(`52143_1_1_1` ~ `53627_1_1_1`, 13.7 %) and 34 (`19777_1_1_1` ~ `50256_1_1_1`,
+16.8 %), and no tag-stripped homology pair shares more than 6 identical
+residues. The four chains retired by the 2026-11-17b review meet it too.
 
 Every retired chain, whatever the reason, stays a leakage target; the test set
 only shrinks. The per-chain hits are recorded in `build_test_set_summary.json`
 (`chezod117_overlaps`, `within_test_duplicates`, `retired_by_reason`), and the
 Parquet carries the reason as `retired_reason`. The test set is therefore
-**disjoint from CheZOD117 at the leakage criterion** and CheZOD-disjoint at
-cluster level from the draw; it is not "CheZOD-free" — 88 test chains overlap
-CheZOD1325 (flag `chezod1325_overlap`, §6).
+**disjoint from CheZOD117 at the leakage criterion**; it is not
+"CheZOD-free": test chains overlap CheZOD1325 and CheZOD1174 and carry the
+flags `chezod1325_overlap` / `chezod1174_overlap` (§9; 90 and 83 of the 401
+test chains of the 2026-11-17c build).
 
 For the `2026-08` build (`build_test_set_summary.json`):
 
@@ -219,8 +268,23 @@ query length and database size is gone; for two 100-residue chains a chance
 local alignment of 27 bits has a pairwise E-value of about 10⁻⁴, and the
 identity and coverage thresholds carry the rest. mmseqs runs with `-e 100` only
 so that it reports every alignment above the floor; the search fails if the cap
-could have hidden one (`check_evalue_headroom`). **Both directions are
-searched** — training chains as queries against the test chains and test chains
+could have hidden one (`check_evalue_headroom`). **Every reported alignment
+counts**: the search reports up to 10 alternative alignments per pair besides
+the best (`--alt-ali 10`) and runs with **`--min-seq-id 0`** — mmseqs computes a
+pair's alternatives only behind a best alignment that passes `--min-seq-id`, so
+at 0.3 a pair whose best alignment is below 30 % was dropped with every
+alternative (release validation 2026-11-17c, E20/E22: `36490_1_1_1` ~ retired
+`53299_1_1_1`, best 25.8 % at 38 bits, second 32.9 % over 81.9 % of 36490 at 32
+bits; `50596_1_1_1` ~ test `30007_1_1_1`, best 28.5 %, second 35.0 % over
+80.0 % of 30007 at 28 bits). The 30 % identity is applied, like the coverage
+and the bit floor, to every parsed alignment (`is_leak`). On the 2026-11-17c
+build this removes exactly these two training chains (2,568 removed instead of
+2,566) and costs little: the stage-2 searches of the unfiltered superset take
+8.9 s instead of 8.2 s and report 1.88 instead of 1.26 million alignments. The
+same holds for every other leakage search: the release gate, the CheZOD
+overlap flags, the within-test check (at its own 50 %) and the homology
+components of the UdonPred validation split and of the test set. **Both
+directions are searched** — training chains as queries against the test chains and test chains
 as queries against the training chains — and a pair counts when either meets
 the criterion: the alignment score is symmetric but the aligned span is not
 always (`26357_1_1_1` ~ CheZOD117 `19135_1_1_1` spans 76 % of the training chain
@@ -240,8 +304,9 @@ score.
   the test sets in both directions (since 2026-11 one search per direction of
   the unfiltered superset, whose hits each tier restricts to its own IDs;
   `<tier>_testset_hits.tsv` and `<tier>_testset_hits_reverse.tsv`) with
-  `--min-seq-id 0.3 --cov-mode 1 -c 0 --prefilter-mode 2 -e 100 --dbtype 1`
-  (every pair aligned, no k-mer prefilter; the 27-bit floor applied to the
+  `--min-seq-id 0 --cov-mode 1 -c 0 --prefilter-mode 2 -e 100 --alt-ali 10
+  --dbtype 1` (every pair aligned, no k-mer prefilter, every alternative
+  alignment computed; the 30 % identity and the 27-bit floor applied to the
   parsed hits) and drop
   every training chain with an alignment that spans ≥ 80 % of the test chain,
   `(tend − tstart + 1) / tlen ≥ 0.8`, computed from the hit table (rule
@@ -334,7 +399,15 @@ FASTAs (including the retired chains and the 117 original CheZOD117 sequences)
 with the labels table and the pin provenance; `class_balance.tsv`;
 `known_issues.tsv` (one row per chain and issue: `chain_id`, `issue`,
 `evidence`); `bmrb_files.sha256` (the SHA-256 of every snapshot entry file);
-`VALIDATION.json` of the final audit when given (`--validation`); the README,
+`VALIDATION.json` of the final audit when given (`--validation`), with
+`VALIDATION.md`, rendered from `docs/dataset/VALIDATION_decisions.md`: the
+human decisions the release checklist asks for; the test set's homology
+components (`test/TriZOD_test_set_components.tsv`, the resampling unit), the
+test × training pairs sharing a UniProt accession
+(`test/test_training_shared_accessions.tsv`) and the shared-construct review
+(`test/shared_construct_review.tsv`), all computed from the Parquet
+(`trizod.dataset.residual_similarity`); the per-chain audit tables finalize was
+given (`known_issues_inputs/`); the README,
 datasheet and CHANGELOG rendered from the templates in `docs/dataset/` with the
 build's own counts; `columns.md`, `LICENSE.md`, `CITATION.cff` and
 `zenodo.json`; and one `MANIFEST.json` over every file (SHA-256, size, row and
@@ -349,11 +422,19 @@ The CHANGELOG's changes and known issues and `known_issues.tsv` are computed
 re-score statistics and sequence changes against the previous build
 (`--previous-build <its package bundle>`); pH* / pD readings, temperatures
 read as Celsius or Fahrenheit and pressures without a unit from the build's
-`BmrbEntry` pickles (`--pkl-dir`); snapshot drift and construct caveats from
-the audit's tables (`--snapshot-drift`, `--construct-caveats`); the pin's
-trimmed chains from its provenance; the reviewed chains of
-`docs/dataset/known_issues_reviewed.tsv` (each checked to be in the release).
-A missing input renders as "not assessed".
+`BmrbEntry` pickles (`--pkl-dir`), with the pressure placeholders (about 1 Pa,
+`pressure_placeholder_pa`; 1013 bar read as hPa, `pressure_hpa_as_bar`);
+snapshot drift and construct caveats from the audit's tables
+(`--snapshot-drift`, with `--previous-bmrb-dir` to count every chain of the
+changed entries; `--construct-caveats`, with `--xref-sources` to measure the
+outside-UniProt-span class at residue level, `trizod.dataset.construct_span`);
+remote homologues of the test chains (a 3-iteration mmseqs2 profile search
+against the tolerant training representatives, `remote_homolog_profile`), the
+shared-accession pairs and the shared-construct review
+(`trizod.dataset.residual_similarity`); the pin's trimmed chains from its
+provenance; the reviewed chains of `docs/dataset/known_issues_reviewed.tsv`
+(each checked to be in the release). A missing input renders as "not
+assessed".
 
 Finalize refuses a Parquet without calibration, test FASTAs that disagree with
 the Parquet, a Parquet whose scoring commit differs from the bundle's, a
@@ -389,7 +470,21 @@ precisely because it is not zero: remote homologues below the criterion, test
 chains that share a UniProt accession with a training chain (another
 construct), and the overlap with protein-language-model pretraining corpora
 remain, and earlier TriZOD test sets are not comparable (the deposit's
-crosswalk).
+crosswalk). The deposit counts them (`known_issues.tsv`:
+`remote_homolog_profile`, `shared_uniprot_accession`, `shared_construct_kept`)
+and gives the resampling unit that respects them: the homology components of
+the test set under the leakage rule (`test/TriZOD_test_set_components.tsv`;
+342 components for the 401 test chains of the 2026-11-17c build, 311
+singletons, the largest of 10 chains).
+
+**The threshold fit and the retired chains.** The threshold calibration
+(`scripts/validation/threshold_calibration/framework`) holds out the test sets
+(`test_trizod`, `test_chezod117`) and fits on the rest of its strict-tier set,
+retired test chains included: the 15 `test_retired` chains of the 2026-11-17c
+build that are still strict (9 `chezod117_overlap`, 4 `shared_construct`, 2
+`within_test_duplicate`) are among its fit chains. They are not tested on, so
+the test set stays untouched; the deposit states the count of its own build
+(`threshold_fit_retired`).
 
 ## 8. Sequence alphabet
 
@@ -439,7 +534,9 @@ uv run --with pyarrow trizod dataset finalize --parquet <trizod_dataset.parquet>
     --shifts <trizod_shifts.parquet> --bundle <bundle> --bmrb-dir <snapshot> \
     --out <release dir> --crosswalk-root <checkout holding data/> \
     --previous-build <previous build's bundle> --pkl-dir <the build's tmp/bmrb_entries> \
-    [--snapshot-drift <TSV>] [--construct-caveats <TSV>] [--validation <VALIDATION.json>] \
+    [--snapshot-drift <TSV> --previous-bmrb-dir <previous snapshot>] \
+    [--construct-caveats <TSV> --xref-sources <xref dir>] [--ionic-drivers <TSV>] \
+    [--validation <VALIDATION.json>] \
     [--calibration-input <the Parquet the framework calibrated on>]
 # refresh an existing shift table's metadata (release keys, counts) without rebuilding it
 uv run --with pyarrow python scripts/build_parquet_dataset.py --in-bundle <bundle> \

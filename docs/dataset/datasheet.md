@@ -43,7 +43,8 @@ repository):
 strict tier with a fixed seed and pinned; retired chains ({{retired_by_reason}})
 stay leakage targets and are not tested on. CheZOD117 ({{n_chezod117}}
 BMRB-mapped chains of the 117) is the external benchmark. CheZOD117 chains are
-not filtered on sample conditions (known issues).
+not filtered on sample conditions (known issues). The test chains are not
+independent: {{test_components}}; these components are the resampling unit.
 
 **Labels and missing values.** A residue is scored where `mask` is true; G and
 Z are NaN where it is false (999 in the UdonPred view and the deploy FASTA). Terminal residues, residues without enough backbone shifts,
@@ -91,8 +92,9 @@ list, wwPDB SEQRES, SIFTS), pinned by SHA-256 in the Parquet metadata
 5. **Build the training sets**: remove bound complexes and chains under 20
    residues, keep the best record per exact sequence, separate every training
    chain from the test sets (stage 1: no shared 30 %/80 % cluster; stage 2: no
-   alignment at {{leakage_rule}}, mmseqs2), cluster at 50 %/80 % and keep the
-   quality-best member per cluster.
+   alignment that mmseqs2 reports meets {{leakage_rule}}: the best alignment of
+   a pair and up to 10 alternative ones, at any identity), cluster at 50 %/80 %
+   and keep the quality-best member per cluster.
 6. **Gate** the packaged bundle: no training or redundant row shares an ID, a
    sequence, an exact substring of ≥ 20 residues, or an alignment under the same
    rule with any test sequence.
@@ -106,7 +108,7 @@ posterior of disorder reaches 0.10, 0.50 or 0.90 on {{calibration_set}}, where
 {{calibration_table}}
 
 Threshold framework commit `{{framework_commit}}`, results.json SHA-256
-`{{results_sha256}}`. Because a fixed cut is a fixed likelihood ratio, the
+`{{results_sha256}}`. {{threshold_fit_retired}}. Because a fixed cut is a fixed likelihood ratio, the
 posterior at a cut depends on the prevalence of the set it is applied to: see
 the per-split π and posteriors in the class-balance table.
 
@@ -127,7 +129,9 @@ continuous G-score; selecting cleaner subsets by tier; benchmarking on
 - Weight or filter by `k` if label reproducibility matters: replicate agreement
   {{k_kappa}}; disordered-zone flip rate {{k_flip}}.
 - Report pooled and per-chain Spearman, AUC at G ≥ {{cut_disordered}} on all,
-  confident-only and k ≥ 10 residues, with chain- or cluster-level resampling.
+  confident-only and k ≥ 10 residues, resampling the {{n_test_components}} test
+  components (`test/TriZOD_test_set_components.tsv`) for confidence intervals;
+  report also on the test chains without a remote homologue in training.
 - Compare with an earlier model only on the clean subset (README, "Earlier test
   sets are not comparable"); CheZOD-trained predictors on the test chains whose
   `chezod1325_overlap` / `chezod1174_overlap` is false.
@@ -149,13 +153,20 @@ denaturants, high pressure or in membrane mimetics.
 - Homo-oligomers are retained; `n_copies` is a conservative bound, not a
   stoichiometry.
 - `membrane_mimetic_sample` is false also when no sample component could be
-  read; recall is limited by what the deposition states.
+  read; recall is limited by what the deposition states. Lipopolysaccharide
+  (LPS) micelles and bilayers count as membrane mimetics. Reviewed overrides
+  (the code repository's `membrane_overrides.tsv`) cover a mimetic named only
+  outside the sample, a detergent outside the class table or named only in
+  text or a chain name, and integral membrane proteins measured by solution NMR
+  whose deposition names no mimetic (class `unnamed mimetic`); reviewed chains
+  left unflagged and the known false positive are in `known_issues.tsv`.
 - Construct and sample caveats: uniformly ²H-labelled protein (isotope shifts
   not corrected), labelled residues outside the UniProt-aligned span (tags),
   paramagnetic samples and non-standard residues. {{construct_caveats}}
-- Homology between training and test is controlled at {{leakage_rule}}, not
-  eliminated; nearly every sequence is in the corpora protein language models are
-  pretrained on.
+- Homology between training and test is controlled at {{leakage_rule}}, as
+  searched (every alignment mmseqs2 reports), not eliminated: {{shared_accessions}}.
+  {{remote_homologs}}. {{shared_constructs}}. Nearly every sequence is in the
+  corpora protein language models are pretrained on.
 - **Offsets come in three units.** `off_<atom>_sigma` is in multiples of the
   per-atom POTENCI RMSD (`--max-offset` is compared against it),
   `lacs_off_<atom>_ppm` is ppm, and `total_off_<atom>_ppm =

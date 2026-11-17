@@ -50,7 +50,9 @@ retired TriZOD test chains included --
   chain (rule "test") or of the test or the training chain (rule "either"),
   searched in both directions, on every alignment mmseqs reports for the pair
   (the best one and up to 10 alternative ones, ``--alt-ali 10``; release
-  re-audit 2026-11-17b). This check runs mmseqs, which must be on PATH.
+  re-audit 2026-11-17b), at any identity (``--min-seq-id 0``, the 30 % applied
+  to each alignment; release validation 2026-11-17c). This check runs mmseqs,
+  which must be on PATH.
 
 Every offending pair is reported. The rule is read from
 ``<work-dir>/mmseqs/leakage_rule.json``, written by the redundancy step;

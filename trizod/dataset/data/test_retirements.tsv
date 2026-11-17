@@ -31,8 +31,24 @@
 #   57-residue duplicated segment that has no shifts; the duplicate defeats the
 #   containment rule against test chain 53299_1_1_1, which is retired below.
 #   19642_1_1_1 itself stays a training chain.
+#
+# Decision of 17 November 2026 (release validation 2026-11-17c, check E26): ONE
+# written criterion for every test chain that shares a construct with training
+# (trizod/dataset/shared_constructs.py; docs/dataset/dataset-construction.md):
+# retire it when, after the expression tags of both chains are removed (His
+# tags, GB1, thrombin/TEV/HRV-3C sites, RIKEN GSSGSSG/SGPSSG flanks), an
+# identical run of >= 30 residues with a training chain covers >= 50 % of the
+# test chain's scored residues; otherwise keep it. The outcome of every
+# candidate pair (38 pairs on 26 test chains: every pair with such a run of
+# >= 30 residues, and the 35 tag-stripped homology pairs) is recorded in
+# shared_construct_review.tsv next to this file, which finalize ships. It
+# retires 7070_1_1_1 (below) and keeps every other chain, among them the
+# accession-sharing constructs 52143_1_1_1 ~ 53627_1_1_1 (37-residue run,
+# 13.7 % of 52143's scored residues) and 19777_1_1_1 ~ 50256_1_1_1 (34
+# residues, 16.8 %), and 50148_1_1_1 and 17306_1_1_1 above.
 id	sequence	reason	partners	evidence
 52047_1_1_1	GAMAQYKLALNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTETSDLEFDSLQPSFYPDEDDFYFGGPDSTPPGEDIWKKFELLPTP	shared_construct	52066_1_1_1,53482_1_1_1,53483_1_1_1,16444_1_1_1,27601_1_1_1	GB1 + N-myc transactivation domain fusion. Without the GB1 tag its N-myc part is 97.6 % identical to training 52066_1_1_1, 53482_1_1_1 and 53483_1_1_1 over 89.4 % of the chain (98 bits); its GB1 part ("KLALNGK" variant) is identical to 17 training GB1 fusions. 92 of its 101 scored residues lie in exact 20-mers shared with training.
 27176_1_1_1	MGHVQLSLPVLQVRDHGRAPIKVESQEHKLVPRGSFQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTESGHHHHHH	shared_construct	16444_1_1_1,50680_1_1_1,51093_1_1_1,6280_1_1_1,27601_1_1_1	GB1 fusion: a 55-residue GB1 run identical to 14 training GB1 fusions (e.g. 16444_1_1_1, 50680_1_1_1, 51093_1_1_1, 6280_1_1_1); 55 of its 92 scored residues lie in exact 20-mers shared with training.
 10214_1_1_1	GSSGSSGLDSELELPAGWEKIEDPVYGIYYVDHINRKTQYENPVLEAKRKKQLESGPSSG	shared_construct	6086_1_1_1	MAGI-1 WW domain (RIKEN GSSGSSG/SGPSSG flanks): 100 % identical to training 6086_1_1_1 (MAGI-1 tandem WW domains) over 85 % of the flank-stripped chain; 40 of its 55 scored residues lie in a 40-residue run identical to 6086.
 53299_1_1_1	IDNLTPEERDARTVFCMQLAARIRPRDLEEFFSTVGKVRDVRMISDRNSRRSKGIAYVEFVDVSSVPLAIGLTGQRVLGVPIIVQASQAEKNRAAAMANNLQKGSAGPMRLYVGSLHFNITEDMLRGIFEPFGRIESIQLMMDSETGRSKGYGFITFSDSECAKKALEQLNGFELAGRPMKVGHVTERTDA	shared_construct	19642_1_1_1	RBM39 tandem RRM: residues 3-93 (91 aa, 48 % of its scored residues) are identical to training 19642_1_1_1 (RBM39 RRM1), whose deposited sequence carries a 57-residue duplicated segment without shifts that defeats the containment rule.
+7070_1_1_1	MRELTTVLVKNLPKSYNQNKVYKYFKHCGPIIHVDVADSLKKNFRFARIEFARYDGALAAITKTHKVVGQNEIIVSHLTECTLWMTNFPPSYTQRNIRDLLQDINVVALSIRLPSLRFNTSRRFAYIDVTSKEDARYCVEKLNGLKIEGYTLVTKVSNPLE	shared_construct	16243_1_1_1	Prp24 RRM1-2. Residues 79-161 (83 aa) are identical to residues 3-85 of training 16243_1_1_1 (Prp24 RRM2-3, a tolerant training representative, C-terminal His tag stripped) and hold 82 of its 158 scored residues (51.9 %), which meets the E26 criterion (identical run >= 30 residues over >= 50 % of the scored residues). Below the leakage rule (52 % and 45 % coverage); labels agree at 0.35 for 93.7 % of the residues scored in both (MAE 0.067). Release validation 2026-11-17c, E26; decision of 17 November 2026.

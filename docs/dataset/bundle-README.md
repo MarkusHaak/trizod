@@ -28,10 +28,11 @@ the continuous TriZOD **G-score** (0–1, higher = more disordered) per residue.
 | `trizod_shifts.parquet` | Every assigned chemical shift on a canonical residue, backbone and side chain, raw and re-referenced: {{n_shifts}} rows over {{n_shift_chains}} chains. Joins on `id` |
 | `udonpred/` | UdonPred v2 training view generated from the Parquet: `trizod_<tier>/{train,valid,test}.jsonl` (`y` = G, 999 where masked) and `chezod117/test.jsonl`; its own README |
 | `disorder_trizod.fasta` (+ `.summary.json`) | SETH/ODiNPred-style view: tolerant training set and the test set, `SET=`, `TARGET=` (G, 999.0 where masked), `MASK=` |
-| `test/` | The test sets as FASTA: `TriZOD_test_set.fasta` ({{test_set_name}}), `TriZOD_test_retired.fasta` (retired chains, leakage targets only), `CheZOD117_test_set.fasta`, `CheZOD117_original_sequences.fasta` (the 117 sequences as SETH published them); `TriZOD_test_set_labels.tsv`; the pin provenance |
+| `test/` | The test sets as FASTA: `TriZOD_test_set.fasta` ({{test_set_name}}), `TriZOD_test_retired.fasta` (retired chains, leakage targets only), `CheZOD117_test_set.fasta`, `CheZOD117_original_sequences.fasta` (the 117 sequences as SETH published them); `TriZOD_test_set_labels.tsv`; `TriZOD_test_set_components.tsv` (each test chain's homology component, the unit to resample); `test_training_shared_accessions.tsv` (test and training chains that share a UniProt accession, with the decision); `shared_construct_review.tsv` (the reviewed shared constructs); the pin provenance |
 | `crosswalk/` | Every TriZOD test set since 2024 and the status of its sequences in this release (`test_set_crosswalk.tsv`/`.json`, `test_set_overlap.tsv`) |
 | `class_balance.tsv` | Label distribution per split (table below, unrounded) |
 | `known_issues.tsv` | Every chain with a known issue or a change named in the CHANGELOG: `chain_id`, `issue`, `evidence` ({{n_known_issues}} rows) |
+{{known_issues_inputs_row}}
 | `columns.md` | Column dictionary: name, Arrow type, nullability, meaning, null/NaN rule |
 | `datasheet.md` | Datasheet: motivation, composition, collection, preprocessing, uses, limitations |
 | `CHANGELOG.md` | Changes since v{{previous_version}}, and the known issues |
@@ -128,18 +129,26 @@ Four **nested** stringency tiers (`unfiltered ⊃ tolerant ⊃ moderate ⊃ stri
   its homologues stay out of every training set.
 - **How training is separated from the test sets.** Every training and redundant
   chain is separated from {{test_set_name}}, the retired chains and CheZOD117
-  (the released chains and the 117 original sequences): no training chain
-  aligns to a test chain at {{leakage_rule}} (mmseqs2), none shares a sequence or
-  an exact substring of 20 or more residues with one, and none shares a 30 %/80 %
-  cluster with one. The release gate re-checks every training and redundant row
-  against every test sequence before packaging. This controls homology at that
-  level; remote homologues below it remain, and so does the overlap with the
-  sequence corpora protein language models are pretrained on.
-- **CheZOD.** The test set is CheZOD-disjoint at cluster level. Per-chain flags
-  `chezod1325_overlap` and `chezod1174_overlap` mark test chains with relatives
-  in ODiNPred's (CheZOD1325) and SETH's or ADOPT's (CheZOD1174) training sets;
-  benchmark such predictors on the clean subsets ({{n_test_clean_chezod1325}}
-  and {{n_test_clean_chezod1174}} of the {{n_test}} test chains).
+  (the released chains and the 117 original sequences) by a searched rule: no
+  alignment that mmseqs2 reports between a training chain and a test chain
+  meets {{leakage_rule}}; none shares a sequence or an exact substring of 20 or
+  more residues with one, and none shares a 30 %/80 % cluster with one. mmseqs2
+  reports the best alignment of a pair and up to 10 alternative ones, at any
+  identity (`--min-seq-id 0`), and the rule is applied to each. The release
+  gate re-checks every training and redundant row against every test sequence
+  before packaging. This controls homology at that rule, as searched; it does
+  not eliminate it. Below it: {{shared_accessions}}. {{remote_homologs}}.
+  {{shared_constructs}}. The overlap with the sequence corpora protein language
+  models are pretrained on remains as well.
+- **CheZOD.** The test set is disjoint from CheZOD117 under the leakage rule
+  (overlapping chains are retired). Per-chain flags `chezod1325_overlap` and
+  `chezod1174_overlap` mark the {{n_test_overlap_chezod1325}} and
+  {{n_test_overlap_chezod1174}} test chains with relatives in ODiNPred's
+  (CheZOD1325) and SETH's or ADOPT's (CheZOD1174) training sets; benchmark such
+  predictors on the clean subsets ({{n_test_clean_chezod1325}} and
+  {{n_test_clean_chezod1174}} of the {{n_test}} test chains).
+- **Resampling unit.** Test chains are not independent: {{test_components}}.
+  Bootstrap or jackknife over these components, not over chains or residues.
 
 ### Earlier test sets are not comparable
 
@@ -161,8 +170,11 @@ published training data are on figshare (10.6084/m9.figshare.31444642).
 ## Evaluation guidance
 
 - Report pooled residue-level Spearman (comparable with the CheZOD117
-  literature) and per-chain Spearman; resample chains or clusters, not residues,
-  for confidence intervals.
+  literature) and per-chain Spearman; for confidence intervals resample the
+  {{n_test_components}} test components (`test/TriZOD_test_set_components.tsv`),
+  not chains or residues.
+- Report a model also on the test chains without a remote homologue in training
+  (`known_issues.tsv`, issue `remote_homolog_profile`).
 - Report AUC at G ≥ {{cut_disordered}} on all scored residues, on confident
   residues only (G < {{cut_ordered}} or G ≥ {{cut_confident}}), and on k ≥ 10.
 - State whether predictions were smoothed before scoring.
@@ -186,7 +198,9 @@ order and every provenance key.
   scored, and never add the first two.
 - **Rule flags.** `high_pressure` (≥ 400 bar, excluded from tolerant and up;
   null = not recorded, so filter with `high_pressure IS NOT TRUE`),
-  `membrane_mimetic_sample` (excluded from moderate and strict),
+  `membrane_mimetic_sample` (excluded from moderate and strict; lipopolysaccharide
+  (LPS) micelles and bilayers count as membrane mimetics, as do the reviewed
+  overrides of the code repository's `membrane_overrides.tsv`),
   `temperature_placeholder` (deposited 273 K read as not deposited; strict
   excludes it), and `ionic_strength` (strict caps it at 0.5 M).
 - **Cross-references.** `xrefs`, `uniprot_ids`, `uniprot_source` and `pdb_ids`

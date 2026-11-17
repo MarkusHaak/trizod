@@ -154,7 +154,7 @@ def test_snapshot_drift_lists_changed_chains_with_their_split(tmp_path):
     assert "unfiltered: max |ΔG| 0.33, 2 mask flips" in ev["50751_1_1_1"]
     assert "moderate: leaves tier with new file" in ev["50751_1_1_1"]
     assert ev["36002_1_1_1"].endswith("now no longer released")
-    assert "no test chain is affected" in ki.snapshot_drift_text(got)
+    assert "no test chain changed its labels" in ki.snapshot_drift_text(got)
 
 
 def _row(cid, split, seq, mask, train_tier=None):
@@ -180,11 +180,13 @@ def test_construct_caveats_and_nonstandard_counts(tmp_path):
     assert nonstd == {
         "train_chains": 1,
         "train_positions": 1,
+        "train_scored_positions": 1,
+        "train_chain_residues": 4,
         "train_residues": 8,
         "test_chains": 1,
     }
     text = ki.construct_text(got, nonstd)
-    assert "`uniform_2H`: training 1 chains (66.7 % of scored residues)" in text
+    assert "`uniform_2H` (whole chains): training 1 chains (66.7 % of scored" in text
     assert "flag columns are deferred" in text
     assert "not counted" in ki.construct_text(None, nonstd)
 
@@ -307,3 +309,137 @@ def test_ionic_drivers_list_the_inconsistent_chains(tmp_path):
         )
     ]
     assert got["text"].startswith("Ionic strengths are used as deposited: 1 chains")
+
+
+# --------------------------------------------------------------------------- #
+# release validation 2026-11-17c: G39 pressure classes, B6 drift, G43 caveats
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("value", ["1", "1.013"])
+def test_a_pressure_of_about_one_pascal_is_a_placeholder(value):
+    got = ki.classify_conditions(_conditions(T298, ("pressure", value, "Pa")))
+    assert [i for i, _ in got] == ["pressure_placeholder_pa"]
+    assert f"pressure {value} Pa deposited" in got[0][1]
+    assert "pressure_bar" in got[0][1] and "no tier" in got[0][1]
+    # one atmosphere in Pa is no issue
+    assert ki.classify_conditions(_conditions(T298, ("pressure", "101325", "Pa"))) == []
+
+
+def test_a_bar_pressure_of_one_atmosphere_in_hpa_is_reported():
+    got = ki.classify_conditions(_conditions(T298, ("pressure", "1013", "bar")))
+    assert [i for i, _ in got] == ["pressure_hpa_as_bar"]
+    assert "read as hPa" in got[0][1] and "1.013" in got[0][1]
+
+
+def test_the_pressure_sentence_names_the_placeholder_classes():
+    issues = [
+        ("1_1_1_1", "pressure_placeholder_pa", "x"),
+        ("2_1_1_1", "pressure_placeholder_pa", "x"),
+        ("3_1_1_1", "pressure_hpa_as_bar", "x"),
+        ("4_1_1_1", "pressure_unit_missing", "x"),
+    ]
+    cur = {"ids": {t: set() for t in ("unfiltered", "tolerant", "moderate", "strict")}}
+    text = ki.condition_text(issues, cur, {})["pressure"]
+    assert "2 released chains deposited a pressure of about 1 Pa" in text
+    assert "1 deposited 1013 bar" in text and "3_1_1_1" in text
+    assert "1 released chains deposited a pressure without a unit" in text
+
+
+def test_snapshot_drift_counts_every_chain_of_the_changed_entries(tmp_path):
+    path = tmp_path / "drift.tsv"
+    cite = json.dumps({"unfiltered": {"fields": ["citation_title"]}})
+    path.write_text(
+        "id\treleased\tsplit\tlabel_tier_source\tlabel_or_tier_change\tper_tier\n"
+        f"10_1_1_1\tTrue\ttest_trizod\tstrict\tFalse\t{cite}\n"
+        "11_1_1_1\tTrue\ttrain\ttolerant\tTrue\t{}\n"
+        "12_1_1_1\tFalse\tNone\tNone\tTrue\t{}\n"
+    )
+    rows = {
+        "10_1_1_1": {"split": "test_trizod", "entry_id": "10"},
+        "13_1_1_1": {"split": "test_trizod", "entry_id": "13"},
+        "11_1_1_1": {"split": "train", "entry_id": "11"},
+        "14_1_1_1": {"split": "excluded", "entry_id": "14"},
+        "99_1_1_1": {"split": "train", "entry_id": "99"},
+    }
+    changed = {"changed": {"10", "11", "12", "13", "14"}, "added": {"20"},
+               "withdrawn": {"30", "31"}}  # fmt: skip
+    got = ki.snapshot_drift(path, rows, changed)
+    text = ki.snapshot_drift_text(got)
+    assert "5 entries changed in place (1 added, 2 withdrawn)" in text
+    assert "5 chains: 4 released now" in text and "12_1_1_1" in text
+    assert "3 of them have a record that differs" in text
+    assert "1 only in metadata (citation_title)" in text
+    assert "2 in labels or tiers (11_1_1_1, 12_1_1_1)" in text
+    assert "The 2 test chains of changed entries (10_1_1_1, 13_1_1_1)" in text
+    assert "identical labels" in text
+
+
+def test_snapshot_drift_without_the_changed_entries_says_what_it_counts(tmp_path):
+    path = tmp_path / "drift.tsv"
+    path.write_text(
+        "id\treleased\tsplit\tlabel_tier_source\tlabel_or_tier_change\tper_tier\n"
+        "11_1_1_1\tTrue\ttrain\ttolerant\tTrue\t{}\n"
+    )
+    text = ki.snapshot_drift_text(ki.snapshot_drift(path, {"11_1_1_1": {}}))
+    assert "Of 1 chains whose record differs" in text
+    assert "--previous-bmrb-dir" in text
+
+
+def test_changed_entries_compare_the_two_snapshots(tmp_path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    for root, entries in ((old, {"1": "a", "2": "b", "3": "c"}),
+                          (new, {"1": "a", "2": "B", "4": "d"})):  # fmt: skip
+        for e, text in entries.items():
+            (root / f"bmr{e}").mkdir(parents=True)
+            (root / f"bmr{e}" / f"bmr{e}_3.str").write_text(text)
+    got = ki.changed_entries(old, new)
+    assert got == {"changed": {"2"}, "added": {"4"}, "withdrawn": {"3"}}
+
+
+def test_construct_caveats_report_residue_classes_at_residue_level(tmp_path):
+    rows = [
+        _row("1_1_1_1", "train", "AAAAAAAAAA", [True] * 10, "tolerant"),
+        _row("2_1_1_1", "train", "AAAAAAAAAA", [True] * 10, "tolerant"),
+        _row("3_1_1_1", "test_trizod", "AAAAAAAAAA", [True] * 10),
+    ]
+    tsv = tmp_path / "caveats.tsv"
+    tsv.write_text(
+        "class\tid\noutside_uniprot_span_sifts\t1_1_1_1\ndeut_uniform_2H\t2_1_1_1\n"
+    )
+    span = {"1_1_1_1": (2, 10), "2_1_1_1": (0, 10), "3_1_1_1": (1, 10)}
+    got = ki.construct_caveats(
+        tsv, rows, residue_counts={"outside_uniprot_span_sifts": span}
+    )
+    text = ki.construct_text(got, ki.nonstandard_counts(rows))
+    assert (
+        "`outside_uniprot_span_sifts` (residue level): training 2 of 20 "
+        "labelled residues (10.0 %) of the 2 assessed chains"
+    ) in text
+    assert "`deut_uniform_2H` (whole chains): training 1 chains" in text
+    ev = {(c, i): e for c, i, e in got["rows"]}
+    assert (
+        "2 of 10 labelled residues"
+        in ev[("1_1_1_1", "construct_outside_uniprot_span_sifts")]
+    )
+    assert (
+        "known_issues_inputs/construct_caveats.tsv"
+        in ev[("2_1_1_1", "construct_deut_uniform_2H")]
+    )
+    no_counts = ki.construct_text(
+        ki.construct_caveats(tsv, rows), ki.nonstandard_counts(rows)
+    )
+    assert "residue-level share not measured" in no_counts
+
+
+def test_nonstandard_letters_are_counted_in_the_residues_of_their_chains():
+    rows = [
+        _row("1_1_1_1", "train", "AXAAX", [True, True, True, True, False], "tolerant"),
+        _row("2_1_1_1", "train", "AAAA", [True] * 4, "tolerant"),
+        _row("3_1_1_1", "test_trizod", "AAAA", [True] * 4),
+    ]
+    nonstd = ki.nonstandard_counts(rows)
+    assert nonstd["train_positions"] == 2 and nonstd["train_scored_positions"] == 1
+    assert nonstd["train_chain_residues"] == 5
+    text = ki.construct_text(None, nonstd)
+    assert "2 X/U/Z positions (1 scored) in the 5 residues of these chains" in text

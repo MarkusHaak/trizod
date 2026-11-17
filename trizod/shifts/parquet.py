@@ -179,8 +179,9 @@ _CORRECTION_FORMULA = (
 )
 
 _SIDECHAIN_POLICY = (
-    "Which offset transfers to a side-chain nucleus was measured on this corpus "
-    "as a regression slope beta = cov(group-centred side-chain deviation, "
+    "Which offset transfers to a side-chain nucleus was measured on the 2026-08 "
+    "build (the slopes below are fixed from that measurement, not re-measured "
+    "per build) as a regression slope beta = cov(group-centred side-chain deviation, "
     "offset) / var(offset); subtracting an offset lowers MSE iff beta > 0.5. "
     f"13C: beta = 0.785 [0.767, 0.806] -> lacs_off_{SIDECHAIN_CARBON_LACS_ATOM}"
     "_ppm is applied (side-chain MSE x0.79, RMSE 0.919 -> 0.818 ppm). "

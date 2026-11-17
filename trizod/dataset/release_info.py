@@ -180,7 +180,8 @@ def retired_semantics(reasons=None) -> str:
 
 
 def testset_label(n_test: int, n_retired: int) -> str:
-    """``TriZOD-test v1.0 (n = 405; 47 retired chains)``."""
+    """The test-set label, e.g. ``TriZOD-test v1.0 (n = 400; 52 retired
+    chains)`` for ``n_test=400, n_retired=52``."""
     return f"{TEST_SET_NAME} (n = {n_test}; {n_retired} retired chains)"
 
 
