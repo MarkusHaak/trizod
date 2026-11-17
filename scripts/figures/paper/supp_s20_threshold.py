@@ -1,21 +1,30 @@
 """Supplementary Fig. S20 -- three G-score cuts from one rule (ordered edge, binary cut, disordered edge).
 
+Every panel has G (or the cut-off t on G) on its x axis, scaled 0-1 alike, and the same
+background: four zones bounded by the published cuts G_ORD / G_DIS / G_CONF of paper_config
+(0.15 / 0.35 / 0.70 on 17 Nov 2026), shaded on one grey ramp, darker = more disordered:
+ordered G < G_ORD (no shade), ambiguous, disordered G >= G_DIS (the binary call), confidently
+disordered G >= G_CONF. A thin line marks each cut, and the x ticks sit at the cuts.
+
 Panels
-  a  Likelihood ratio (LR) of disorder over G for each reference -- A, DisProt disorder against
-     residues observed in X-ray structures; B, residues missing from every covering X-ray structure
-     against observed ones; C, same-entry {1H}-15N hetNOE < 0.5 -- and their consensus
-     sqrt(LR_S LR_C), LR_S = sqrt(LR_A LR_B). Horizontal guides: the LR at which the posterior
-     reaches 0.10 / 0.50 / 0.90 at the stated prevalence pi.
-  b  Posterior P(disordered | G) at pi, per reference and for the consensus. Points with bars: the
-     estimated cuts (posterior 0.10 / 0.50 / 0.90) with their 95 % intervals; dashed: the published
-     values G_ORD / G_DIS / G_CONF (paper_config; 0.15 / 0.35 / 0.70 on 17 Nov 2026).
-  c  Bootstrap distribution of the three estimated cuts.
-  d  G of the scored residues (log density) of the analysis set and of the whole release, with the
-     three zones at the published values (ordered G < G_ORD, indeterminate, disordered G >= G_CONF).
-  e  Agreement of the binary call G >= t between same-condition replicate entries (Cohen's kappa)
-     over t: strict-tier unbound chains (the analysis set) and all unbound chains.
-Curves: primary estimator (log LR interpolated between isotonic block midpoints). Bands: 95 %
-joint cluster-bootstrap intervals (sequence clusters resampled jointly across references).
+  a  Posterior P(disordered | G) at the reference-consensus prevalence pi, for each reference
+     -- A, DisProt disorder against residues observed in X-ray structures; B, residues missing
+     from every covering X-ray structure against observed ones; C, same-entry {1H}-15N hetNOE
+     < 0.5 -- and for their consensus (band: 95 % interval). The y ticks are the rule's levels
+     0.10 / 0.50 / 0.90; open circles, where the consensus crosses them (the estimated cuts).
+  b  Bootstrap distribution of the three estimated cuts (share of replicates per 0.01 of G);
+     above each, the estimate with its 95 % interval. Each interval holds the published cut.
+  c  Agreement of the binary call G >= t between same-condition replicate entries (Cohen's
+     kappa) over t: the calibration set (strict-tier unbound chains) and all unbound chains.
+  d  G of the scored residues (density, log scale) of the calibration set and of all release
+     chains; percentages, share of calibration-set residues per zone.
+Curves: primary estimator (log LR interpolated between isotonic block midpoints). Bands and
+intervals: 95 %, from 1,000 bootstrap resamples -- in a and b of sequence clusters, jointly
+across references; in c of sequences (the replicate groups).
+
+Panels dropped on 17 Nov 2026 (figure review): the likelihood-ratio panel -- at the stated
+prevalence the posterior is a monotone transform of the LR (odds = pi / (1 - pi) * LR), so it
+repeated panel a on another scale; its curves stay in the source data (S20a_*.csv).
 
 Input: the output directory of scripts/validation/threshold_calibration/framework/compute.py
   $TRIZOD_THRESHOLD_FRAMEWORK_DIR  default <data root>/data/interim/threshold-framework-port-2026-11-17
@@ -25,7 +34,7 @@ other cuts than the text.
 
 Run: uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s20_threshold.py \
          --out-dir <draft>/Figures/paper
-Outputs: <out-dir>/S20.pdf and <out-dir>/suppfigs_d_data/S20_*.csv.
+Outputs: <out-dir>/S20.pdf and <out-dir>/suppfigs_d_data/S20*.csv.
 """
 
 from __future__ import annotations
@@ -47,24 +56,56 @@ FW = pc.env_path(
     pc.CHECKOUT / "data" / "interim" / "threshold-framework-port-2026-11-17",
 )
 
-W, H = sp.W_DOUBLE, 108.0  # mm
+W, H = sp.W_DOUBLE, 92.0  # mm
+# References: Okabe-Ito hues, validated as a set (dataviz validate_palette.js, all pairs:
+# CVD dE >= 11.4, normal-vision dE >= 18.7). Orange is below 3:1 on white, so every
+# reference also carries its letter as a direct label next to its curve.
 REF = {
-    "A": (sp.OKABE_ITO["blue"], "A  DisProt / X-ray observed"),
-    "B": (sp.OKABE_ITO["orange"], "B  missing in X-ray"),
-    "C": (sp.OKABE_ITO["green"], "C  hetNOE < 0.5"),
+    "A": (sp.OKABE_ITO["blue"], "DisProt vs X-ray"),
+    "B": (sp.OKABE_ITO["orange"], "missing in X-ray"),
+    "C": (sp.OKABE_ITO["green"], "hetNOE < 0.5"),
 }
 CONS = sp.INK
-EDGE = {  # level -> (colour, name, result key)
-    "0.10": (sp.OKABE_ITO["skyblue"], "ordered edge", "ordered_edge"),
-    "0.50": (sp.INK, "binary cut", "binary_cut"),
-    "0.90": (sp.OKABE_ITO["purple"], "disordered edge", "disordered_edge"),
-}
-ZONE_FILL = (sp.OKABE_ITO["skyblue"], sp.CAT["light"], sp.OKABE_ITO["purple"])
+CUT_LINE = sp.INK_SOFT
+GRID = "#C8C8C8"  # hairline guides at the posterior levels
+HIST = "#6B6B6B"  # bootstrap histograms
+OTHER = "#8A8A8A"  # the comparison set of c and d (all unbound / all chains)
+# Zones: one grey ramp, darker = more disordered (ordered = the white surface).
+ZONES = (
+    ("ordered", "#FFFFFF"),
+    ("ambiguous", "#F2F2F2"),
+    ("disordered", "#E6E6E6"),
+    ("confidently\ndisordered", "#D9D9D9"),
+)
+LEVELS = ("0.10", "0.50", "0.90")
+EDGE_KEYS = ("ordered_edge", "binary_cut", "disordered_edge")
 
 
-def _paper(ax, paper, ymax=None) -> None:
-    for v in paper:
-        ax.axvline(v, color=sp.INK_SOFT, lw=0.6, ls="--", zorder=1)
+def ax_mm(fig, x: float, top: float, w: float, h: float):
+    """Axes at ``x`` mm from the left, ``top`` mm from the top, ``w`` x ``h`` mm."""
+    return fig.add_axes([x / W, 1 - (top + h) / H, w / W, h / H])
+
+
+def zone_edges(cuts) -> list:
+    return [0.0, *cuts, 1.0]
+
+
+def shade(ax, cuts, line_top: float = 1.0) -> None:
+    """The four zones as background bands and a thin line at each cut (up to
+    ``line_top``, in axes fraction)."""
+    e = zone_edges(cuts)
+    for i, (_, col) in enumerate(ZONES):
+        if col.upper() != "#FFFFFF":
+            ax.axvspan(e[i], e[i + 1], color=col, lw=0, zorder=0)
+    for v in cuts:
+        ax.axvline(v, ymax=line_top, color=CUT_LINE, lw=0.5, zorder=1)
+    ax.set_xlim(0, 1)
+    ax.set_xticks([0, *cuts, 1])
+    ax.set_xticklabels(["0", *(f"{v:.2f}" for v in cuts), "1"])
+
+
+def fmt2(v: float) -> str:
+    return f"{v:.2f}"
 
 
 def main() -> None:
@@ -89,110 +130,190 @@ def main() -> None:
     x = fine.G
 
     fig = sp.figure(W, H)
-    gs = fig.add_gridspec(
-        2, 6, left=0.075, right=0.985, bottom=0.09, top=0.95, wspace=1.35, hspace=0.5
-    )
-    axa, axb, axc = (fig.add_subplot(gs[0, 2 * i : 2 * i + 2]) for i in range(3))
-    axd, axe = fig.add_subplot(gs[1, 0:3]), fig.add_subplot(gs[1, 3:6])
+    # left column: a (posterior) over b (bootstrap strip), sharing the G axis;
+    # right column: c (replicate kappa) over d (G distribution)
+    LX, LW = 13.0, 82.0
+    RX, RW = 112.0, 46.5
+    TOP = 9.5
+    axa = ax_mm(fig, LX, TOP, LW, 50.0)
+    axb = ax_mm(fig, LX, TOP + 52.5, LW, 21.0)
+    axc = ax_mm(fig, RX, TOP, RW, 29.5)
+    axd = ax_mm(fig, RX, TOP + 44.0, RW, 29.5)
+    # b: the cut lines stop at the interval row, so they meet the intervals but not
+    # the estimate printed above each
+    B_YMAX, WHISK_Y = 21.0, 15.5  # % of replicates
+    for ax in (axa, axb, axc, axd):
+        shade(ax, cuts, line_top=(WHISK_Y + 0.5) / B_YMAX if ax is axb else 1.0)
 
-    # a: likelihood ratios
-    for r, (col, lab) in REF.items():
-        axa.fill_between(
-            x,
-            np.exp(fine[f"logLR_{r}_lo"]),
-            np.exp(fine[f"logLR_{r}_hi"]),
-            color=col,
-            alpha=0.12,
-            lw=0,
-        )
-        axa.plot(x, np.exp(fine[f"logLR_{r}"]), color=col, lw=0.8, label=lab)
-    axa.fill_between(
-        x, np.exp(fine.logLR_lo), np.exp(fine.logLR_hi), color=CONS, alpha=0.18, lw=0
-    )
-    axa.plot(x, np.exp(fine.logLR), color=CONS, lw=1.4, label="consensus")
-    for lev, v in cons["lr_levels_at_pi"].items():
-        axa.axhline(v, color=sp.CAT["light"], lw=0.6, ls=":", zorder=1)
+    # zone names above a (the shading is the same in every panel)
+    e = zone_edges(cuts)
+    for i, (name, _) in enumerate(ZONES):
         axa.text(
-            0.99,
-            v / 1.12,
-            f"P = {float(lev):.2f}",
-            fontsize=sp.FS_SMALL,
-            color=sp.INK_SOFT,
-            va="top",
-            ha="right",
+            (e[i] + e[i + 1]) / 2,
+            1.015,
+            name,
+            transform=axa.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=sp.FS_BODY,
+            linespacing=1.0,
+            clip_on=False,
         )
-    axa.set_yscale("log")
-    axa.set_ylim(0.02, 3000)
-    axa.set_ylabel("Likelihood ratio of disorder")
-    axa.legend(
-        loc="upper left", fontsize=sp.FS_SMALL, handlelength=1.2, borderaxespad=0.2
-    )
 
-    # b: posterior at the stated prevalence, with the estimated cuts
+    # ---- a: posterior at the stated prevalence; the rule's levels are the y ticks
+    for lev in LEVELS:
+        axa.axhline(float(lev), color=GRID, lw=0.5, zorder=1)
     for r, (col, _) in REF.items():
-        axb.fill_between(
-            x, fine[f"post_{r}_lo"], fine[f"post_{r}_hi"], color=col, alpha=0.10, lw=0
+        axa.plot(x, fine[f"post_{r}"], color=col, lw=0.9, zorder=3)
+    axa.fill_between(
+        x, fine.post_lo, fine.post_hi, color=CONS, alpha=0.12, lw=0, zorder=2
+    )
+    axa.plot(x, fine.post, color=CONS, lw=1.6, zorder=4)
+    for lev in LEVELS:
+        t = cons["cuts"][lev]["t"]
+        axa.plot(t, float(lev), "o", ms=4.2, mfc="white", mec=CONS, mew=1.0, zorder=6)
+
+    # letters on the curves where they part (B: its plateau; C: highest; A: lowest)
+    def post_at(col: str, g: float) -> float:
+        return float(np.interp(g, x, fine[col]))
+
+    sp.direct_label(axa, 1.0, post_at("post_B", 0.995), "B", dx_mm=0.8)
+    sp.direct_label(
+        axa, 0.43, post_at("post_C", 0.43), "C", dx_mm=-1.0, dy_mm=1.4, ha="right"
+    )
+    sp.direct_label(
+        axa, 0.47, post_at("post_A", 0.47), "A", dx_mm=0.8, dy_mm=-1.6, va="top"
+    )
+    # key, in the empty lower part of the disordered zone
+    from matplotlib.lines import Line2D
+
+    handles = [Line2D([], [], color=CONS, lw=1.6, label="consensus of A–C")]
+    handles += [
+        Line2D([], [], color=col, lw=0.9, label=f"{r}  {lab}")
+        for r, (col, lab) in REF.items()
+    ]
+    handles.append(
+        Line2D(
+            [],
+            [],
+            ls="",
+            marker="o",
+            ms=4.2,
+            mfc="white",
+            mec=CONS,
+            mew=1.0,
+            label="estimated cut",
         )
-        axb.plot(x, fine[f"post_{r}"], color=col, lw=0.8)
-    axb.fill_between(x, fine.post_lo, fine.post_hi, color=CONS, alpha=0.18, lw=0)
-    axb.plot(x, fine.post, color=CONS, lw=1.4)
-    _paper(axb, paper)
-    for lev, (col, _name, _) in EDGE.items():
-        c = cons["cuts"][lev]
-        axb.axhline(float(lev), color=sp.CAT["light"], lw=0.6, ls=":", zorder=1)
-        if c["t"] is not None and c["CI"][0] is not None:
-            axb.errorbar(
-                c["t"],
-                float(lev),
-                xerr=[[c["t"] - c["CI"][0]], [c["CI"][1] - c["t"]]],
-                fmt="o",
-                ms=3,
-                color=col,
-                mec=sp.INK,
-                mew=0.5,
-                elinewidth=1.0,
-                capsize=1.5,
-                zorder=5,
-            )
-    axb.text(
-        0.99,
+    )
+    axa.legend(
+        handles=handles,
+        loc="lower left",
+        bbox_to_anchor=(cuts[1] + 0.012, 0.0),
+        bbox_transform=axa.get_xaxis_transform(),
+        handlelength=1.4,
+        handletextpad=0.5,
+        labelspacing=0.25,
+        borderaxespad=0.3,
+        borderpad=0.0,
+        frameon=False,
+    )
+    sp.direct_label(
+        axa,
+        0.985,
         0.03,
         f"$\\pi$ = {pi:.2f}",
-        transform=axb.transAxes,
+        dx_mm=0,
         ha="right",
-        fontsize=sp.FS_SMALL,
+        va="bottom",
     )
-    axb.set_ylim(0, 1)
-    axb.set_ylabel("P(disordered | G)")
+    axa.set_ylim(0, 1)
+    axa.set_yticks([0, 0.1, 0.5, 0.9, 1.0])
+    axa.set_yticklabels(["0", "0.10", "0.50", "0.90", "1"])
+    axa.set_ylabel("P(disordered | G)")
+    axa.tick_params(axis="x", labelbottom=False)
 
-    # c: bootstrap distribution of the cuts
+    # ---- b: bootstrap distribution of each estimated cut, with estimate and 95 % interval
     bins = np.arange(0, 1.0001, 0.01)
-    for col, name, key in EDGE.values():
+    for lev, key in zip(LEVELS, EDGE_KEYS):
         v = boot[f"{key}_{est}"].dropna()
-        axc.hist(
-            v,
-            bins=bins,
-            weights=np.full(len(v), 1 / len(boot)),
-            color=col,
-            alpha=0.75,
-            lw=0,
-            label=name,
+        h, _ = np.histogram(v, bins=bins)
+        axb.stairs(100 * h / len(boot), bins, fill=True, color=HIST, lw=0, zorder=3)
+        c = cons["cuts"][lev]
+        lo, hi = c["CI"]
+        axb.plot([lo, hi], [WHISK_Y, WHISK_Y], color=CONS, lw=0.9, zorder=5)
+        axb.plot(c["t"], WHISK_Y, "o", ms=4.2, mfc="white", mec=CONS, mew=1.0, zorder=6)
+        sp.direct_label(
+            axb,
+            c["t"],
+            WHISK_Y,
+            fmt2(c["t"]),
+            dx_mm=0,
+            dy_mm=1.3,
+            va="bottom",
+            ha="center",
         )
-    _paper(axc, paper)
-    axc.set_ylabel("Share of bootstrap replicates")
-    axc.set_ylim(0, None)
-    axc.legend(
-        loc="upper right", fontsize=sp.FS_SMALL, handlelength=1.0, borderaxespad=0.2
-    )
+    axb.set_ylim(0, B_YMAX)
+    axb.set_yticks([0, 10])
+    axb.set_ylabel("Bootstrap\nreplicates (%)")
+    axb.set_xlabel("G-score")
 
-    # d: G distribution and the three zones
+    # ---- c: replicate agreement of the binary call
+    for setname, col, lw, alpha in (
+        ("all_unbound_chains", OTHER, 0.9, 0.16),
+        ("analysis_set", CONS, 1.3, 0.16),
+    ):
+        k = kap[kap.set == setname]
+        axc.fill_between(k.t, k.lo, k.hi, color=col, alpha=alpha, lw=0, zorder=2)
+        axc.plot(k.t, k.kappa, color=col, lw=lw, zorder=3)
+    kb = R["replicates"]["analysis_set"]["paper_values"]["kappa_binary"][0]
+    axc.plot(cuts[1], kb, "o", ms=3.6, color=CONS, mec="white", mew=0.6, zorder=6)
+    sp.direct_label(
+        axc,
+        cuts[1],
+        kb,
+        f"$\\kappa$ = {kb:.2f}",
+        dx_mm=0.9,
+        dy_mm=1.2,
+        ha="left",
+        va="bottom",
+    )
+    # direct labels, clear of the cut lines: the calibration set above its band right of
+    # the disordered edge, all unbound below its band
+    k_cal = kap[kap.set == "analysis_set"]
+    k_all = kap[kap.set == "all_unbound_chains"]
+    right = (k_cal.t > cuts[2]) & (k_cal.t <= 0.985)
+    sp.direct_label(
+        axc,
+        0.985,
+        float(k_cal.hi[right].max()),
+        "calibration\nset",
+        dx_mm=0,
+        dy_mm=0.5,
+        ha="right",
+        va="bottom",
+        linespacing=1.0,
+    )
+    t_lo = 0.53
+    sp.direct_label(
+        axc,
+        t_lo,
+        float(np.interp(t_lo, k_all.t, k_all.lo)),
+        "all unbound",
+        dx_mm=0,
+        dy_mm=-1.2,
+        ha="center",
+        va="top",
+    )
+    axc.set_ylim(0.4, 1.04)
+    axc.set_yticks([0.4, 0.6, 0.8, 1.0])
+    axc.set_ylabel("Replicate agreement ($\\kappa$)")
+    axc.set_xlabel("Cut-off $t$ (disordered if $G \\geq t$)")
+
+    # ---- d: G distribution of the scored residues, share per zone
     width = 0.01
-    edges = [0.0, paper[0], paper[2], 1.0]
-    for i, col in enumerate(ZONE_FILL):
-        axd.axvspan(edges[i], edges[i + 1], color=col, alpha=0.12, lw=0, zorder=0)
-    for col_name, col, lab in (
-        ("tier_unfiltered+", sp.INK_SOFT, "all release chains"),
-        ("analysis_set", sp.INK, "analysis set"),
+    for col_name, col, lw in (
+        ("tier_unfiltered+", OTHER, 0.8),
+        ("analysis_set", CONS, 1.0),
     ):
         dens = gh[col_name] / (gh[col_name].sum() * width)
         axd.step(
@@ -200,82 +321,68 @@ def main() -> None:
             np.r_[dens, dens.iloc[-1]],
             where="post",
             color=col,
-            lw=0.9 if col == sp.INK else 0.7,
-            ls="-" if col == sp.INK else "--",
-            label=lab,
+            lw=lw,
+            zorder=3,
         )
-    _paper(axd, paper)
     z = zs[(zs.set == "analysis_set") & (zs.cuts_from == "paper_values")].iloc[0]
-    for i, key in enumerate(("ordered", "indeterminate", "disordered")):
-        xm = (
-            (paper[1] + paper[2]) / 2
-            if key == "indeterminate"
-            else (edges[i] + edges[i + 1]) / 2
-        )
+    shares = (
+        z.ordered,
+        1 - z.ordered - z.binary_disordered,
+        z.binary_disordered - z.disordered,
+        z.disordered,
+    )
+    for i, s in enumerate(shares):
         axd.text(
-            xm,
-            0.03,
-            f"{key}\n{100 * z[key]:.0f} %",
+            (e[i] + e[i + 1]) / 2,
+            0.04,
+            f"{100 * s:.0f}%",
             transform=axd.get_xaxis_transform(),
             ha="center",
             va="bottom",
-            fontsize=sp.FS_SMALL,
-            color=sp.INK_SOFT,
+            fontsize=sp.FS_BODY,
         )
+    # direct labels: all chains above its high-G bump, the calibration set below its trough
+    dens_all = gh["tier_unfiltered+"] / (gh["tier_unfiltered+"].sum() * width)
+    dens_cal = gh["analysis_set"] / (gh["analysis_set"].sum() * width)
+    sp.direct_label(
+        axd,
+        0.985,
+        float(dens_all[gh.G_lo > 0.8].max()),
+        "all chains",
+        dx_mm=0,
+        dy_mm=0.8,
+        ha="right",
+        va="bottom",
+    )
+    sp.direct_label(
+        axd,
+        0.525,
+        float(dens_cal[(gh.G_lo > 0.35) & (gh.G_lo < 0.7)].min()),
+        "calibration set",
+        dx_mm=0,
+        dy_mm=-0.8,
+        ha="center",
+        va="top",
+    )
     axd.set_yscale("log")
-    axd.set_ylabel("Density of residues")
+    axd.set_ylim(0.005, 30)
+    axd.set_ylabel("Residues (density)")
     axd.set_xlabel("G-score")
-    axd.legend(
-        loc="upper right", fontsize=sp.FS_SMALL, handlelength=1.6, borderaxespad=0.2
-    )
 
-    # e: replicate agreement of the binary call
-    for setname, col, lab in (
-        ("analysis_set", sp.INK, "analysis set"),
-        ("all_unbound_chains", sp.INK_SOFT, "all unbound chains"),
-    ):
-        k = kap[kap.set == setname]
-        axe.fill_between(k.t, k.lo, k.hi, color=col, alpha=0.15, lw=0)
-        axe.plot(
-            k.t,
-            k.kappa,
-            color=col,
-            lw=1.0,
-            ls="-" if col == sp.INK else "--",
-            label=lab,
-        )
-    _paper(axe, paper)
-    kb = R["replicates"]["analysis_set"]["paper_values"]["kappa_binary"]
-    axe.annotate(
-        f"$\\kappa$ = {kb[0]:.2f}",
-        xy=(paper[1], kb[0]),
-        xytext=(paper[1] + 0.12, kb[0] + 0.02),
-        fontsize=sp.FS_SMALL,
-        arrowprops={"arrowstyle": "-", "lw": 0.5, "color": sp.INK_SOFT},
-    )
-    axe.set_ylim(0.4, 1.0)
-    axe.set_ylabel("Replicate agreement ($\\kappa$)")
-    axe.set_xlabel("Cut-off $t$ (disordered if $G \\geq t$)")
-    axe.legend(
-        loc="lower center", fontsize=sp.FS_SMALL, handlelength=1.6, borderaxespad=0.2
-    )
-
-    for ax in (axa, axb, axc):
-        ax.set_xlabel("G-score")
-    for ax in (axa, axb, axc, axd, axe):
-        ax.set_xlim(0, 1)
-    for ax, letter in zip((axa, axb, axc, axd, axe), "abcde"):
-        sp.panel_label(ax, letter, x=-0.3 if ax in (axa, axb, axc) else -0.17, y=1.03)
+    sp.fig_label(fig, "a", 0.5, 1.0)
+    sp.fig_label(fig, "b", 0.5, TOP + 52.5 - 1.0)
+    sp.fig_label(fig, "c", RX - 13.0, 1.0)
+    sp.fig_label(fig, "d", RX - 13.0, TOP + 44.0 - 3.0)
 
     out = sp.save(fig, "S20")
     data_dir = sp.out_dir("suppfigs_d_data")
     data_dir.mkdir(parents=True, exist_ok=True)
     for src, name in (
-        ("curves_fine.csv", "S20ab_lr_posterior_curves.csv"),
-        ("boot_thresholds.csv", "S20c_boot_thresholds.csv"),
+        ("curves_fine.csv", "S20a_posterior_lr_curves.csv"),
+        ("boot_thresholds.csv", "S20b_boot_thresholds.csv"),
+        ("replicate_kappa_curve.csv", "S20c_replicate_kappa.csv"),
         ("g_histogram.csv", "S20d_g_histogram.csv"),
         ("zone_shares.csv", "S20d_zone_shares.csv"),
-        ("replicate_kappa_curve.csv", "S20e_replicate_kappa.csv"),
     ):
         shutil.copyfile(FW / src, data_dir / name)
     print(out)

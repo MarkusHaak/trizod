@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """Supplementary Fig. S2 -- G-score theory (synthetic Z and G vs k, the G-Z map, empirical G-Z).
 
+Layout (17 Nov 2026, figure review): a | b above c | d, so the line labels of a and b can
+be written out and the residue bands of d are resolved.
+
 Panels
-  a  Synthetic Z-score vs shift count k for windows with 0/3 ... 3/3 ordered residues
-     (mean and 5-95 % band over simulated residues).
+  a  Synthetic Z-score vs shift count k for windows with 0, 1, 2 or 3 ordered residues
+     out of three (mean and 5-95 % band over simulated residues); each line is labelled
+     at its end ("2 of 3 ordered").
   b  Same for the G-score: its mean is nearly flat in k; only its spread narrows.
   c  The exact G-Z relation: for fixed k both scores are monotone functions of the
      capped residual sum of squares, so each k traces one curve.
-  d  Empirical G vs Z over the scored residues of the unfiltered training pool (hexbin),
-     with the k = 3 / 9 / 15 / 21 curves of panel c overlaid.
+  d  Empirical G vs Z over the scored residues of the unfiltered training pool (fine 2-D
+     histogram, log counts). No curves are drawn on top: every residue lies on the curve
+     of its k (largest |G - G_curve(Z, k)| below 1e-4, the storage precision of G;
+     summary key max_abs_dG_from_curve_pool), so the residues form one band per k
+     themselves; the overlaid k = 3 / 9 / 15 / 21 curves of the earlier version hid them.
+     The curves k = 1 and k = 21 are labelled at the same place in c and d.
 
 The Z- and G-scores are computed with the scoring code itself
 (``trizod.scoring.scoring.compute_zscores`` / ``compute_gscores``), so the curves
@@ -102,6 +110,21 @@ def analytic_curve(k: int, n: int = 400):
     return z, g
 
 
+def curve_deviation(G, Z, K) -> float:
+    """Largest |G - G_curve(Z, k)| over residues: how far each residue lies from the
+    analytic G-Z curve of its k. Z is inverted for the capped RSS by bisection (Z rises
+    monotonically with the RSS) and G computed from it. Measured in G, not Z: near G = 1
+    Z is steep in the RSS, so the 4-decimal storage of G alone moves Z by up to ~1."""
+    lo, hi = np.zeros_like(Z, dtype=float), 16.0 * K
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        up = chi2_cdf_approx(mid, K) < Z
+        lo, hi = np.where(up, mid, lo), np.where(up, hi, mid)
+    rss = 0.5 * (lo + hi)
+    g = (np.exp(-rss / (8.0 * K)) - np.exp(-2.0)) / (1.0 - np.exp(-2.0))
+    return float(np.max(np.abs(g - G)))
+
+
 def empirical_pool():
     df = sp.load_main(["id", "pool_tier", "gscores", "zscores", "k", "mask"])
     pool = df[df.pool_tier.notna()]
@@ -135,6 +158,8 @@ def main():
             "pearson_G_Z_released": round(r_all, 4),
             "median_Z_ordered_k19_21_pool": round(z_target, 3),
             "sigma_ordered_calibrated": round(s_o, 3),
+            # panel d draws no curves: each residue's Z equals the curve of its k at its G
+            "max_abs_dG_from_curve_pool": float(f"{curve_deviation(G, Z, K):.1g}"),
         }
     )
 
@@ -172,41 +197,49 @@ def main():
         (np.exp(-1 / 8) - np.exp(-2)) / (1 - np.exp(-2)), 3
     )
 
-    # ---- figure
-    fig = sp.figure(sp.W_DOUBLE, 56)
-    gs = fig.add_gridspec(
-        1, 4, left=0.068, right=0.985, bottom=0.17, top=0.90, wspace=0.45
-    )
-    axa, axb, axc, axd = (fig.add_subplot(gs[0, i]) for i in range(4))
+    # ---- figure: a | b (simulation over k) above c | d (the G-Z relation)
+    W, H = sp.W_DOUBLE, 100.0  # mm
 
-    # a and b: lines are labelled at their right end (ordered residues out of three),
-    # so no legend sits on the percentile bands; the dotted disorder cut-offs are
-    # explained in the caption.
-    x_lab = KS[-1] + 0.9
+    def ax_mm(x, top, w, h):
+        """Axes at ``x`` mm from the left, ``top`` mm from the top, ``w`` x ``h`` mm."""
+        return fig.add_axes([x / W, 1 - (top + h) / H, w / W, h / H])
+
+    fig = sp.figure(W, H)
+    axa = ax_mm(12.0, 5.0, 45.0, 37.0)
+    axb = ax_mm(91.0, 5.0, 45.0, 37.0)
+    axc = ax_mm(12.0, 55.0, 62.0, 36.0)
+    axd = ax_mm(91.0, 55.0, 62.0, 36.0)
+
+    # a and b: each line is labelled at its right end with the number of ordered residues
+    # in the three-residue window, written out ("2 of 3 ordered"), so neither a legend nor
+    # the caption is needed to read it; the dotted lines are the disorder cut-offs.
     for n_ord in N_ORD:
         a = sim[n_ord]
         c = ORD_COLOR[n_ord]
-        axa.fill_between(a[:, 0], a[:, 2], a[:, 3], color=c, alpha=0.13, lw=0)
+        lab = f"{n_ord} of 3 ordered"
+        axa.fill_between(a[:, 0], a[:, 2], a[:, 3], color=c, alpha=0.12, lw=0)
         axa.plot(a[:, 0], a[:, 1], color=c, lw=0.9, marker="o", ms=2)
-        axb.fill_between(a[:, 0], a[:, 5], a[:, 6], color=c, alpha=0.13, lw=0)
+        axb.fill_between(a[:, 0], a[:, 5], a[:, 6], color=c, alpha=0.12, lw=0)
         axb.plot(a[:, 0], a[:, 4], color=c, lw=0.9, marker="o", ms=2)
         for ax, y in ((axa, a[-1, 1]), (axb, a[-1, 4])):
-            ax.text(
-                x_lab, y, f"{n_ord}/3", ha="left", va="center", fontsize=sp.FS_SMALL
-            )
+            sp.direct_label(ax, KS[-1], y, lab, dx_mm=1.6)
     for ax in (axa, axb):
         ax.set_xlabel("Shifts in the window, $k$")
-        ax.set_xlim(2, KS[-1] + 4.2)
+        ax.set_xlim(2, KS[-1] + 1)
         ax.set_xticks(KS)
         ax.spines["bottom"].set_bounds(KS[0], KS[-1])
     axa.set_ylabel("Z-score (synthetic)")
     axa.set_ylim(-3, 17)
     axa.set_yticks([0, 5, 10, 15])
     # disorder cut-offs (Z = 8; the binary cut G = G_DIS), drawn over the data range only
-    axa.hlines(8, 2, KS[-1], color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
+    axa.hlines(8, 2, KS[-1], color=sp.INK_SOFT, lw=0.5, ls=":", zorder=0)
     axb.set_ylabel("G-score (synthetic)")
     axb.set_ylim(0, 1)
-    axb.hlines(sp.G_DIS, 2, KS[-1], color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
+    axb.hlines(sp.G_DIS, 2, KS[-1], color=sp.INK_SOFT, lw=0.5, ls=":", zorder=0)
+    sp.direct_label(axa, 2.2, 8, "Z = 8", dx_mm=0, dy_mm=0.4, va="bottom")
+    sp.direct_label(
+        axb, 2.2, sp.G_DIS, f"G = {sp.G_DIS:.2f}", dx_mm=0, dy_mm=0.4, va="bottom"
+    )
 
     # c: analytic map
     import matplotlib as mpl
@@ -219,78 +252,63 @@ def main():
     for k in KS_MAP:
         z, g = analytic_curve(int(k))
         axc.plot(z, g, color=cmap(norm(k)), lw=0.7)
-    axc.set_xlabel("Z-score")
-    axc.set_ylabel("G-score")
-    axc.set_ylim(-0.02, 1.02)
-    axc.set_xlim(-5, 17)
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
-    cax = axc.inset_axes([0.62, 0.62, 0.05, 0.33])
+    cax = axc.inset_axes([0.70, 0.56, 0.035, 0.38])
     cb = fig.colorbar(sm, cax=cax, ticks=[1, 11, 21])
-    cb.set_label("$k$", fontsize=sp.FS_TICK, labelpad=1)
-    cb.ax.tick_params(labelsize=sp.FS_SMALL, length=1.5, pad=1)
+    cb.set_label("$k$", fontsize=sp.FS_TICK, labelpad=2)
+    cb.ax.tick_params(labelsize=sp.FS_TICK, length=1.5, pad=1)
     cb.outline.set_linewidth(0.4)
 
-    # d: empirical hexbin. The bins stop at mid-grey and the curves of c carry a white
-    # halo, so the curves stay visible where the residues are densest.
-    from matplotlib import patheffects
-
-    bin_cmap = mpl.colors.ListedColormap(
-        mpl.colormaps["Greys"](np.linspace(0.15, 0.62, 256))
+    # d: the released residues as a fine 2-D histogram (log counts), WITHOUT the curves of
+    # c on top: every residue lies on the curve of its k (max_abs_dG_from_curve_pool), so
+    # the residues draw those curves themselves, one grey band per k. The overlay that d
+    # carried until 17 Nov 2026 (k = 3 / 9 / 15 / 21, dashed, haloed) hid exactly those
+    # bands (figure review, item 7b).
+    zr, gr = (-5.0, 17.0), (-0.02, 1.02)
+    h2, ze, ge = np.histogram2d(Z, G, bins=(440, 300), range=(zr, gr))
+    grey = mpl.colors.ListedColormap(
+        mpl.colormaps["Greys"](np.linspace(0.30, 1.0, 256))
     )
-    hb = axd.hexbin(
-        Z,
-        G,
-        gridsize=70,
-        extent=(-5, 17, 0, 1),
-        bins="log",
-        mincnt=1,
-        cmap=bin_cmap,
-        linewidths=0.0,
-        rasterized=False,
+    mesh = axd.pcolormesh(
+        ze,
+        ge,
+        np.ma.masked_equal(h2.T, 0),
+        cmap=grey,
+        norm=mpl.colors.LogNorm(vmin=1, vmax=h2.max()),
+        rasterized=True,
     )
-    halo = [patheffects.withStroke(linewidth=2.4, foreground="white")]
-    for k, ls in ((3, ":"), (9, "--"), (15, "-."), (21, "-")):
-        z, g = analytic_curve(k)
-        axd.plot(
-            z,
-            g,
-            color=cmap(norm(k)),
-            lw=1.1,
-            ls=ls,
-            label=f"{k}",
-            path_effects=halo,
-        )
-    axd.set_xlabel("Z-score")
-    axd.set_ylabel("G-score")
-    axd.set_xlim(-5, 17)
-    axd.set_ylim(-0.02, 1.02)
-    # a compact key (title k, values only) fits the empty lower-left corner
-    leg = axd.legend(
-        loc="lower left",
-        title="$k$",
-        handlelength=1.7,
-        handletextpad=0.4,
-        labelspacing=0.3,
-        borderaxespad=0.2,
+    cax2 = axd.inset_axes([0.70, 0.56, 0.035, 0.38])
+    cb2 = fig.colorbar(
+        mesh, cax=cax2, ticks=[t for t in (1, 10, 100, 1000, 10000) if t <= h2.max()]
     )
-    leg._legend_box.align = "left"
+    cb2.set_label("Residues", fontsize=sp.FS_TICK, labelpad=2)
+    cb2.ax.tick_params(labelsize=sp.FS_TICK, length=1.5, pad=1)
+    cb2.outline.set_linewidth(0.4)
     axd.text(
-        0.98,
-        0.98,
+        0.03,
+        0.04,
         f"r = {r_pool:.2f}".replace("-", "\N{MINUS SIGN}"),
         transform=axd.transAxes,
-        ha="right",
-        va="top",
+        ha="left",
+        va="bottom",
         fontsize=sp.FS_TICK,
     )
-    cax2 = axd.inset_axes([0.62, 0.45, 0.05, 0.28])
-    cb2 = fig.colorbar(hb, cax=cax2)
-    cb2.set_label("Residues", fontsize=sp.FS_SMALL, labelpad=1)
-    cb2.ax.tick_params(labelsize=sp.FS_SMALL, length=1.5, pad=1)
-    cb2.outline.set_linewidth(0.4)
+
+    # c and d share their axes, and the outermost curves (k = 1, k = 21) are labelled at
+    # the same place in both, so a band of d is matched to its curve of c by position
+    g_lab = 0.2
+    for ax in (axc, axd):
+        for k, dx, ha in ((1, -1.0, "right"), (int(KS_MAP[-1]), 1.0, "left")):
+            z, g = analytic_curve(k)
+            z0 = float(np.interp(g_lab, g[::-1], z[::-1]))  # g falls as z rises
+            sp.direct_label(ax, z0, g_lab, f"$k$ = {k}", dx_mm=dx, ha=ha)
+        ax.set_xlabel("Z-score")
+        ax.set_ylabel("G-score")
+        ax.set_xlim(*zr)
+        ax.set_ylim(*gr)
 
     for ax, l in zip((axa, axb, axc, axd), "abcd"):
-        sp.panel_label(ax, l, x=-0.33, y=1.03)
+        sp.panel_label(ax, l, x=-11.0 / (ax.get_position().width * W), y=1.02)
     out = sp.save(fig, "S2")
     data_dir = sp.out_dir("suppfigs_b_data")
     data_dir.mkdir(exist_ok=True)
