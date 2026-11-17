@@ -1625,6 +1625,7 @@ def sec_filter_losses(C):
         ".*chloroform.*": "CsChloroform", ".*CDCl3.*": "CsCDClThree", ".*CHCl3.*": "CsCHClThree",
         ".*isopropanol.*": "CsIsopropanol", ".*2-propanol.*": "CsTwoPropanol",
         ".*isopropyl alcohol.*": "CsIsopropylAlcohol", ".*n-propanol.*": "CsNPropanol",
+        ".*isoPrOH.*": "CsIsoPrOH", ".*iPrOH.*": "CsIPrOH", ".*i-PrOH.*": "CsIDashPrOH", ".*IPA.*": "CsIPA",
         ".*1-propanol.*": "CsOnePropanol", ".*hexane.*": "CsHexane", ".*pentane.*": "CsPentane",
         ".*dioxane.*": "CsDioxane",
         "error in computation": "ErrorInComputation", "rejected due to any offset": "OffsetEntryLevel",
