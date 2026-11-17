@@ -1,1 +1,3 @@
-from .scoring import convert_to_triplet_data, compute_zscores, compute_pscores
+from .scoring import compute_gscores, compute_zscores, convert_to_triplet_data
+
+__all__ = ["compute_gscores", "compute_zscores", "convert_to_triplet_data"]

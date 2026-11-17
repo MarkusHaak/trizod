@@ -1,0 +1,42 @@
+{
+  "title": "TriZOD — Re-referenced BMRB chemical-shift dataset for protein disorder",
+  "description": "Per-residue protein-disorder labels derived from BMRB NMR backbone chemical shifts. Observed shifts are re-referenced (LACS + POTENCI/AIC) and scored against POTENCI random-coil predictions to give CheZOD-style per-residue Z-scores and G-scores (0-1, higher = more disordered). The dataset is distributed as a SINGLE Parquet file (trizod_dataset.parquet): one row per scored protein chain, with per-residue Z/G-score, shift-count (k) and boolean mask arrays stored as list columns aligned 1:1 to the sequence, plus NMR sample conditions, re-referencing offsets and citation provenance. Four nested stringency tiers (unfiltered/tolerant/moderate/strict) and redundancy-reduced training representatives are selectable via the split and train_tier columns; two held-out, leakage-free test sets are included (CheZOD117, 115 chains; TriZOD, 344 chains). Produced by the finalized TriZOD pipeline (2026-06 build).",
+  "version": "0.2.0-dataset",
+  "creators": [
+    { "name": "Senoner, Tobias", "affiliation": "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany" },
+    { "name": "Haak, Markus", "affiliation": "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany" },
+    { "name": "Heinzinger, Michael", "affiliation": "TUM School of Computation, Information and Technology, Technical University of Munich, Germany" },
+    { "name": "Wagemann, David", "affiliation": "Department of Informatics, Bioinformatics & Computational Biology (i12), Technical University of Munich, Germany" },
+    { "name": "Pritišanac, Iva", "affiliation": "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany" },
+    { "name": "Rost, Burkhard", "affiliation": "TUM School of Computation, Information and Technology, Technical University of Munich, Germany" },
+    { "name": "Alderson, Reid", "affiliation": "Institute of Structural Biology, Helmholtz Munich, Neuherberg, Germany; Bavarian NMR Center, Technical University of Munich, Garching, Germany" }
+  ],
+  "keywords": [
+    "NMR",
+    "BMRB",
+    "intrinsically disordered proteins",
+    "chemical shift",
+    "re-referencing",
+    "LACS",
+    "POTENCI",
+    "CheZOD",
+    "Z-score",
+    "G-score"
+  ],
+  "license": "MIT",
+  "upload_type": "dataset",
+  "related_identifiers": [
+    {
+      "identifier": "https://bmrb.io/",
+      "relation": "isDerivedFrom",
+      "scheme": "url",
+      "resource_type": "dataset"
+    },
+    {
+      "identifier": "https://github.com/tsenoner/trizod",
+      "relation": "isSupplementTo",
+      "scheme": "url",
+      "resource_type": "software"
+    }
+  ]
+}
