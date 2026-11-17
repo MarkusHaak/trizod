@@ -1930,6 +1930,61 @@ def sec_test_sets(C):
         "r5",
     )
     assert len(retired) == len(C.retired), (len(retired), len(C.retired))
+    # why each retired chain left the test set (Parquet retired_reason; the column is absent
+    # from bundles before the 2026-11-17 build, which retired nothing)
+    reasons = (
+        df.loc[df.split == cfg.RETIRED_SPLIT, "retired_reason"].value_counts()
+        if "retired_reason" in df
+        else pd.Series(dtype=int)
+    )
+    assert int(reasons.sum()) == len(C.retired), (dict(reasons), len(C.retired))
+    for name, reason, what in (
+        ("nRetiredNotStrict", "not_strict", "no longer meets the strict tier"),
+        (
+            "nRetiredCheZODOverlap",
+            "chezod117_overlap",
+            "meets the leakage criterion (>= 30 % identity over >= 80 % of either chain) "
+            "against a CheZOD117 sequence",
+        ),
+        (
+            "nRetiredWithinTestDuplicate",
+            "within_test_duplicate",
+            "the shorter of two TriZOD test chains at >= 50 % identity over >= 80 % of "
+            "either chain",
+        ),
+    ):
+        R.add(
+            name,
+            I(reasons.get(reason, 0)),
+            f"retired TriZOD test chains whose retired_reason is {reason}: the chain {what}",
+            "trizod_dataset.parquet retired_reason (split = " + cfg.RETIRED_SPLIT + ")",
+            STABLE,
+            "r5",
+        )
+    # TriZOD test chains with a relative in a CheZOD-derived training set (clean subsets for
+    # benchmarking CheZOD-trained predictors are the test chains with the flag false)
+    tz = df[df.split == "test_trizod"]
+    assert len(tz) == len(C.test_tz), (len(tz), len(C.test_tz))
+    for name, col, who in (
+        (
+            "nTestCheZODOneThreeTwoFiveOverlap",
+            "chezod1325_overlap",
+            "CheZOD1325 (ODiNPred training)",
+        ),
+        (
+            "nTestCheZODOneOneSevenFourOverlap",
+            "chezod1174_overlap",
+            "CheZOD1174 (SETH/ADOPT training)",
+        ),
+    ):
+        R.add(
+            name,
+            I(int((tz[col] == True).sum())),  # noqa: E712 -- nullable bool
+            f"TriZOD test chains flagged {col}: a relative in {who}",
+            f"trizod_dataset.parquet {col} (split = test_trizod)",
+            STABLE,
+            "r5",
+        )
     R.add(
         "nTestTriZODDropped",
         I(len(summ["dropped"])),
@@ -8488,8 +8543,9 @@ def sec_methods_b_revision(C):
     assert fr.SEED == f2a.SEED == s7.SEED, (fr.SEED, f2a.SEED, s7.SEED)
     R.add("seedPairs", I(fr.SEED), "seed of the replicate-pair sampling (Figs. 2a, 3a; Supplementary Fig. S7) and of the sequence bootstraps", "scripts/figures/paper/fig3_replicates.py, fig2a_kpaired.py, supp_s7_replicates.py SEED", STABLE, "par")  # fmt: skip
     R.add("seedConditionPairs", I(fr.SEED + 1), "seed of the same- versus different-condition pair sampling (Fig. 3b)", "scripts/figures/paper/fig3_replicates.py condition_pairs(): random.Random(SEED + 1)", STABLE, "par")  # fmt: skip
-    from trizod.dataset.mmseqs import SUBSTRING_MIN_LEN
+    from trizod.dataset.mmseqs import LEAKAGE_MIN_BITS, SUBSTRING_MIN_LEN
 
+    R.add("leakageMinBits", f"{LEAKAGE_MIN_BITS:g}", "minimum bit score of a leakage alignment (stage 2 and the release gate, both search directions; independent of database size)", "trizod/dataset/mmseqs.py LEAKAGE_MIN_BITS", STABLE, "par")  # fmt: skip
     R.add("substringGateMin", I(SUBSTRING_MIN_LEN), "minimum length (residues) of an exact-substring containment that the release gate rejects", "trizod/dataset/mmseqs.py SUBSTRING_MIN_LEN (package_release gate; audit report decision D2: three containment pairs are only 21-22 aa long)", PENDING, "par")  # fmt: skip
 
 
@@ -9359,16 +9415,20 @@ def sec_methods_a_revision(C):
         for b, sb in tz.sequence.items()
         if sa != sb and (sa in sb or sb in sa)
     ]
-    assert len(pairs) == 1, pairs
-    inner, outer = (
-        pairs[0]
-        if len(cz.sequence[pairs[0][0]]) < len(tz.sequence[pairs[0][1]])
-        else pairs[0][::-1]
-    )
+    # one pair up to the 2026-11-11 build (CheZOD117 19482 inside test chain 19481_1_1_1); from
+    # the 2026-11-17 build on a test chain that meets the leakage criterion against CheZOD117
+    # is retired (retired_reason chezod117_overlap), so the two test sets share none
+    assert len(pairs) <= 1, pairs
     src_c = f"{srcq} sequence, split (exact substring between the two test sets)"
     R.add("nTestSetsContained", I(len(pairs)), "CheZOD117 / TriZOD test chain pairs in which one sequence lies inside the other (no identical sequence)", src_c, STABLE, "r5")  # fmt: skip
-    R.add("idTestContainedInner", S(inner), "the CheZOD117 chain that lies verbatim inside a TriZOD test chain", src_c, STABLE, "r5")  # fmt: skip
-    R.add("idTestContainedOuter", S(outer), "the TriZOD test chain that contains it", src_c, STABLE, "r5")  # fmt: skip
+    if pairs:
+        inner, outer = (
+            pairs[0]
+            if len(cz.sequence[pairs[0][0]]) < len(tz.sequence[pairs[0][1]])
+            else pairs[0][::-1]
+        )
+        R.add("idTestContainedInner", S(inner), "the CheZOD117 chain that lies verbatim inside a TriZOD test chain", src_c, STABLE, "r5")  # fmt: skip
+        R.add("idTestContainedOuter", S(outer), "the TriZOD test chain that contains it", src_c, STABLE, "r5")  # fmt: skip
     gate = 20  # = \\substringGateMin (sec_params); planned gate of fix (a), leakage-fix branch 98db69e
     tests = pd.concat([tz, cz])
     rev = [
