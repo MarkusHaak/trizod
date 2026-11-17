@@ -55,7 +55,7 @@ files and the prose quote the same numbers) and of the leave-pair-out test:
   per-residue consensus is the median G of the group's other chains; a residue is
   comparable when the chain is scored there and >= 2 other chains are. Chains need
   >= 5 comparable residues. Deviation = mean |G - consensus|; flip = share of residues
-  on opposite sides of G = 0.65; chain k = median shift count over comparable residues.
+  on opposite sides of G = G_DIS; chain k = median shift count over comparable residues.
   Labels are the release (unfiltered) labels; a sensitivity check re-reads each
   chain's own tier label (only the tolerant tier differs, writing-plan fix (c)).
 * **Residue-level replicate r** (port of ``user_first/ceiling_and_baseline.py``).
@@ -285,6 +285,13 @@ def replicate_pairs(df: pd.DataFrame, cap: int | None = PAIR_CAP):
 N_GBINS = 10
 
 
+def share_above(p: np.ndarray, cut: float) -> float:
+    """Share of the pair-mean-G bin mass above ``cut``, linear within the bin holding it."""
+    x = round(cut * N_GBINS, 9)
+    i = min(int(np.floor(x)), N_GBINS - 1)
+    return float(p[i + 1 :].sum() + (1 - (x - i)) * p[i])
+
+
 def pair_bin_stats(p) -> np.ndarray:
     """(N_GBINS, 6) sums n, sx, sy, sxx, syy, sxy per pair-mean-G bin."""
     x, y = p["x"], p["y"]
@@ -336,7 +343,7 @@ def tier_r_table(pairs, ref_tier="strict") -> tuple[pd.DataFrame, dict]:
                      "n_residues": int(tot[:, 0].sum()), "r": est, "r_lo": np.percentile(bs, 2.5),
                      "r_hi": np.percentile(bs, 97.5), "r_varmatched": est_vm,
                      "r_varmatched_lo": np.percentile(bs_vm, 2.5), "r_varmatched_hi": np.percentile(bs_vm, 97.5),
-                     "share_pairmeanG_gt_0.65": float(p[int(0.65 * N_GBINS) + 1 :].sum() + 0.5 * p[int(0.65 * N_GBINS)])})  # fmt: skip
+                     f"share_pairmeanG_gt_{sp.G_DIS:.2f}": share_above(p, sp.G_DIS)})  # fmt: skip
     return pd.DataFrame(rows), {
         "ref_tier": ref_tier,
         "ref_bin_share": pref.round(4).tolist(),
@@ -627,7 +634,7 @@ def plot(S: pd.DataFrame, KT: pd.DataFrame, RF: pd.DataFrame, CS: pd.DataFrame,
         ("median_dev", "median_dev_lo", "median_dev_hi", 1, 0.04, 2, f3a_xlabel()),
         ("share_dev_gt_0.1", "share_lo", "share_hi", 100, 20, 0, "Chains with |ΔG| > 0.1 (%)"),
         ("flip", "flip_lo", "flip_hi", 100, 10, 0,
-         f"Residues with the opposite\nlabel at G = {sp.G_DIS} (%)"),
+         f"Residues with the opposite\nlabel at G = {sp.G_DIS:.2f} (%)"),
     ]  # fmt: skip
     Sf = S[S["scope"] == "fig3"]
     for i, (col, lo, hi, fac, step, nd, lab) in enumerate(metrics):

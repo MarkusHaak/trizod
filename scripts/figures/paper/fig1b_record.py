@@ -13,7 +13,7 @@ axis:
 3. **Shift count k** -- the backbone shifts in the residue's three-residue scoring
    window (chain table ``k``), coloured on the shared k scale (sp.K_CMAP);
 4. **G-score** -- the released label (chain table ``gscores``), with the binary cut
-   G = 0.65; residues the release does not score (``mask`` false) are marked ×.
+   G = ``style_paper.G_DIS``; residues the release does not score (``mask`` false) are marked ×.
 
 A card beside the tracks lists the chain's metadata from the chain table (pH,
 temperature, ionic strength, pressure, physical state, bound, cosolvent, membrane
@@ -26,8 +26,8 @@ never by hand:
 * a strict-tier training representative (``split`` = train, ``train_tier`` = strict) of
   60-150 residues;
 * at least 95 % of its residues scored (``mask``);
-* 15-60 % of its scored residues with G > 0.65, and a run of at least 10 consecutive
-  scored residues with G > 0.65 (an unscored residue ends a run);
+* 15-60 % of its scored residues with G > G_DIS, and a run of at least 10 consecutive
+  scored residues with G > G_DIS (an unscored residue ends a run);
 * physical state native, not bound (``is_bound`` false);
 * among these, the most backbone shift types (``bbshift_types_post``), then the longest
   disordered run, then the smallest ``id``.
@@ -375,7 +375,7 @@ def draw_tracks(fig, res: pd.DataFrame) -> None:
     ax.set_yticks([0, sp.K_RANGE[1]])
     _residue_axis(ax, L, labels=False)
 
-    # 4. G-score with the 0.65 cut; the line breaks at unscored residues, marked x
+    # 4. G-score with the G_DIS cut; the line breaks at unscored residues, marked x
     top, h = TRACKS["g"]
     ax = _axes(fig, top, h)
     g = res.gscore.to_numpy()
@@ -398,12 +398,14 @@ def draw_tracks(fig, res: pd.DataFrame) -> None:
     ax.set_ylim(UNSCORED_STRIP, 1)
     ax.spines["left"].set_bounds(0, 1)
     ax.set_yticks([0, sp.G_DIS, 1])
-    ax.set_yticklabels(["0", f"{sp.G_DIS:g}", "1"])
+    ax.set_yticklabels(["0", f"{sp.G_DIS:.2f}", "1"])
     _residue_axis(ax, L, labels=True)
     ax.set_xlabel("Residue", labelpad=1.0)
     # the two words go on the side of the cut that the line leaves free at the right end
     right = np.nanmedian(g[-15:])
-    y_dis, y_ord = (0.79, 0.51) if right < sp.G_DIS else (0.51, 0.25)
+    # word centres relative to the cut (were 0.79 / 0.51 and 0.51 / 0.25 at G = 0.65)
+    c = sp.G_DIS
+    y_dis, y_ord = (c + 0.12, c - 0.12) if right < c else (c - 0.14, c - 0.40)
     for y, word in ((y_dis, "disordered"), (y_ord, "ordered")):
         ax.text(L - 1, y, word, ha="right", va="center", color=sp.INK_SOFT)
 

@@ -83,7 +83,10 @@ REL = "2026-10"  # release label of the build, reset from its MANIFEST in main()
 TCAP = {t: t.capitalize() for t in TIERS}
 RANK = {t: i for i, t in enumerate(TIERS)}
 ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
-G_DIS = 0.65  # binary disorder cut used throughout the paper
+G_DIS = 0.40  # binary disorder cut used throughout the paper (= style_paper.G_DIS)
+G_DIS_TXT = f"{G_DIS:.2f}"
+# as printed in macro values and descriptions
+Z_DIS = 8.0  # CheZOD binary cut (Z < 8 disordered); the value of \\thrDisorderZ
 UBQ = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
 
 STABLE, PENDING, PREVIEW, PROVISIONAL, UNREPRO = (
@@ -2384,7 +2387,7 @@ def sec_residues(C):
         R.add(
             f"pctDisordered{name}",
             P(s["pdis"]),
-            f"share of scored residues with G > 0.65 in set {name} (one decimal; checked via the Precise twin)",
+            f"share of scored residues with G > {G_DIS_TXT} in set {name} (one decimal; checked via the Precise twin)",
             src,
             st,
             sec_dis,
@@ -2392,7 +2395,7 @@ def sec_residues(C):
         R.add(
             f"pctDisorderedPrecise{name}",
             P(s["pdis"], 2),
-            f"share of scored residues with G > 0.65 in set {name} (two decimals)",
+            f"share of scored residues with G > {G_DIS_TXT} in set {name} (two decimals)",
             src,
             st,
             sec,
@@ -2448,7 +2451,7 @@ def sec_residues(C):
             R.add(
                 f"nChainsNoDisorder{name}",
                 I(s["nodis"]),
-                f"chains with no residue at G > 0.65 in set {name}",
+                f"chains with no residue at G > {G_DIS_TXT} in set {name}",
                 src,
                 st,
                 sec,
@@ -2457,7 +2460,7 @@ def sec_residues(C):
             R.add(
                 f"nChainsMostlyDisordered{name}",
                 I(s["most"]),
-                f"chains with > 50 % of scored residues at G > 0.65 in set {name}",
+                f"chains with > 50 % of scored residues at G > {G_DIS_TXT} in set {name}",
                 src,
                 st,
                 "r5" if name.startswith("Test") else sec,
@@ -2466,7 +2469,7 @@ def sec_residues(C):
             R.add(
                 f"nChainsFullyDisordered{name}",
                 I(s["full"]),
-                f"chains with >= 90 % of scored residues at G > 0.65 in set {name}",
+                f"chains with >= 90 % of scored residues at G > {G_DIS_TXT} in set {name}",
                 src,
                 st,
                 sec,
@@ -2529,7 +2532,7 @@ def sec_residues(C):
     R.add(
         "pctChainsNoDisorderScoredUnfiltered",
         P(C.resstats["ScoredUnfiltered"]["pnodis"]),
-        "share of released chains without any residue at G > 0.65",
+        f"share of released chains without any residue at G > {G_DIS_TXT}",
         src,
         STABLE,
         "t7",
@@ -2780,7 +2783,7 @@ def sec_tolerant_labels(C):
     R.add(
         "nTolerantLabelCrossResidues",
         I(cross),
-        "of them crossing G = 0.65",
+        f"of them crossing G = {G_DIS_TXT}",
         src,
         PENDING,
         "r4",
@@ -3023,7 +3026,7 @@ def sec_annotations(C):
     R.add(
         "pctDisorderedHomoOligomerReps",
         P(100 * f1),
-        "share of residues at G > 0.65, homo-oligomer representatives",
+        f"share of residues at G > {G_DIS_TXT}, homo-oligomer representatives",
         src,
         PENDING,
         "r6",
@@ -3032,7 +3035,7 @@ def sec_annotations(C):
     R.add(
         "pctDisorderedOtherReps",
         P(100 * f0),
-        "share of residues at G > 0.65, remaining representatives",
+        f"share of residues at G > {G_DIS_TXT}, remaining representatives",
         src,
         PENDING,
         "r6",
@@ -4554,7 +4557,7 @@ def sec_replicates(C):
             R.add(
                 f"pctRepFlipExcl{T}{sfx}",
                 P(100 * ex.flip.mean()),
-                f"mean flip rate at G = 0.65, exclusive {t_} ({scope})",
+                f"mean flip rate at G = {G_DIS_TXT}, exclusive {t_} ({scope})",
                 src_loo,
                 PREVIEW,
                 "r4",
@@ -4590,7 +4593,7 @@ def sec_replicates(C):
             R.add(
                 f"pctRepFlipCum{T}{sfx}",
                 P(100 * cu.flip.mean()),
-                f"mean flip rate at G = 0.65, cumulative {t_} ({scope})",
+                f"mean flip rate at G = {G_DIS_TXT}, cumulative {t_} ({scope})",
                 src_loo,
                 PREVIEW,
                 "r4",
@@ -4866,7 +4869,7 @@ def sec_replicates(C):
         R.add(
             f"pctRepResidueFlip{tag}",
             P(100 * np.mean((x > G_DIS) != (y > G_DIS))),
-            f"residue-level flip rate at G = 0.65, stratum {key[1]}",
+            f"residue-level flip rate at G = {G_DIS_TXT}, stratum {key[1]}",
             srcR,
             PREVIEW,
             "r4",
@@ -4939,7 +4942,7 @@ def sec_replicates(C):
     R.add(
         "pctCondFlipSame",
         P(100 * same.flip.mean()),
-        "mean flip rate at G = 0.65, same conditions",
+        f"mean flip rate at G = {G_DIS_TXT}, same conditions",
         srcE,
         PREVIEW,
         "r4",
@@ -4948,7 +4951,7 @@ def sec_replicates(C):
     R.add(
         "pctCondFlipDifferent",
         P(100 * diff.flip.mean()),
-        "mean flip rate at G = 0.65, different conditions",
+        f"mean flip rate at G = {G_DIS_TXT}, different conditions",
         srcE,
         PREVIEW,
         "r4",
@@ -5720,7 +5723,7 @@ def sec_failures(C):
         R.add(
             f"pctDisorderedMyo{tag}",
             P(100 * np.nanmean(g[np.isfinite(g)] > G_DIS)),
-            f"share of SCORED residues at G > 0.65 in {cid} (the plan's figure divides by all residues)",
+            f"share of SCORED residues at G > {G_DIS_TXT} in {cid} (the plan's figure divides by all residues)",
             "Parquet gscores",
             STABLE,
             "r6",
@@ -6101,6 +6104,39 @@ def sec_chezod(C):
         PREVIEW,
         "r3",
         "0.188",
+    )
+    # Order/disorder call agreement at Z = 8 on the residues both score (LACS off, release
+    # code of 12 Nov 2026). Was a hand edit in numbers.tex (13 Nov) until 16 Nov.
+    run = Path(
+        os.environ.get("TRIZOD_CHEZOD_RUN")
+        or PATHS.chezod_ver.resolve().parent
+        / "chezod_verification_2026-11-12"
+        / "trizod_potenci_only.json"
+    )
+    from trizod.figures import chezod as tzc
+
+    cz_all, tz_all = tzc.load_chezod(PATHS.cz1325), tzc.load_trizod(run)
+    same = total = 0
+    for eid, cz in cz_all.items():
+        if eid not in tz_all:
+            continue
+        rec, off = tzc.best(cz, tz_all[eid])
+        for i, cv in enumerate(cz["z"]):
+            j = i + off
+            if cv is None or not 0 <= j < len(rec["z"]) or rec["z"][j] is None:
+                continue
+            total += 1
+            same += (cv < Z_DIS) == (rec["z"][j] < Z_DIS)
+    R.add(
+        "pctCheZODCallAgree",
+        P(100 * same / total),
+        f"residues with the same order/disorder call at Z = {Z_DIS:g} (Z < {Z_DIS:g} disordered), LACS off "
+        f"({total:,} residues scored by both)",
+        rel(run)
+        + " vs CheZOD1325 (best-aligned record per entry, trizod.figures.chezod.best)",
+        STABLE,
+        "r3",
+        "99.4%",
     )
     R.add(
         "maeCheZODPotenciOnlyShort",
@@ -7021,7 +7057,7 @@ def sec_baselines(C):
 
     def per_chain(y, p, ch):
         """Supplementary Note N2 protocol: per chain, Spearman rho where G takes more than one
-        value and AUC at G > 0.65 where both classes occur; medians over those chains."""
+        value and AUC at G > G_DIS where both classes occur; medians over those chains."""
         from scipy.stats import rankdata, spearmanr
 
         rho, au = [], []
@@ -7143,7 +7179,7 @@ def sec_baselines(C):
         R.add(
             f"nBaseChainsAuc{n}",
             I(vals[0]["n_chain_auc"]),
-            f"{n} test chains with a defined per-chain AUC (both G > 0.65 and G <= 0.65 residues)",
+            f"{n} test chains with a defined per-chain AUC (both G > {G_DIS_TXT} and G <= {G_DIS_TXT} residues)",
             srcpc,
             STABLE,
             "r5",
@@ -7182,12 +7218,12 @@ def sec_params(C):
 
     R.add(
         "thrDisorderG",
-        "0.65",
+        G_DIS_TXT,
         "binary disorder cut on G used throughout",
-        "manuscript convention (old Article.tex:219, 303, 360)",
+        "G_DIS; set to 0.40 on 16 Nov 2026 after the external calibration (data/interim/threshold-calibration-2026-11-16/out/REPORT.md); was 0.65",
         STABLE,
         "par",
-        "0.65",
+        G_DIS_TXT,
     )
     R.add(
         "thrValErr",
@@ -7739,7 +7775,7 @@ def sec_fig3_replicates(C):
         R.add(f"repDevFig{T}Lo", F(r_.median_dev_lo, 3), "lower 95 % sequence-bootstrap bound of that median", src_a, st_of(t_), "r4")  # fmt: skip
         R.add(f"repDevFig{T}Hi", F(r_.median_dev_hi, 3), "upper 95 % sequence-bootstrap bound of that median", src_a, st_of(t_), "r4")  # fmt: skip
         R.add(f"pctRepDevAboveTenthFig{T}", P(100 * r_["share_dev_gt_0.1"]), f"share of those chains deviating by more than 0.1, cumulative {t_} tier", src_a, st_of(t_), "r4")  # fmt: skip
-        R.add(f"pctRepFlipFig{T}", P(100 * r_.flip), f"mean flip rate at G = 0.65 against the consensus, cumulative {t_} tier", src_a, st_of(t_), "r4")  # fmt: skip
+        R.add(f"pctRepFlipFig{T}", P(100 * r_.flip), f"mean flip rate at G = {G_DIS_TXT} against the consensus, cumulative {t_} tier", src_a, st_of(t_), "r4")  # fmt: skip
         for kb, tag in zip(fr.K_LABELS, ("KLow", "KMid", "KHigh")):
             rk = S_[(S_.kbin == kb) & (S_.tier == t_)].iloc[0]
             R.add(f"repDevFig{T}{tag}", F(rk.median_dev, 3), f"median leave-one-entry-out deviation, cumulative {t_} tier, chain median k stratum {kb}", src_a, st_of(t_), "r4")  # fmt: skip
@@ -7755,7 +7791,7 @@ def sec_fig3_replicates(C):
         R.add(f"nRepPairsFig{T}", I(b["n_pairs"]), f"replicate pairs behind that r, cumulative {t_} tier", src_r, st_of(t_), "r4")  # fmt: skip
         R.add(f"nRepPairSeqsFig{T}", I(b["n_sequences"]), f"sequences behind those pairs, cumulative {t_} tier", src_r, st_of(t_), "r4")  # fmt: skip
         R.add(f"maeRepFig{T}", F(b["mae"], 3), f"pooled residue-level mean absolute G difference between replicates, cumulative {t_} tier", src_r, st_of(t_), "r4")  # fmt: skip
-        R.add(f"pctRepPairFlipFig{T}", P(100 * b["flip"]), f"share of co-scored residues on opposite sides of G = 0.65, cumulative {t_} tier", src_r, st_of(t_), "r4")  # fmt: skip
+        R.add(f"pctRepPairFlipFig{T}", P(100 * b["flip"]), f"share of co-scored residues on opposite sides of G = {G_DIS_TXT}, cumulative {t_} tier", src_r, st_of(t_), "r4")  # fmt: skip
     R.add(
         "pctRepDevReductionFig",
         P(
@@ -7791,14 +7827,14 @@ def sec_fig3_replicates(C):
         R.add(f"condAbsDGFig{T}", F(raw[cond]["median_absdg"], 3), f"median per-pair mean |dG|, {cond} conditions, before shift-count matching", src_c, STABLE, "r4")  # fmt: skip
         R.add(f"condRFig{T}", F(raw[cond]["r"], 3), f"pooled residue-level r, {cond} conditions, before matching", src_c, STABLE, "r4")  # fmt: skip
         R.add(f"condMaeFig{T}", F(raw[cond]["mae"], 3), f"pooled residue-level MAE, {cond} conditions, before matching", src_c, STABLE, "r4")  # fmt: skip
-        R.add(f"pctCondFlipFig{T}", P(100 * raw[cond]["flip"]), f"flip rate at G = 0.65, {cond} conditions, before matching", src_c, STABLE, "r4")  # fmt: skip
+        R.add(f"pctCondFlipFig{T}", P(100 * raw[cond]["flip"]), f"flip rate at G = {G_DIS_TXT}, {cond} conditions, before matching", src_c, STABLE, "r4")  # fmt: skip
     for cond, T in (("same", "Same"), ("different", "Diff")):
         R.add(f"condAbsDGFig{T}Lo", F(mat[cond]["median_absdg_lo"], 3), f"lower 95 % bound of the median per-pair |dG|, {cond} conditions (shift-count matched bootstrap)", src_c, STABLE, "r4")  # fmt: skip
         R.add(f"condAbsDGFig{T}Hi", F(mat[cond]["median_absdg_hi"], 3), f"upper 95 % bound of the median per-pair |dG|, {cond} conditions (shift-count matched bootstrap)", src_c, STABLE, "r4")  # fmt: skip
     R.add("condAbsDGFigDiffMatched", F(mat["different"]["median_absdg"], 3), "median per-pair mean |dG|, different conditions, re-weighted to the same-condition |dk| profile", src_c, STABLE, "r4", "0.074")  # fmt: skip
     R.add("condRFigDiffMatched", F(mat["different"]["r"], 3), "pooled residue-level r, different conditions, shift-count matched", src_c, STABLE, "r4", "0.628")  # fmt: skip
     R.add("condMaeFigDiffMatched", F(mat["different"]["mae"], 3), "pooled residue-level MAE, different conditions, shift-count matched", src_c, STABLE, "r4", "0.133")  # fmt: skip
-    R.add("pctCondFlipFigDiffMatched", P(100 * mat["different"]["flip"]), "flip rate at G = 0.65, different conditions, shift-count matched", src_c, STABLE, "r4")  # fmt: skip
+    R.add("pctCondFlipFigDiffMatched", P(100 * mat["different"]["flip"]), f"flip rate at G = {G_DIS_TXT}, different conditions, shift-count matched", src_c, STABLE, "r4")  # fmt: skip
     for d_, T in ((raw, ""), (mat, "Matched")):
         rr = d_["ratio_median_absdg"]
         R.add(f"condRatioFig{T}", F(rr["est"], 2), f"ratio of median per-pair |dG|, different / same conditions{' (shift-count matched)' if T else ''}", src_c, STABLE, "r4", "1.87" if T else "1.90")  # fmt: skip
@@ -8332,7 +8368,7 @@ def sec_review_supp_text(C):
         T = TCAP[t_]
         R.add(f"rhoRepResidue{T}", F(Cc.loc[t_, "rho_res"], 3), f"residue-level Spearman rho of G between replicate chains, cumulative {t_} tier", src_c, PREVIEW, "r5")  # fmt: skip
         R.add(f"rhoSqrtRepResidue{T}", F(math.sqrt(Cc.loc[t_, "rho_res"]), 3), f"square root of that rho (single-measurement ceiling in the protocol's metric), {t_}", src_c, PREVIEW, "r5")  # fmt: skip
-        R.add(f"aucRepResidue{T}", F(Cc.loc[t_, "auc_res"], 3), f"residue-level AUC at G > 0.65 of one replicate's G predicting the other's label, cumulative {t_} tier", src_c, PREVIEW, "r5")  # fmt: skip
+        R.add(f"aucRepResidue{T}", F(Cc.loc[t_, "auc_res"], 3), f"residue-level AUC at G > {G_DIS_TXT} of one replicate's G predicting the other's label, cumulative {t_} tier", src_c, PREVIEW, "r5")  # fmt: skip
     # --- N2 rule 3: representatives that stay near-redundant after incremental clustering ---
     reps = read_fasta(
         PATHS.bundle / "train" / "unfiltered" / "train_unfiltered_best.fasta"
@@ -8471,7 +8507,7 @@ def sec_rev_results_a(C):
     * Within-residue k test (Fig. 2a): noise floor at dk = 0 and the disordered-consensus bins,
       computed with the figure's own functions.
     * LACS offsets in sigma(n) units, and how LACS and the residual offset behave in mostly
-      disordered (mean G > 0.65) vs mostly ordered (mean G < 0.2) chains.
+      disordered (mean G > G_DIS) vs mostly ordered (mean G < 0.2) chains.
     * PANAV: median differences per nucleus, lists from disordered chains, lists outside the
       plotting window.
     """
@@ -8487,7 +8523,7 @@ def sec_rev_results_a(C):
     R.add(
         "thrOrderedMeanG",
         F(G_ORD, 1),
-        "mean-G cut below which a chain counts as mostly ordered in the offset analyses (mostly disordered: mean G > 0.65)",
+        f"mean-G cut below which a chain counts as mostly ordered in the offset analyses (mostly disordered: mean G > {G_DIS_TXT})",
         "scripts/manuscript/make_numbers.py sec_rev_results_a (analysis convention)",
         STABLE,
         "par",
@@ -8498,7 +8534,7 @@ def sec_rev_results_a(C):
     R.add(
         "nChainsMeanGDisordered",
         I(dis.sum()),
-        "chains with mean G > 0.65 (mostly disordered)",
+        f"chains with mean G > {G_DIS_TXT} (mostly disordered)",
         srcG,
         STABLE,
         "r2",
@@ -8629,7 +8665,7 @@ def sec_rev_results_a(C):
         lac = df[lacs_off_ppm_col(a)]
         nz = (lac.notna() & (lac != 0)).to_numpy()
         for cls, mk, Cl in (
-            ("mean G > 0.65", dis, "Disordered"),
+            (f"mean G > {G_DIS_TXT}", dis, "Disordered"),
             ("mean G < 0.2", ordd, "Ordered"),
         ):
             v = lac[mk & nz]
@@ -8657,7 +8693,7 @@ def sec_rev_results_a(C):
         sg = df[off_sigma_col(a)]
         rnz |= (sg.notna() & (sg != 0)).to_numpy()
     for cls, mk, Cl in (
-        ("mean G > 0.65", dis, "Disordered"),
+        (f"mean G > {G_DIS_TXT}", dis, "Disordered"),
         ("mean G < 0.2", ordd, "Ordered"),
     ):
         R.add(f"pctPotenciNonzeroAny{Cl}", P(100 * rnz[mk].mean()),
@@ -8666,14 +8702,14 @@ def sec_rev_results_a(C):
         df[lacs_off_ppm_col("N")].notna() & (df[lacs_off_ppm_col("N")] != 0)
     ).to_numpy()
     R.add("totalNMedianNonzeroLacsDisordered", Fs(df[total_off_ppm_col("N")][dis & lnzN].median()),
-          "median total (LACS + residual) N offset (ppm), chains with mean G > 0.65 and a non-zero LACS N offset", srcG, STABLE, "r2")  # fmt: skip
+          f"median total (LACS + residual) N offset (ppm), chains with mean G > {G_DIS_TXT} and a non-zero LACS N offset", srcG, STABLE, "r2")  # fmt: skip
     sN = df[
         dis
         & lnzN
         & (df[off_sigma_col("N")].notna() & (df[off_sigma_col("N")] != 0)).to_numpy()
     ]
     R.add("rLacsVsResidualNDisordered", F(np.corrcoef(sN[lacs_off_ppm_col("N")], sN[off_sigma_col("N")] * REFINED_WEIGHTS["N"])[0, 1], 2),
-          "Pearson r, LACS N offset vs residual N offset (ppm), chains with mean G > 0.65 and both non-zero", srcG, STABLE, "off")  # fmt: skip
+          f"Pearson r, LACS N offset vs residual N offset (ppm), chains with mean G > {G_DIS_TXT} and both non-zero", srcG, STABLE, "off")  # fmt: skip
 
     # ---- PANAV by disorder class and median differences (matched exactly as Fig. 2b)
     f2b = paper("fig2b_panav")
@@ -8697,7 +8733,7 @@ def sec_rev_results_a(C):
     R.add(
         "nPanavListsDisordered",
         I(mdis.sum()),
-        "matched PANAV shift lists whose chain has mean G > 0.65",
+        f"matched PANAV shift lists whose chain has mean G > {G_DIS_TXT}",
         srcP,
         STABLE,
         "r2",
@@ -8722,7 +8758,7 @@ def sec_rev_results_a(C):
         R.add(f"panavMedDiff{A}", Fs(np.median(d[m])),
               f"median TriZOD total {a} offset minus negated PANAV correction (ppm), all matched lists", srcP, STABLE, "r2")  # fmt: skip
         R.add(f"panavMedDiff{A}Disordered", Fs(np.median(d[m & mdis])),
-              "same, lists from chains with mean G > 0.65", srcP, STABLE, "r2" if a == "N" else "off")  # fmt: skip
+              f"same, lists from chains with mean G > {G_DIS_TXT}", srcP, STABLE, "r2" if a == "N" else "off")  # fmt: skip
         R.add(f"panavMedDiff{A}Ordered", Fs(np.median(d[m & mord])),
               "same, lists from chains with mean G < 0.2", srcP, STABLE, "off")  # fmt: skip
     R.add("nPanavOutsideWindowAny", I(out_any.sum()),
@@ -8730,13 +8766,13 @@ def sec_rev_results_a(C):
           srcP, STABLE, "r2")  # fmt: skip
     s = M[mdis]
     R.add("panavNMedianDisordered", Fs(s.neg_panav_N.median()),
-          "median negated PANAV N correction (ppm), lists from chains with mean G > 0.65", srcP, STABLE, "r2")  # fmt: skip
+          f"median negated PANAV N correction (ppm), lists from chains with mean G > {G_DIS_TXT}", srcP, STABLE, "r2")  # fmt: skip
     R.add("lacsNMedianPanavDisordered", Fs(s.trizod_lacs_N.median()),
           "median LACS N offset (ppm) on the same lists", srcP, STABLE, "r2")  # fmt: skip
     R.add("totalNMedianPanavDisordered", Fs(s.trizod_total_N.median()),
           "median TriZOD total N offset (ppm) on the same lists", srcP, STABLE, "r2")  # fmt: skip
     R.add("rPanavNDisordered", F(f2b.pearson(s.neg_panav_N.to_numpy(float), s.trizod_total_N.to_numpy(float)), 2),
-          "Pearson r, TriZOD total N offset vs negated PANAV correction, lists from chains with mean G > 0.65", srcP, STABLE, "off")  # fmt: skip
+          f"Pearson r, TriZOD total N offset vs negated PANAV correction, lists from chains with mean G > {G_DIS_TXT}", srcP, STABLE, "off")  # fmt: skip
     R.add("panavMedAbsCaCbDiff", F((M.neg_panav_CA - M.neg_panav_CB).abs().median(), 2),
           "median |PANAV CA correction - PANAV CB correction| (ppm), all matched lists (TriZOD's LACS CA and CB offsets are one shared value)",
           srcP, STABLE, "off")  # fmt: skip
@@ -8929,9 +8965,9 @@ def sec_results_b_revision(C):
     n_, d_, per = _dis(tz)
     mostly = per[:, 1] > 0.5 * per[:, 0]
     srcd = "Parquet gscores x mask, split = test_trizod"
-    R.add("nResDisorderedSetTestTriZOD", I(d_), "scored residues with G > 0.65 in the TriZOD test set", srcd, STABLE, "r5")  # fmt: skip
-    R.add("pctDisorderedInMostlyDisorderedTestTriZOD", P(100 * per[mostly, 1].sum() / d_, 0), "share of the TriZOD test set's disordered residues (G > 0.65) that lie in its chains more than half disordered (\\nChainsMostlyDisorderedTestTriZOD)", srcd, STABLE, "r5")  # fmt: skip
-    R.add("nChainsAnyDisorderedTestTriZOD", I((per[:, 1] > 0).sum()), "TriZOD test chains with at least one residue at G > 0.65", srcd, STABLE, "r5")  # fmt: skip
+    R.add("nResDisorderedSetTestTriZOD", I(d_), f"scored residues with G > {G_DIS_TXT} in the TriZOD test set", srcd, STABLE, "r5")  # fmt: skip
+    R.add("pctDisorderedInMostlyDisorderedTestTriZOD", P(100 * per[mostly, 1].sum() / d_, 0), f"share of the TriZOD test set's disordered residues (G > {G_DIS_TXT}) that lie in its chains more than half disordered (\\nChainsMostlyDisorderedTestTriZOD)", srcd, STABLE, "r5")  # fmt: skip
+    R.add("nChainsAnyDisorderedTestTriZOD", I((per[:, 1] > 0).sum()), f"TriZOD test chains with at least one residue at G > {G_DIS_TXT}", srcd, STABLE, "r5")  # fmt: skip
     clu = pd.read_csv(
         PATHS.draw / "_tmp" / "c30_cluster.tsv",
         sep="\t",
@@ -8957,7 +8993,7 @@ def sec_results_b_revision(C):
     ):
         ids = strict_mem[strict_mem.clu_cz == flag].mem
         n2, d2, _ = _dis(did.loc[ids])
-        R.add(f"pctDisorderedDrawClusters{tag}", P(100 * d2 / n2), f"share of scored residues with G > 0.65 among the strict sequences of test-draw clusters {dd}", srcc, STABLE, "r5")  # fmt: skip
+        R.add(f"pctDisorderedDrawClusters{tag}", P(100 * d2 / n2), f"share of scored residues with G > {G_DIS_TXT} among the strict sequences of test-draw clusters {dd}", srcc, STABLE, "r5")  # fmt: skip
         R.add(f"nSeqsDrawClusters{tag}", I(len(ids)), f"strict sequences in test-draw clusters {dd}", srcc, STABLE, "r5")  # fmt: skip
 
     # (7) high-pressure chains without unit slips (S4 loader; 25704 records '1013 bar' = 1 atm in mbar)
@@ -9124,8 +9160,8 @@ def sec_methods_a_revision(C):
     g_ord = 0.2  # = \\thrOrderedMeanG
     rnz = (df[[off_sigma_col(a) for a in ATOMS]].fillna(0) != 0).any(axis=1)
     mid = (df.meanG >= g_ord) & (df.meanG <= G_DIS)
-    R.add("nChainsMeanGIntermediate", I(mid.sum()), f"chains with {g_ord} <= mean G <= {G_DIS} (intermediate)", src_o, STABLE, "r4")  # fmt: skip
-    R.add("pctPotenciNonzeroAnyIntermediate", P(100 * rnz[mid].mean()), f"share of chains with {g_ord} <= mean G <= {G_DIS} that carry a non-zero residual POTENCI/AIC offset on any atom", src_o, STABLE, "r4", "66")  # fmt: skip
+    R.add("nChainsMeanGIntermediate", I(mid.sum()), f"chains with {g_ord} <= mean G <= {G_DIS_TXT} (intermediate)", src_o, STABLE, "r4")  # fmt: skip
+    R.add("pctPotenciNonzeroAnyIntermediate", P(100 * rnz[mid].mean()), f"share of chains with {g_ord} <= mean G <= {G_DIS_TXT} that carry a non-zero residual POTENCI/AIC offset on any atom", src_o, STABLE, "r4", "66")  # fmt: skip
 
     # --- temperature unit rules ---------------------------------------------------------
     if PATHS.raw.is_dir():
@@ -9292,9 +9328,11 @@ def sec_supp_figs_revision(C):
     pot = S[S["mode"] == "potenci-only"]
     R.add("pctOffsetRecoveredPotenciMax", P(100 * pot.share_within_0p1_ppm.max()), "highest share, over CA, C, N and the added offsets, of sampled chains whose offset the POTENCI/AIC stage alone (mode potenci-only) recovers", src6d, STABLE, "off")  # fmt: skip
     # S8d: seeded gallery of replicate groups
-    g8 = s8.sp.load_main(["id", "entry_id", "sequence", "is_bound"])
-    g8["entry_id"] = g8.entry_id.astype(str)
-    _, n_elig = s8.gallery(g8)
+    # the eligible count excludes the sequences of panels a-c, as the figure does
+    g8 = s8.load()
+    _, n_elig = s8.gallery(
+        g8, s8.shown_sequences(g8.set_index("id"), s8.case_clusters(g8))
+    )
     R.add("seedReplicateGallery", str(int(s8.GALLERY_SEED)), "random seed of the replicate-group gallery (Supplementary Fig. S8d)", "supp_s8_replicate_gallery.GALLERY_SEED", STABLE, "par")  # fmt: skip
     R.add("nReplicateGallery", I(s8.N_GALLERY), "replicate groups drawn for the gallery", "supp_s8_replicate_gallery.N_GALLERY", STABLE, "par")  # fmt: skip
     R.add("minReplicateGalleryEntries", I(s8.MIN_ENTRIES), "minimum entries contributing non-bound chains of one exact sequence for the gallery draw", "supp_s8_replicate_gallery.MIN_ENTRIES", STABLE, "par")  # fmt: skip

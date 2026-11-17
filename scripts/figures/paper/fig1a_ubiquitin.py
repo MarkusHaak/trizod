@@ -7,7 +7,7 @@ sequence (``UBQ``) is selected from the release Parquet; bound chains
 each native chain (rule below) the per-residue Z-score (top) and G-score
 (bottom) are drawn over residues 1-76. The C-terminal tail (residues 73-76),
 disordered in folded ubiquitin, is shaded. Light dotted lines mark the disorder
-cut-offs of each score (Z = 8, the CheZOD convention; G = 0.65), for orientation.
+cut-offs of each score (Z = 8, the CheZOD convention; G = ``style_paper.G_DIS``), for orientation.
 
 Chain selection by annotation (``select_chains``, rule in ``NATIVE_RULE``): a
 chain is *native* unless its sample is perturbed, i.e. the samples behind its
@@ -360,9 +360,7 @@ def spearman_core(u: pd.DataFrame) -> tuple[float, float, int]:
 # Native chains are coloured by k class and enter the side summary. Fig. 3c draws only
 # them; plot(..., draw_perturbed=True) adds the perturbed chains thin and light grey behind
 # (select_chains, NATIVE_RULE), for Supplementary Fig. S8.
-OUT_NAME = (
-    "fig3a_ubiquitin"  # Fig. 3a (fig3c_ubiquitin.pdf on 16 Nov, fig2a_ubiquitin.pdf on 11 Nov, fig1a.pdf before)
-)
+OUT_NAME = "fig3a_ubiquitin"  # Fig. 3a (fig3c_ubiquitin.pdf on 16 Nov, fig2a_ubiquitin.pdf on 11 Nov, fig1a.pdf before)
 
 # Layout in mm, derived from the 160 mm text width (W_DOUBLE; placed at 1:1). The left
 # axes edge and the y titles match Fig. 3a (LEFT 12 mm, titles ending 4.6 mm from the
@@ -385,7 +383,7 @@ KEY_Y = 1.7  # key row, mm from the top
 Z_LIM = (-2.5, 17.5)  # native chains: Z from -1.9 (tail) to 15.8
 G_LIM = (-0.04, 1.04)
 Z_CUT = 8.0  # CheZOD convention: Z < 8 disordered (\thrDisorderZ)
-G_CUT = sp.G_DIS  # 0.65 (\thrDisorderG)
+G_CUT = sp.G_DIS  # \thrDisorderG
 CUT_KW = {"color": sp.CAT["light"], "lw": 0.6, "ls": (0, (1.0, 1.2)), "zorder": 0.5}
 GREY, GREY_LW = "#DCDCDC", 0.45  # perturbed samples (S8 only): light and thin, behind
 NATIVE_LW = 0.7

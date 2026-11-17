@@ -236,6 +236,23 @@ def profiles_on_seed(
     return pd.DataFrame(rows)
 
 
+def shown_sequences(df_idx: pd.DataFrame, cases: dict) -> set[str]:
+    """Sequences drawn in panels a-c: ubiquitin and every member of the case clusters."""
+    return {f1a.UBQ} | {
+        df_idx.loc[c, "sequence"]
+        for P in cases.values()
+        for c in P.id
+        if c in df_idx.index
+    }
+
+
+def case_clusters(df: pd.DataFrame, refresh: bool = False) -> dict:
+    """The case clusters of panels b and c: ``seed chain -> profile table``."""
+    df_idx = df.set_index("id")
+    H = case_alignments(df, refresh)
+    return {seed: profiles_on_seed(df_idx, H, seed) for _, seed in CASES.values()}
+
+
 def gallery(df: pd.DataFrame, shown: set[str] = frozenset()) -> tuple[list, int]:
     """Seeded draw of replicate groups; sequences already drawn in panels a-c
     (``shown``: ubiquitin and every member of the two case clusters) are not eligible,
@@ -457,13 +474,7 @@ def main() -> None:
             rows.append({"seed": seed, "chain_id": r.id, "entry_id": r.entry_id, "fident": r.fident,
                          "is_bound": r.is_bound, "perturbed": r.perturbed, "k_class": r.k_class,
                          "split": r.split})  # fmt: skip
-    shown = {f1a.UBQ} | {
-        df_idx.loc[c, "sequence"]
-        for P in cases.values()
-        for c in P.id
-        if c in df_idx.index
-    }
-    gal, n_eligible = gallery(df, shown)
+    gal, n_eligible = gallery(df, shown_sequences(df_idx, cases))
     nb = df[~df.is_bound.astype(bool)]
     by_seq = {s: nb[nb.sequence == s] for s in gal}
     print(

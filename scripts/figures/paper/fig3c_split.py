@@ -28,7 +28,7 @@ key ("Shown:") gives drawn and total chains per set. Counts by tier and rule are
 to ``fig5ab_numbers.json``.
 
 b. Share of chains by disorder class -- the share of a chain's scored residues with
-G > 0.65 is <= 10 %, 10-90 % or >= 90 % (the key gives the classes; "mostly disordered"
+G > G_DIS is <= 10 %, 10-90 % or >= 90 % (the key gives the classes; "mostly disordered"
 is avoided because the text uses it for > 50 %) --
 for the TriZOD test set, CheZOD117 and the training representatives of every tier, each
 with its own tier's labels (``scores/<tier>/scores.json``). The test sets use their
@@ -99,6 +99,7 @@ REGION_LINE = "#7F7F7F"
 CLASS_COLORS = ["#DADADA", "#969696", "#3B3B3B"]  # ordered -> disordered
 # share of a chain's scored residues with G > G_DIS
 CLASS_LABELS = ["≤10%", "10–90%", "≥90%"]
+DIS_KEY = f"pct_residues_G_gt_{sp.G_DIS:.2f}"  # key in fig5ab_numbers.json
 RULES = {  # extra counts for the numbers JSON; x = the coverage the rule tests
     "either_30_80": lambda h: (h.ident >= ID_MIN) & (np.maximum(h.test_cov, h.train_cov) >= COV_MIN),
     "test_30_80": lambda h: (h.ident >= ID_MIN) & (h.test_cov >= COV_MIN),
@@ -249,7 +250,7 @@ def disorder_strip(test_ids: dict, reps: dict):
         ]
         strip.append({
             "set": name, "n": int(fr.size), "shares": [float(x) for x in sh], "color": col,
-            "pct_residues_G_gt_065": round(res_share(gs), 2),
+            DIS_KEY: round(res_share(gs), 2),
             "chains_gt_50pct_disordered": int((fr > 0.5).sum()),
         })  # fmt: skip
     return strip
@@ -364,7 +365,7 @@ def draw_b(strip: list):
              va="center", fontsize=sp.FS_BODY)  # fmt: skip
     # class key above the axes, one row, preceded by its title
     y_key = (AX_Y0_AB + AX_H_AB + 2.6) / H
-    t = fig.text(5.0 / W, y_key, f"Residues with G > {sp.G_DIS}:", ha="left", va="center",
+    t = fig.text(5.0 / W, y_key, f"Residues with G > {sp.G_DIS:.2f}:", ha="left", va="center",
                  fontsize=sp.FS_BODY)  # fmt: skip
     fig.canvas.draw()
     rnd = fig.canvas.get_renderer()
@@ -462,7 +463,7 @@ def main(argv=None) -> None:
                         [round(100 * v, 1) for v in s["shares"]],
                     )
                 ),
-                "pct_residues_G_gt_065": s["pct_residues_G_gt_065"],
+                DIS_KEY: s[DIS_KEY],
                 "chains_gt_50pct_disordered": s["chains_gt_50pct_disordered"],
             }
             for s in strip
@@ -477,7 +478,7 @@ def main(argv=None) -> None:
                 "set": s["set"],
                 "n": s["n"],
                 **dict(zip(["le10", "10to90", "ge90"], s["shares"])),
-                "pct_residues_G_gt_065": s["pct_residues_G_gt_065"],
+                DIS_KEY: s[DIS_KEY],
             }
             for s in strip
         ]

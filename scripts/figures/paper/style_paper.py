@@ -185,7 +185,7 @@ def parse_args(ap: argparse.ArgumentParser, argv=None) -> argparse.Namespace:
 # ----------------------------------------------------------------------------------
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]  # permissive -> strict
 RANK = {t: i for i, t in enumerate(TIERS)}
-G_DIS = 0.65  # binary disorder cut used throughout the paper
+G_DIS = 0.40  # binary disorder cut used throughout the paper (16 Nov 2026; was 0.65)
 BACKBONE_ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 
 # ----------------------------------------------------------------------------------
@@ -238,7 +238,7 @@ CAT = _Palette(
         "lacs": OKABE_ITO["skyblue"],  # LACS offset source (Supplementary Figs. 6, 15)
         # neutrals, not entities
         "neutral": INK_SOFT,  # secondary ink
-        "light": "#BDBDBD",  # reference lines and guides (G = 0.65, medians)
+        "light": "#BDBDBD",  # reference lines and guides (G = G_DIS, medians)
         # legacy alias, kept so old call sites still run (warns): the CheZOD method /
         # CheZOD1325. New code names the set: chezod1325 or chezod117.
         "chezod": GREY_CHEZOD,

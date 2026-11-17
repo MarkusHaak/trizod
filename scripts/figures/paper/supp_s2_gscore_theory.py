@@ -201,7 +201,7 @@ def main():
     axa.set_ylabel("Z-score (synthetic)")
     axa.set_ylim(-3, 17)
     axa.set_yticks([0, 5, 10, 15])
-    # disorder cut-offs (Z = 8, G = 0.65), drawn over the data range only
+    # disorder cut-offs (Z = 8, G = G_DIS), drawn over the data range only
     axa.hlines(8, 2, KS[-1], color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
     axb.set_ylabel("G-score (synthetic)")
     axb.set_ylim(0, 1)

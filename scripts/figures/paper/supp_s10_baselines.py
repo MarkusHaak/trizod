@@ -31,7 +31,7 @@ This is the port of ``user_first/ceiling_and_baseline.py`` part 2 that
 floor Pearson r here equal the ``\\base*`` macros. Labels are the release (Parquet)
 labels, i.e. what a user loading the Parquet trains on.
 
-Metrics, all at the paper's cut G > 0.65 for AUC:
+Metrics, all at the paper's cut G > G_DIS (style_paper) for AUC:
 * per residue: Spearman rho and ROC AUC pooled over all scored test residues;
 * per chain: the mean over test chains of the within-chain Spearman rho (chains with
   >= 10 scored residues and non-constant labels) and of the within-chain AUC (chains
@@ -534,9 +534,9 @@ def plot(B: pd.DataFrame, C: pd.DataFrame, TC: pd.DataFrame):
 
     # Spearman rho per residue (pooled) is main Fig. 5c (draw_main) since 12 Nov 2026;
     # S10 keeps the other three metrics (story blueprint 6.6)
-    cols = [("auc_res", "AUC, G > 0.65\nper residue", "AUC"),
+    cols = [("auc_res", f"AUC, G > {sp.G_DIS:.2f}\nper residue", "AUC"),
             ("rho_chain", "Spearman ρ\nmean per chain", "ρ"),
-            ("auc_chain", "AUC, G > 0.65\nmean per chain", "AUC")]  # fmt: skip
+            ("auc_chain", f"AUC, G > {sp.G_DIS:.2f}\nmean per chain", "AUC")]  # fmt: skip
     band, rep = "#E3E3E3", "#7a7a7a"
     chance = "#9A9A9A"  # AUC 0.5: thin solid line, labelled in the panel
     left0, gap, pw, ph = (

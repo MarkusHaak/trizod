@@ -16,7 +16,7 @@ scored at t, so it also belongs to every more permissive tier.
   the other entries (a fixed reference, identical for every tier); a residue is
   comparable when the chain's own tier-t label and at least two replicate values exist.
   Chains need >= 5 comparable residues; sequences need non-bound chains from >= 3
-  entries. Per chain: mean |G - consensus| ("deviation"), flip rate at G = 0.65, and
+  entries. Per chain: mean |G - consensus| ("deviation"), flip rate at G = G_DIS, and
   the chain's median shift count k over comparable residues (unfiltered labels).
 * :func:`pair_table` -- residue-level pairs of replicates for Pearson r / MAE. At each
   tier, candidate pairs (both chains in the tier, different entries) are taken in one
