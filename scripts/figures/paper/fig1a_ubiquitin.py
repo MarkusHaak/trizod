@@ -7,7 +7,8 @@ sequence (``UBQ``) is selected from the release Parquet; bound chains
 each native chain (rule below) the per-residue Z-score (top) and G-score
 (bottom) are drawn over residues 1-76. The C-terminal tail (residues 73-76),
 disordered in folded ubiquitin, is shaded. Light dotted lines mark the disorder
-cut-offs of each score (Z = 8, the CheZOD convention; G = ``style_paper.G_DIS``), for orientation.
+cut-offs of each score (Z = 8, the CheZOD convention; the binary cut G = ``style_paper.G_DIS``,
+disordered at G >= G_DIS), for orientation.
 
 Chain selection by annotation (``select_chains``, rule in ``NATIVE_RULE``): a
 chain is *native* unless its sample is perturbed, i.e. the samples behind its
@@ -240,6 +241,7 @@ COLUMNS = [  # release columns select_chains() and the Source Data need
     "physical_state",
     "sample_state_evidence",
     "membrane_mimetic",
+    "membrane_mimetic_sample",  # all-null before the 2026-11-17 build (style_paper.load_main)
     "temperature",
     "ph",
 ]
@@ -267,6 +269,7 @@ def select_chains(df: pd.DataFrame) -> pd.DataFrame:
     rec = [sample_record(str(e), str(s)) for e, s in zip(u.entry_id, u.st_id)]
     u["pressure_bar"] = [r["pressure_bar"] for r in rec]
     u["perturbants"] = [r["perturbants"] for r in rec]
+    u["membrane"] = sp.membrane_sample(u)
     # the shared rule (style_paper.is_perturbed), with the cosolvent and pressure evidence
     # of the chain's own shift list in the raw file
     u["perturbed"] = sp.is_perturbed(
@@ -309,7 +312,7 @@ def condition_label(r) -> str:
     solid = str(getattr(r, "sample_state_evidence", "")) == "solid"
     if solid:
         parts.append("solid state")
-    if pd.notna(getattr(r, "membrane_mimetic", None)):
+    if getattr(r, "membrane", False):  # style_paper.membrane_sample (select_chains)
         parts.append(f"{r.membrane_mimetic} (membrane mimetic)")
     state = str(r.physical_state).lower() if pd.notna(r.physical_state) else ""
     if state and not r.perturbants and not (solid and "solid" in state):
@@ -344,12 +347,17 @@ def core_summary(u: pd.DataFrame, keep: np.ndarray) -> pd.DataFrame:
 
 
 def spearman_core(u: pd.DataFrame) -> tuple[float, float, int]:
-    """Spearman rho of a chain's ordered-residue (G < 0.2) median Z / G with its median k."""
+    """Spearman rho of a chain's median Z / G over its scored core residues (``CORE``,
+    residues 2-71) with its median k. The ordered residues are chosen by structure, not
+    by G: selecting on G < cut and then correlating G conditions on the outcome (with
+    G < 0.2 rho_G was -0.39, with G < 0.15 it was +0.40; until 17 Nov 2026)."""
     rows = []
+    core = np.zeros(76, bool)
+    core[CORE] = True
     for g, z, k, m in zip(u.gscores, u.zscores, u.k, u["mask"]):
         g, z, k, m = (np.asarray(x, float) for x in (g, z, k, m))
         m = m.astype(bool)
-        o = m & (g < 0.2)
+        o = m & core[: len(m)]
         rows.append(
             (
                 np.median(k[m]),

@@ -185,7 +185,9 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
     # one nucleus per row; the y labels name entry, tier and nucleus, so the marks need
     # no colour: open = deposited, filled = re-referenced, arrow = the LACS correction
     axb = ax_mm(88, 8, 70, 60)
-    order = {"strict": 0, "moderate": 1, "tolerant": 2, "unfiltered": 3, "excluded": 4}
+    # tier of a training representative, else its split (a retired test chain last)
+    order = {"strict": 0, "moderate": 1, "tolerant": 2, "unfiltered": 3, "excluded": 4,
+             sp.RETIRED_SPLIT: 5}  # fmt: skip
     E = E.copy()
     E["o"] = E.tier.map(order)
     E["absoff"] = E.groupby("id").lacs_ppm.transform(lambda v: v.abs().max())
@@ -230,7 +232,8 @@ def plot(df, k_az, k_all, info_a, E, myo, ubq, ref, q, tier_ids):
     axc = ax_mm(13, 84, 66, 44)
     myo = myo.copy()
     myo["meanG"] = [np.nanmean(np.asarray(g, float)) for g in myo.gscores]
-    split_word = {"train": "training", "excluded": "excluded", "redundant": "redundant"}
+    split_word = {"train": "training", "excluded": "excluded", "redundant": "redundant",
+                  sp.RETIRED_SPLIT: "retired test chain"}  # fmt: skip
     for _, r in myo.sort_values("meanG").iterrows():
         g = np.asarray(r.gscores, float)
         x = np.arange(1, len(g) + 1)

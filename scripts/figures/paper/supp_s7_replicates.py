@@ -55,7 +55,8 @@ files and the prose quote the same numbers) and of the leave-pair-out test:
   per-residue consensus is the median G of the group's other chains; a residue is
   comparable when the chain is scored there and >= 2 other chains are. Chains need
   >= 5 comparable residues. Deviation = mean |G - consensus|; flip = share of residues
-  on opposite sides of G = G_DIS; chain k = median shift count over comparable residues.
+  on opposite sides of the binary cut (disordered at G >= G_DIS); chain k = median shift
+  count over comparable residues.
   Labels are the release (unfiltered) labels; a sensitivity check re-reads each
   chain's own tier label (only the tolerant tier differs, writing-plan fix (c)).
 * **Residue-level replicate r** (port of ``user_first/ceiling_and_baseline.py``).
@@ -69,9 +70,10 @@ files and the prose quote the same numbers) and of the leave-pair-out test:
   5 / 10 / 20 / 50 / none.
 * **Leave-pair-out paired-k test.** The pair sample of Fig. 3b (``fig2a_kpaired.py``:
   non-bound chains, <= 30 pairs per sequence, seed 0, different entries), restricted
-  to sequences with >= 3 chains. Each residue's ordered (< 0.3) / disordered (> 0.7)
-  state comes either from the consensus over all chains of the sequence (Fig. 3b) or
-  from the consensus over all chains EXCEPT the two in the pair (leave-pair-out),
+  to sequences with >= 3 chains. Each residue's ordered (G < G_ORD) / disordered
+  (G >= G_CONF; < 0.3 / > 0.7 until 17 Nov 2026) state comes either from the consensus
+  over all chains of the sequence (Fig. 3b) or from the consensus over all chains EXCEPT
+  the two in the pair (leave-pair-out),
   which removes the weak circularity of a state defined partly by the pair itself.
 
 Bootstrap 95 % confidence intervals resample sequences (1,000 replicates, seed 0),
@@ -111,7 +113,7 @@ K_EDGES = [0, 12, 17, 21]
 K_LABELS = ["≤12", "13–17", "18–21"]
 # paired-k test (Fig. 3b definitions, fig2a_kpaired.py)
 KP_MAX_PAIRS = 30
-KP_ORD, KP_DIS = 0.3, 0.7
+KP_ORD, KP_DIS = sp.G_ORD, sp.G_CONF  # = fig2a_kpaired.ORDERED_MAX / DISORDERED_MIN
 KP_EDGES = [-0.5, 0.5, 3, 6, 9, 21]
 KP_LABELS = ["0", "1–3", "4–6", "7–9", "≥10"]
 
@@ -165,7 +167,7 @@ def loo_table(df: pd.DataFrame, tier_labels: dict | None = None) -> pd.DataFrame
                 "trank": int(g["trank"].iloc[j]),
                 "bound": bool(g["is_bound"].iloc[j]),
                 "dev": float(d.mean()),
-                "flip": float(np.mean((G[j][m] > sp.G_DIS) != (cons[m] > sp.G_DIS))),
+                "flip": float(np.mean((G[j][m] >= sp.G_DIS) != (cons[m] >= sp.G_DIS))),
                 "medk": float(np.nanmedian(K[j][m])),
                 "n_res": int(m.sum()),
             }
@@ -343,7 +345,7 @@ def tier_r_table(pairs, ref_tier="strict") -> tuple[pd.DataFrame, dict]:
                      "n_residues": int(tot[:, 0].sum()), "r": est, "r_lo": np.percentile(bs, 2.5),
                      "r_hi": np.percentile(bs, 97.5), "r_varmatched": est_vm,
                      "r_varmatched_lo": np.percentile(bs_vm, 2.5), "r_varmatched_hi": np.percentile(bs_vm, 97.5),
-                     f"share_pairmeanG_gt_{sp.G_DIS:.2f}": share_above(p, sp.G_DIS)})  # fmt: skip
+                     f"share_pairmeanG_ge_{sp.G_DIS:.2f}": share_above(p, sp.G_DIS)})  # fmt: skip
     return pd.DataFrame(rows), {
         "ref_tier": ref_tier,
         "ref_bin_share": pref.round(4).tolist(),
@@ -525,7 +527,7 @@ def kpaired_lpo(df: pd.DataFrame) -> pd.DataFrame:
 
 def state(c: pd.Series) -> np.ndarray:
     return np.where(
-        c < KP_ORD, "ordered", np.where(c > KP_DIS, "disordered", "intermediate")
+        c < KP_ORD, "ordered", np.where(c >= KP_DIS, "disordered", "intermediate")
     )
 
 

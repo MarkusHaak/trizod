@@ -124,7 +124,7 @@ def state_signature(D: fr.Data) -> pd.DataFrame:
     """Per non-bound chain (index ``id``): the four sample-state annotations that make two
     chains of a pair differ in state (as ``make_numbers.py``, section (3) of the revision
     numbers): a physical state the strict tier denies, cosolvent evidence, solid-state
-    evidence and a membrane mimetic."""
+    evidence and a membrane-mimetic sample (``style_paper.membrane_sample``)."""
     from trizod.bmrb.sample_state import (
         PHYSICAL_STATE_STRICT_DENY,
         denied_physical_states,
@@ -137,7 +137,7 @@ def state_signature(D: fr.Data) -> pd.DataFrame:
             "state": np.asarray(denied_physical_states(nb["physical_state"], PHYSICAL_STATE_STRICT_DENY, corroborated=cor.to_numpy()), bool),
             "cosolvent": cor.to_numpy(),
             "solid": (nb["sample_state_evidence"].astype(str) == "solid").to_numpy(),
-            "membrane": nb["membrane_mimetic"].notna().to_numpy(),
+            "membrane": sp.membrane_sample(nb).to_numpy(),
         },
         index=nb.index,
     )  # fmt: skip

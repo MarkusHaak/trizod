@@ -150,7 +150,17 @@ def parse_args(ap: argparse.ArgumentParser, argv=None) -> argparse.Namespace:
 # ----------------------------------------------------------------------------------
 TIERS = ["unfiltered", "tolerant", "moderate", "strict"]  # permissive -> strict
 RANK = {t: i for i, t in enumerate(TIERS)}
-G_DIS = 0.40  # binary disorder cut used throughout the paper (16 Nov 2026; was 0.65)
+# The G-score cuts are set in paper_config (one place for figures and numbers); disordered at
+# G >= cut. G_ORD: ordered below; G_DIS: the binary cut; G_CONF: confidently disordered.
+G_ORD, G_DIS, G_CONF = pc.G_ORD, pc.G_DIS, pc.G_CONF
+# split values of the release Parquet; RETIRED_SPLIT chains are neither test nor training
+TEST_SPLITS, RETIRED_SPLIT, HELD_OUT_SPLITS = (
+    pc.TEST_SPLITS,
+    pc.RETIRED_SPLIT,
+    pc.HELD_OUT_SPLITS,
+)
+# the retired chains' bundle file, BUNDLE / "test" / RETIRED_FASTA (2026-11-17 build on)
+RETIRED_FASTA = pc.RETIRED_FASTA
 BACKBONE_ATOMS = ["C", "CA", "CB", "H", "HA", "HB", "N"]
 
 # "Perturbed" / "other sample" (Fig. 3a, Supplementary Fig. S8 and every analysis that sets
@@ -162,13 +172,37 @@ NON_NATIVE_STATES = frozenset({"denatured", "unfolded", "molten globule", "misfo
 HIGH_PRESSURE_BAR = 400.0  # bar; the writing plan's "high pressure" cut (Appendix A12)
 
 
+def membrane_sample(df):
+    """Boolean Series: the chain's sample is a membrane mimetic.
+
+    From the 2026-11-17 build on, the release says so in ``membrane_mimetic_sample`` (the
+    class rule of ``trizod/bmrb/membrane.py``: bilayer lipids and micelle formers at any
+    concentration, additive detergents only at or above their CMC), and ``membrane_mimetic``
+    names every class found, a sub-CMC additive included, so ``membrane_mimetic`` not null no
+    longer means a membrane sample. A release without the column (the 2026-11-11 build of
+    record; :func:`load_main` adds it as all-null) or a row whose verdict is null (a record
+    that predates the rule) falls back to the old meaning, ``membrane_mimetic`` not null."""
+    import pandas as pd
+
+    old = (
+        df["membrane_mimetic"].notna()
+        if "membrane_mimetic" in df
+        else pd.Series(False, index=df.index)
+    )
+    if "membrane_mimetic_sample" not in df:
+        return old.astype(bool)
+    return df["membrane_mimetic_sample"].astype("boolean").fillna(old).astype(bool)
+
+
 def is_perturbed(df, cosolvent=None, pressure_bar=None, states: bool = True):
     """Boolean Series: the chain's sample is perturbed, i.e. it holds a cosolvent, was
     measured at >= :data:`HIGH_PRESSURE_BAR`, is deposited in one of
-    :data:`NON_NATIVE_STATES`, is a solid-state sample or holds a membrane mimetic.
+    :data:`NON_NATIVE_STATES`, is a solid-state sample or is a membrane-mimetic sample
+    (:func:`membrane_sample`).
 
-    ``df`` holds the release columns ``physical_state``, ``sample_state_evidence`` and
-    ``membrane_mimetic``, plus ``cosolvent_evidence`` and ``pressure_bar`` unless
+    ``df`` holds the release columns ``physical_state``, ``sample_state_evidence``,
+    ``membrane_mimetic`` and ``membrane_mimetic_sample``, plus ``cosolvent_evidence`` and
+    ``pressure_bar`` unless
     ``cosolvent`` / ``pressure_bar`` give that evidence from elsewhere (Fig. 3a reads both
     from the chain's own shift list in the raw NMR-STAR file). A missing value counts as
     not perturbed (ambient pressure, no cosolvent, solution state). ``states=False`` drops
@@ -187,7 +221,7 @@ def is_perturbed(df, cosolvent=None, pressure_bar=None, states: bool = True):
         cos
         | (press >= HIGH_PRESSURE_BAR)
         | (df["sample_state_evidence"].fillna("").astype(str) == "solid")
-        | df["membrane_mimetic"].notna()
+        | membrane_sample(df)
     )
     return out | state.isin(NON_NATIVE_STATES) if states else out
 
@@ -863,19 +897,35 @@ def _main_table():
     return _TABLES[PQ_MAIN]
 
 
+# Bool columns the 2026-11-17 build appends (tier-rule provenance). An older release, such as
+# the 2026-11-11 build of record, lacks them; load_main then adds them as all-null ("not
+# recorded", the reading of a record that predates the rule), so the same code runs on both.
+LATE_COLUMNS = ("membrane_mimetic_sample", "temperature_placeholder", "high_pressure")
+
+
 def load_main(columns=None):
     """The one-row-per-chain release Parquet as pandas (object strings, not arrow).
 
     pandas >= 3 maps strings to pyarrow-backed columns; element-wise Python access to those
-    (map, iterrows, groupby lambdas) is ~100x slower, so strings become object columns."""
+    (map, iterrows, groupby lambdas) is ~100x slower, so strings become object columns.
+    A :data:`LATE_COLUMNS` column the release lacks comes back all-null (nullable bool)."""
     import pandas as pd
 
     t = _main_table()
-    df = (t if columns is None else t.select(list(columns))).to_pandas()
+    have = set(t.column_names)
+    want = list(t.column_names) if columns is None else list(columns)
+    absent = [c for c in want if c not in have]
+    unknown = [c for c in absent if c not in LATE_COLUMNS]
+    if unknown:
+        raise KeyError(f"columns not in {PQ_MAIN}: {unknown}")
+    df = t.select([c for c in want if c in have]).to_pandas()
     for col in df.columns:
         if pd.api.types.is_string_dtype(df[col]) and df[col].dtype != object:
             df[col] = df[col].astype(object)
-    return df
+    for col in LATE_COLUMNS if columns is None else absent:
+        if col not in df:
+            df[col] = pd.Series(pd.NA, index=df.index, dtype="boolean")
+    return df if columns is None else df[want]
 
 
 def load_tier_scores(tier: str, fields=("gscores", "zscores", "k")) -> dict:

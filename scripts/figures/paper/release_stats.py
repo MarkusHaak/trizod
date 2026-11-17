@@ -14,7 +14,7 @@ R7 (\\nChainsASynExact, \\nEntriesASynExact), all computed by
 * :func:`repeat_stats` -- the scalar numbers the text quotes.
 * :func:`ubq_most_entries_ordered` -- the check behind the ubiquitin example of Fig. 3c:
   among sequences whose non-bound chains are mostly ordered (median chain-mean G below
-  0.2), ubiquitin has the most non-bound entries.
+  ``style_paper.G_ORD``; 0.2 until 17 Nov 2026), ubiquitin has the most non-bound entries.
 
 Names come from ``entity_name``; depositors often write a generic name ('entity_1'), so the
 most frequent non-generic name is used, and the two sequences the text names get fixed
@@ -44,7 +44,7 @@ ASYN = (
 )
 LABELS = {UBQ: "ubiquitin", ASYN: "α-synuclein"}
 COLUMNS = ["id", "entry_id", "sequence", "entity_name", "is_bound", "gscores"]
-ORDERED_MAX_MEDIAN_G = 0.2  # "mostly ordered": median chain-mean G below this
+ORDERED_MAX_MEDIAN_G = sp.G_ORD  # "mostly ordered": median chain-mean G below this
 _GENERIC = re.compile(
     r"^(entity|chain|polymer|protein|molecule|mol|peptide|monomer|subunit)?[\s_\-]*([a-z]|\d+)?$",
     re.I,

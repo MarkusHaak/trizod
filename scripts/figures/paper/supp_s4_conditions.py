@@ -74,7 +74,8 @@ PHYS_MAIN = [
 ]
 
 # (key, row label); the release columns behind the rows (is_bound, has_metal,
-# has_nucleic, membrane_mimetic, cosolvent_evidence, n_copies, sample_state_evidence)
+# has_nucleic, membrane_mimetic_sample -- style_paper.membrane_sample, membrane_mimetic not
+# null before the 2026-11-17 build --, cosolvent_evidence, n_copies, sample_state_evidence)
 # are named in the caption, not in the artwork
 ANNOT = [
     ("is_bound", "Bound partner"),
@@ -103,6 +104,7 @@ def load():
         "ionic_strength",
         "physical_state",
         "membrane_mimetic",
+        "membrane_mimetic_sample",
         "cosolvent_evidence",
         "is_bound",
         "n_copies",
@@ -128,7 +130,7 @@ def load():
         np.nan if c is None or c["pressure_bar"] is None else c["pressure_bar"]
         for c in cond
     ]
-    df["membrane"] = df.membrane_mimetic.notna()
+    df["membrane"] = sp.membrane_sample(df)
     df["multi_copy"] = df.n_copies > 1
     df["homo"] = (df.n_copies > 1) & ~df.is_bound.astype(bool)
     df["solid"] = df.sample_state_evidence == "solid"
@@ -405,6 +407,8 @@ def main():
         "pressure_bar",
         "physical_state",
         "membrane_mimetic",
+        "membrane_mimetic_sample",
+        "membrane",
         "cosolvent_evidence",
         "is_bound",
         "has_metal",

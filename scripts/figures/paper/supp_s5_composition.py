@@ -3,7 +3,10 @@
 
 Six chain sets: the four cumulative tiers (scored chains; unfiltered ⊃ tolerant ⊃
 moderate ⊃ strict, from the bundle's per-tier ``scores.json``), the TriZOD test set
-(``split == test_trizod``) and CheZOD117 (``split == test_chezod117``).
+(``split == test_trizod``) and CheZOD117 (``split == test_chezod117``). Retired TriZOD test
+chains (``split == test_retired``, from the 2026-11-17 build on: pinned test chains that left
+the strict tier) are in neither test set; as scored chains they stay in the tier sets, as the
+test chains do. Their number is in S5_summary.json (``retired_test_chains``).
 
 Panels
   a  Chain length (residues), empirical cumulative distribution on a log axis; the
@@ -74,8 +77,9 @@ def load():
     ]
     tids = sp.load_tier_ids()
     sets = {t: df[df.id.isin(tids[t])] for t in TIERS}
-    sets["TriZOD test set"] = df[df.split == "test_trizod"]
-    sets["CheZOD117"] = df[df.split == "test_chezod117"]
+    tz, cz = sp.TEST_SPLITS  # test_trizod, test_chezod117; never test_retired
+    sets["TriZOD test set"] = df[df.split == tz]
+    sets["CheZOD117"] = df[df.split == cz]
     return df, sets
 
 
@@ -91,7 +95,10 @@ def main():
     DATA_OUT = sp.out_dir(DATA_SUBDIR)
     df, sets = load()
     names = list(sets)
-    summ: dict = {"sets": {k: len(v) for k, v in sets.items()}}
+    summ: dict = {
+        "sets": {k: len(v) for k, v in sets.items()},
+        "retired_test_chains": int((df.split == sp.RETIRED_SPLIT).sum()),
+    }
 
     # lengths
     summ["length"] = {

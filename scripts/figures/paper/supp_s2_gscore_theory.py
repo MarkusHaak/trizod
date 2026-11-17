@@ -21,8 +21,9 @@ Synthetic model. A window holds three residues, each contributing k/3 shifts
 (k = 3, 6, ..., 21: one to seven backbone atom types measured on all three). Shifts of disordered residues deviate from the random-coil
 reference as N(0, 1) (in units of the per-atom random-coil SD sigma(n)); shifts of
 ordered residues as N(0, s_o^2). s_o is calibrated so that fully ordered windows at
-k = 21 reproduce the median Z of ordered pool residues with k 19-21 (numbers macro
-\\zOrderedHighK), which anchors the illustration to the data.
+k = 21 reproduce the median Z of ordered pool residues (G < ``style_paper.G_ORD``; G < 0.2
+until 17 Nov 2026) with k 19-21 (numbers macro \\zOrderedHighK, same definition), which
+anchors the illustration to the data.
 
 Run: uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s2_gscore_theory.py \
          --out-dir <draft>/Figures/paper
@@ -120,7 +121,7 @@ def empirical_pool():
 def main():
     sp.parse_args(sp.cli(__doc__))
     G, Z, K, n_pool_chains, (Ga, Za) = empirical_pool()
-    ordered_hi = (G < 0.2) & (K >= 19)
+    ordered_hi = (G < sp.G_ORD) & (K >= 19)
     z_target = float(np.median(Z[ordered_hi]))
     s_o = calibrate_sigma(z_target)
     r_pool = float(np.corrcoef(G, Z)[0, 1])
@@ -201,7 +202,7 @@ def main():
     axa.set_ylabel("Z-score (synthetic)")
     axa.set_ylim(-3, 17)
     axa.set_yticks([0, 5, 10, 15])
-    # disorder cut-offs (Z = 8, G = G_DIS), drawn over the data range only
+    # disorder cut-offs (Z = 8; the binary cut G = G_DIS), drawn over the data range only
     axa.hlines(8, 2, KS[-1], color=sp.CAT["light"], lw=0.5, ls=":", zorder=0)
     axb.set_ylabel("G-score (synthetic)")
     axb.set_ylim(0, 1)

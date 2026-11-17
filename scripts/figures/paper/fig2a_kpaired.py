@@ -5,14 +5,16 @@ For every sequence carried by non-bound chains from at least two BMRB entries,
 draw up to 30 chain pairs (seeded), drop same-entry pairs, and compare each
 co-scored residue: dZ and dG are the higher-k chain minus the lower-k chain at
 that residue, and dk = |k_a - k_b|. Residues are split by the replicate
-consensus (median G over all chains with that sequence): ordered < 0.3,
-disordered > 0.7. The dk = 0 bin is the built-in null.
+consensus (median G over all chains with that sequence) at the paper's cuts: ordered
+G < ``style_paper.G_ORD``, (confidently) disordered G >= ``style_paper.G_CONF``, the rest
+intermediate and not drawn (ordered < 0.3 and disordered > 0.7 until 17 Nov 2026). The
+dk = 0 bin is the built-in null.
 
 This is a faithful port of the scratch analysis ``trust_first/kpaired.py``
 (the source of the writing plan's preview numbers and of the ``\\kpair*``
 macros in ``numbers.tex``, which ``scripts/manuscript/make_numbers.py``
 recomputes with the same code): same pair sampling (``random.Random(0)`` over
-``groupby('sequence')`` order), same thresholds, same bins.
+``groupby('sequence')`` order), same bins; the consensus classes use the shared cuts.
 
 The two y axes are scaled to the same fraction of each score's own
 ordered-to-disordered difference (median score of ordered- vs disordered-
@@ -62,8 +64,8 @@ PARQUET = sp.PQ_MAIN
 
 MAX_PAIRS_PER_SEQ = 30
 SEED = 0
-ORDERED_MAX = 0.3  # replicate-consensus G below this: ordered
-DISORDERED_MIN = 0.7  # replicate-consensus G above this: disordered
+ORDERED_MAX = sp.G_ORD  # replicate-consensus G below this: ordered
+DISORDERED_MIN = sp.G_CONF  # replicate-consensus G at or above this: disordered
 BIN_EDGES = [-0.5, 0.5, 3, 6, 9, 21]
 BIN_LABELS = ["0", "1–3", "4–6", "7–9", "≥10"]
 OUT_NAME = "fig3b_kpaired"  # Fig. 3b (fig2b_kpaired.pdf on 11 Nov, fig2a.pdf before)
@@ -118,7 +120,7 @@ def residue_pairs(parquet: Path) -> pd.DataFrame:
     R["state"] = np.where(
         R.cons < ORDERED_MAX,
         "ordered",
-        np.where(R.cons > DISORDERED_MIN, "disordered", "intermediate"),
+        np.where(R.cons >= DISORDERED_MIN, "disordered", "intermediate"),
     )
     return R
 

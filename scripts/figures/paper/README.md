@@ -97,6 +97,22 @@ from the bundle's `MANIFEST.json` (`style_paper.RELEASE`, `style_paper.PIPELINE`
 `style_paper.IS_FROZEN` is true only on the frozen 2026-10 build, whose split predates the
 rebuild fixes.
 
+### G-score cuts and split values
+
+The three G-score cuts are set in `paper_config.py` only: `G_ORD` (ordered below, 0.15),
+`G_DIS` (the binary cut, 0.35) and `G_CONF` (confidently disordered from, 0.70), with the
+convention "disordered at G >= cut". `style_paper` re-exports them for the generators;
+`make_numbers.py` and `threshold_numbers.py` import them, and `threshold_numbers.py` and
+`supp_s20_threshold.py` stop when the calibration framework was run with other values. A
+recalibration changes the one line there. The same module names the release's split values:
+`test_retired` (from the 2026-11-17 build on, a pinned TriZOD test chain that left the
+strict tier) is in `HELD_OUT_SPLITS`, never training and never tested on. Releases from the
+2026-11-17 build on also carry `membrane_mimetic_sample`, `temperature_placeholder` and
+`high_pressure`; `style_paper.load_main` adds them as all-null to an older release, and
+`style_paper.membrane_sample` is the one "membrane-mimetic sample" rule (`membrane_mimetic`
+now names classes, a sub-CMC additive included, so `membrane_mimetic.notna()` no longer means
+a membrane sample).
+
 Example, the frozen 2026-10 build of the first draft:
 
 ```bash

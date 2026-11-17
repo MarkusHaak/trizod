@@ -5,7 +5,11 @@
 Fig. 3c and 3d of the 11 Nov draft.)
 
 a. For each held-out chain (TriZOD test + CheZOD117), its closest training
-representative: identity against alignment coverage. The search is the build's own
+representative: identity against alignment coverage. Retired TriZOD test chains
+(``split = test_retired``, bundle ``test/TriZOD_test_retired.fasta``, from the 2026-11-17
+build on) are neither test nor training: they join the target database, as in the build's
+leakage search, so the E-values stay the build's, but they are neither drawn nor counted.
+The search is the build's own
 stage-2 leakage search (``trizod.dataset.mmseqs.leakage_search_options``: training
 chains as query, the held-out chains as target database, ``--alignment-mode 3
 --cov-mode 1 -c 0 -s 7.5 --comp-bias-corr 0 --mask 0 --prefilter-mode 2``, E <= 1e-3),
@@ -27,9 +31,9 @@ largest identity x coverage. Chains without any reported alignment are not drawn
 key ("Shown:") gives drawn and total chains per set. Counts by tier and rule are written
 to ``fig5ab_numbers.json``.
 
-b. Share of chains by disorder class -- the share of a chain's scored residues with
-G > G_DIS is <= 10 %, 10-90 % or >= 90 % (the key gives the classes; "mostly disordered"
-is avoided because the text uses it for > 50 %) --
+b. Share of chains by disorder class -- the share of a chain's scored residues that are
+disordered at the binary cut (G >= G_DIS) is <= 10 %, 10-90 % or >= 90 % (the key gives the
+classes; "mostly disordered" is avoided because the text uses it for > 50 %) --
 for the TriZOD test set, CheZOD117 and the training representatives of every tier, each
 with its own tier's labels (``scores/<tier>/scores.json``). The test sets use their
 released Parquet labels: the unfiltered labels, except for the CheZOD117 chains whose
@@ -86,6 +90,8 @@ TEST_FASTAS = {
     "test_trizod": sp.BUNDLE / "test" / "TriZOD_test_set.fasta",
     "test_chezod117": sp.BUNDLE / "test" / "CheZOD117_test_set.fasta",
 }
+# retired TriZOD test chains: in the target database only (absent before the 2026-11-17 build)
+RETIRED_FASTA = sp.BUNDLE / "test" / sp.RETIRED_FASTA
 # marker areas 30 % smaller than on 11 Nov (figure review item 11: about 250 points
 # overplot at 30-45 % identity and 70-80 % coverage); drawn with alpha 0.8
 SET_STYLE = {  # label, colour, marker, marker area (pt^2)
@@ -97,9 +103,9 @@ SCATTER_ALPHA = 0.8
 REGION_FILL = sp.patch_kw("removed")
 REGION_LINE = "#7F7F7F"
 CLASS_COLORS = ["#DADADA", "#969696", "#3B3B3B"]  # ordered -> disordered
-# share of a chain's scored residues with G > G_DIS
+# share of a chain's scored residues with G >= G_DIS (the binary cut)
 CLASS_LABELS = ["≤10%", "10–90%", "≥90%"]
-DIS_KEY = f"pct_residues_G_gt_{sp.G_DIS:.2f}"  # key in fig5ab_numbers.json
+DIS_KEY = f"pct_residues_G_ge_{sp.G_DIS:.2f}"  # key in fig5ab_numbers.json
 RULES = {  # extra counts for the numbers JSON; x = the coverage the rule tests
     "either_30_80": lambda h: (h.ident >= ID_MIN) & (np.maximum(h.test_cov, h.train_cov) >= COV_MIN),
     "test_30_80": lambda h: (h.ident >= ID_MIN) & (h.test_cov >= COV_MIN),
@@ -138,11 +144,16 @@ def _digest(paths: list[Path], opts: list[str]) -> str:
 
 
 def run_search(work: Path, refresh: bool) -> pd.DataFrame:
-    """Unfiltered representatives (query) vs all held-out chains (target), cached."""
+    """Unfiltered representatives (query) vs all held-out chains (target), cached. The
+    target holds the retired test chains too when the bundle has them: the build searched
+    against them, so they belong in the database that sets the E-values."""
     work.mkdir(parents=True, exist_ok=True)
     target = work / "test_all.fasta"
+    sources = list(TEST_FASTAS.values())
+    if RETIRED_FASTA.exists():
+        sources.append(RETIRED_FASTA)
     with open(target, "w") as fh:
-        for path in TEST_FASTAS.values():
+        for path in sources:
             for k, s in sp.read_fasta(path).items():
                 fh.write(f">{k}\n{s}\n")
     query = sp.BUNDLE / "train" / "unfiltered" / "train_unfiltered_best.fasta"
@@ -163,7 +174,8 @@ def run_search(work: Path, refresh: bool) -> pd.DataFrame:
 
 
 def analyse(hits: pd.DataFrame, set_of: dict, reps: dict, rep_tier: dict, rule: str):
-    h = hits.copy()
+    # hits on retired test chains (in the target database only) are neither drawn nor counted
+    h = hits[hits["test_id"].isin(set_of)].copy()
     h["set"] = h["test_id"].map(set_of)
     h["ttier"] = h["train_id"].map(rep_tier)
     h["trank"] = h["ttier"].map(sp.RANK)
@@ -216,12 +228,12 @@ def disorder_strip(test_ids: dict, reps: dict):
     def dis_frac(g) -> float:
         g = np.asarray(g, float)
         g = g[np.isfinite(g)]
-        return np.nan if g.size == 0 else float((g > sp.G_DIS).mean())
+        return np.nan if g.size == 0 else float((g >= sp.G_DIS).mean())
 
     def res_share(gs) -> float:
         a = np.concatenate([np.asarray(g, float) for g in gs])
         a = a[np.isfinite(a)]
-        return float(100 * (a > sp.G_DIS).mean())
+        return float(100 * (a >= sp.G_DIS).mean())
 
     sets = [  # the order of the rows in Fig. 5b
         ("TriZOD test", [g_unf[i] for i in test_ids["test_trizod"]], sp.CAT["test"]),
@@ -365,7 +377,7 @@ def draw_b(strip: list):
              va="center", fontsize=sp.FS_BODY)  # fmt: skip
     # class key above the axes, one row, preceded by its title
     y_key = (AX_Y0_AB + AX_H_AB + 2.6) / H
-    t = fig.text(5.0 / W, y_key, f"Residues with G > {sp.G_DIS:.2f}:", ha="left", va="center",
+    t = fig.text(5.0 / W, y_key, f"Residues with G ≥ {sp.G_DIS:.2f}:", ha="left", va="center",
                  fontsize=sp.FS_BODY)  # fmt: skip
     fig.canvas.draw()
     rnd = fig.canvas.get_renderer()
@@ -433,8 +445,11 @@ def main(argv=None) -> None:
             "release": sp.RELEASE,
             "pipeline": sp.PIPELINE,
             "search": f"mmseqs easy-search train_unfiltered_best.fasta (query) vs TriZOD_test_set.fasta + "
-            f"CheZOD117_test_set.fasta (target) {' '.join(panel_search_options())} (mmseqs {mmseqs_version()}); "
-            "the build's stage-2 options with --min-seq-id lowered from 0.3",
+            f"CheZOD117_test_set.fasta{' + ' + RETIRED_FASTA.name if RETIRED_FASTA.exists() else ''} (target) "
+            f"{' '.join(panel_search_options())} (mmseqs {mmseqs_version()}); "
+            "the build's stage-2 options with --min-seq-id lowered from 0.3; retired test chains "
+            "only set the E-values (not drawn, not counted)",
+            "disorder_cut": f"G >= {sp.G_DIS:.2f} (style_paper.G_DIS)",
             "leakage_rule": rule,
             "x": "max(test-chain, training-chain coverage)"
             if rule == "either"

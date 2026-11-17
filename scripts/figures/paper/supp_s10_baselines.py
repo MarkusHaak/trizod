@@ -5,7 +5,7 @@ Fig. 5c (``draw_main``; 160 x 40 mm): pooled residue-level Spearman rho of both 
 trained on each tier (rows), on each test set (two facets), against the replicate
 ceiling sqrt(rho) of the test chains themselves (``test_ceilings``: each test chain's
 label against its non-bound identical-sequence chains from other entries outside the
-test sets, <= 20 per test chain, seed 0). Whiskers and the ceiling band are 95 %
+test sets and the retired test chains, <= 20 per test chain, seed 0). Whiskers and the ceiling band are 95 %
 percentile bootstrap CIs over test chains (``--n-boot``, default 1,000, seed 0); for the
 ceiling a test chain is resampled with all its replicate pairs. Like-for-like check (drawn
 since the 12 Nov 2026 review, small open squares below each ridge marker): the ridge rho on
@@ -17,8 +17,9 @@ Outputs: <out-dir>/fig5c_baselines.pdf and <out-dir>/fig5_data/fig5c_rho.csv,
 fig5c_numbers.json.
 
 Two sequence-only reference models are trained on the training representatives of
-each cumulative tier (``train_tier`` at that tier or stricter) and evaluated on BOTH
-pinned test sets (TriZOD test, CheZOD117):
+each cumulative tier (``train_tier`` at that tier or stricter; a held-out chain, split
+``test_*`` including ``test_retired``, never trains) and evaluated on BOTH pinned test sets
+(TriZOD test, CheZOD117; ``test_retired`` chains are not tested on):
 
 * **per-amino-acid mean (floor):** predicts each residue's G as the mean training G of
   its amino-acid type;
@@ -31,7 +32,7 @@ This is the port of ``user_first/ceiling_and_baseline.py`` part 2 that
 floor Pearson r here equal the ``\\base*`` macros. Labels are the release (Parquet)
 labels, i.e. what a user loading the Parquet trains on.
 
-Metrics, all at the paper's cut G > G_DIS (style_paper) for AUC:
+Metrics, all at the paper's binary cut (disordered at G >= G_DIS, style_paper) for AUC:
 * per residue: Spearman rho and ROC AUC pooled over all scored test residues;
 * per chain: the mean over test chains of the within-chain Spearman rho (chains with
   >= 10 scored residues and non-constant labels) and of the within-chain AUC (chains
@@ -82,6 +83,7 @@ D = (2 * W + 1) * 21 + 1
 LAMBDA = 10.0
 MIN_CHAIN_RES = 10
 TESTS = {"test_trizod": "TriZOD test", "test_chezod117": "CheZOD117"}
+assert tuple(TESTS) == sp.TEST_SPLITS
 DATA_SUBDIR = "suppfigs_b_data"  # under --out-dir
 FIG5_SUBDIR = "fig5_data"  # Fig. 5c source data, under --out-dir
 COLUMNS = ["id", "entry_id", "sequence", "is_bound", "gscores", "zscores", "k", "ph", "temperature",
@@ -117,7 +119,7 @@ def spearman(x, y) -> float:
 
 
 def auc(y, p) -> float:
-    pos = y > sp.G_DIS
+    pos = y >= sp.G_DIS
     npos, nneg = pos.sum(), (~pos).sum()
     if npos == 0 or nneg == 0:
         return np.nan
@@ -166,6 +168,8 @@ def predictions(df: pd.DataFrame) -> dict:
     tr_rank = df["train_tier"].map(
         lambda v: sp.RANK.get(v, -1) if isinstance(v, str) else -1
     )
+    # a held-out chain (test sets, retired test chains) never trains, whatever train_tier says
+    tr_rank = tr_rank.where(~df["split"].isin(sp.HELD_OUT_SPLITS), -1)
     for t in sp.TIERS:
         tr = df[tr_rank >= sp.RANK[t]]
         XtX = np.zeros((D, D))
@@ -243,10 +247,10 @@ def test_ceiling_pairs(df: pd.DataFrame, cap: int = 20) -> dict:
     Returns ``{test_set: [(test_id, replicate_id, y, p, pos), ...]}``: the test chain's
     label ``y`` and one replicate's G ``p`` over their co-scored residues (positions
     ``pos``), for up to ``cap`` non-bound identical-sequence chains of other entries
-    outside the test sets (seed 0).
+    outside the test sets and the retired test chains (seed 0).
     """
     rng = random.Random(0)
-    nb = df[~df["is_bound"].astype(bool) & ~df["split"].isin(list(TESTS))]
+    nb = df[~df["is_bound"].astype(bool) & ~df["split"].isin(sp.HELD_OUT_SPLITS)]
     # dict(groupby) would call GroupBy.keys, which is the grouping key, not a method
     by_seq = {s: g for s, g in nb.groupby("sequence")}  # noqa: C416
     out = {}
@@ -534,9 +538,9 @@ def plot(B: pd.DataFrame, C: pd.DataFrame, TC: pd.DataFrame):
 
     # Spearman rho per residue (pooled) is main Fig. 5c (draw_main) since 12 Nov 2026;
     # S10 keeps the other three metrics (story blueprint 6.6)
-    cols = [("auc_res", f"AUC, G > {sp.G_DIS:.2f}\nper residue", "AUC"),
+    cols = [("auc_res", f"AUC, G ≥ {sp.G_DIS:.2f}\nper residue", "AUC"),
             ("rho_chain", "Spearman ρ\nmean per chain", "ρ"),
-            ("auc_chain", f"AUC, G > {sp.G_DIS:.2f}\nmean per chain", "AUC")]  # fmt: skip
+            ("auc_chain", f"AUC, G ≥ {sp.G_DIS:.2f}\nmean per chain", "AUC")]  # fmt: skip
     band, rep = "#E3E3E3", "#7a7a7a"
     chance = "#9A9A9A"  # AUC 0.5: thin solid line, labelled in the panel
     left0, gap, pw, ph = (

@@ -8,10 +8,10 @@ Panels
      reaches 0.10 / 0.50 / 0.90 at the stated prevalence pi.
   b  Posterior P(disordered | G) at pi, per reference and for the consensus. Points with bars: the
      estimated cuts (posterior 0.10 / 0.50 / 0.90) with their 95 % intervals; dashed: the published
-     values 0.15 / 0.35 / 0.70.
+     values G_ORD / G_DIS / G_CONF (paper_config; 0.15 / 0.35 / 0.70 on 17 Nov 2026).
   c  Bootstrap distribution of the three estimated cuts.
   d  G of the scored residues (log density) of the analysis set and of the whole release, with the
-     three zones at the published values (ordered G < 0.15, indeterminate, disordered G >= 0.70).
+     three zones at the published values (ordered G < G_ORD, indeterminate, disordered G >= G_CONF).
   e  Agreement of the binary call G >= t between same-condition replicate entries (Cohen's kappa)
      over t: strict-tier unbound chains (the analysis set) and all unbound chains.
 Curves: primary estimator (log LR interpolated between isotonic block midpoints). Bands: 95 %
@@ -19,6 +19,9 @@ joint cluster-bootstrap intervals (sequence clusters resampled jointly across re
 
 Input: the output directory of scripts/validation/threshold_calibration/framework/compute.py
   $TRIZOD_THRESHOLD_FRAMEWORK_DIR  default <data root>/data/interim/threshold-framework-port-2026-11-17
+The framework's paper values (results.json settings.paper_values) must equal the cuts of
+paper_config (G_ORD, G_DIS, G_CONF); the script stops otherwise, so the figure never shows
+other cuts than the text.
 
 Run: uv run --extra figures --with pyarrow python scripts/figures/paper/supp_s20_threshold.py \
          --out-dir <draft>/Figures/paper
@@ -77,6 +80,12 @@ def main() -> None:
     cons = C["estimators"][est]["consensus"]
     pi = cons["pi"][0]
     paper = [float(x) for x in R["settings"]["paper_values"]]
+    cuts = (pc.G_ORD, pc.G_DIS, pc.G_CONF)
+    if not np.allclose(paper, cuts):
+        raise SystemExit(
+            f"framework paper values {paper} != paper_config cuts {list(cuts)}: rerun "
+            f"framework/compute.py with the paper_config cuts ({FW})"
+        )
     x = fine.G
 
     fig = sp.figure(W, H)

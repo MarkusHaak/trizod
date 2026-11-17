@@ -32,7 +32,8 @@ d    A gallery of ``N_GALLERY`` replicate groups drawn with ``GALLERY_SEED`` fro
 
 Labels are the release Parquet's (``gscores``, ``zscores``, ``k``, ``mask``). Unlike
 panel a (and Fig. 3c), the grey class of b-d reads the Parquet's sample annotations (``cosolvent_evidence``,
-``membrane_mimetic``, ``sample_state_evidence``, ``physical_state``, ``pressure_bar``)
+``membrane_mimetic_sample`` / ``membrane_mimetic`` via ``style_paper.membrane_sample``,
+``sample_state_evidence``, ``physical_state``, ``pressure_bar``)
 and not the raw files. A few alpha-synuclein fibril and micelle samples (31068, 18243,
 16302) escape these annotations and stay coloured.
 
@@ -134,6 +135,7 @@ def load() -> pd.DataFrame:
             "cosolvent_evidence",
             "sample_state_evidence",
             "membrane_mimetic",
+            "membrane_mimetic_sample",
             "pressure_bar",
             "split",
         ]  # fmt: skip
@@ -368,7 +370,7 @@ def condition_groups(U: pd.DataFrame) -> list:
             key = f"{float(conc):g}{'' if unit == '%' else ' '}{unit} {name}".strip()
         elif str(r.sample_state_evidence) == "solid":
             key = "solid state"
-        elif pd.notna(r.membrane_mimetic):
+        elif r.membrane:  # style_paper.membrane_sample (fig1a_ubiquitin.select_chains)
             key = "membrane mimetic"
         else:
             key = f"{r.physical_state} state"

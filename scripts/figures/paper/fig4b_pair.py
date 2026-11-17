@@ -7,9 +7,11 @@ study, deposited in different BMRB entries, in the same physical state, without 
 membrane mimetic, solid sample or high pressure, with deposited pH, temperature and ionic
 strength, that differ in exactly ONE factor (temperature: |dT| >= 10 K at |dpH| <= 0.2;
 pH: |dpH| >= 1 at |dT| <= 2 K; ionic strength equal), with >= 50 co-scored residues. Pairs
-rank by their longest run of residues that cross from G > 0.65 in one chain to G < 0.35 in
-the other, if the rest of the chain agrees (median |dG| < 0.06) and the median shift counts
-k differ by at most 2. Nothing is picked by hand: the generator draws whatever pair ranks
+rank by their longest run of residues that cross from confidently disordered in one chain
+(G >= ``style_paper.G_CONF``) to not disordered in the other (G < ``style_paper.G_DIS``, the binary cut;
+``fig3_replicates.CROSS_HI`` / ``CROSS_LO``, G > 0.65 vs G < 0.35 until 17 Nov 2026), if the
+rest of the chain agrees (median |dG| < 0.06) and the median shift counts k differ by at
+most 2. Nothing is picked by hand: the generator draws whatever pair ranks
 first, and fails loudly if none ranks.
 
 Left: the unfiltered G-score profiles of the two chains (Parquet labels, the labels of the
@@ -64,7 +66,7 @@ SHADE = (
     0.0,
     0.09,
 )  # crossing residues: ink at 9 % (a highlight, not an entity)
-REF = sp.CAT["light"]  # G = 0.35 / 0.65 guides
+REF = sp.CAT["light"]  # guides at G = CROSS_LO / CROSS_HI (G_DIS / G_CONF)
 LINE = {"a": {"ls": "-", "lw": 1.0}, "b": {"ls": (0, (2.6, 1.3)), "lw": 1.0}}
 JITTER_SEED = 0
 
@@ -86,8 +88,8 @@ def profiles(D: fr.Data, top) -> pd.DataFrame:
     ga, gb = D.G_unf[top.a], D.G_unf[top.b]
     ka, kb = D.K_unf[top.a], D.K_unf[top.b]
     with np.errstate(invalid="ignore"):
-        cross_a = (ga > fr.CROSS_HI) & (gb < fr.CROSS_LO)  # a disordered, b ordered
-        cross_b = (gb > fr.CROSS_HI) & (ga < fr.CROSS_LO)
+        cross_a = (ga >= fr.CROSS_HI) & (gb < fr.CROSS_LO)  # a disordered, b ordered
+        cross_b = (gb >= fr.CROSS_HI) & (ga < fr.CROSS_LO)
     seq = top.sequence
     return pd.DataFrame(
         {
@@ -157,7 +159,7 @@ def draw(Pr: pd.DataFrame, P: pd.DataFrame, top):
     ax.set_xlim(0.5, n + 0.5)
     ax.set_ylim(0, 1.0)
     ax.set_yticks([0, fr.CROSS_LO, fr.CROSS_HI, 1.0])
-    ax.set_yticklabels(["0", f"{fr.CROSS_LO:g}", f"{fr.CROSS_HI:g}", "1"])
+    ax.set_yticklabels(["0", f"{fr.CROSS_LO:.2f}", f"{fr.CROSS_HI:.2f}", "1"])
     ax.set_ylabel("G-score")
     ax.tick_params(axis="x", labelbottom=False)
     ax.spines["bottom"].set_visible(False)

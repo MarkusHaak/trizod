@@ -16,7 +16,8 @@ scored at t, so it also belongs to every more permissive tier.
   the other entries (a fixed reference, identical for every tier); a residue is
   comparable when the chain's own tier-t label and at least two replicate values exist.
   Chains need >= 5 comparable residues; sequences need non-bound chains from >= 3
-  entries. Per chain: mean |G - consensus| ("deviation"), flip rate at G = G_DIS, and
+  entries. Per chain: mean |G - consensus| ("deviation"), flip rate of the binary call
+  (disordered at G >= G_DIS), and
   the chain's median shift count k over comparable residues (unfiltered labels).
 * :func:`pair_table` -- residue-level pairs of replicates for Pearson r / MAE. At each
   tier, candidate pairs (both chains in the tier, different entries) are taken in one
@@ -80,8 +81,11 @@ ONE_FACTOR = {
 }
 ONE_FACTOR_MIN_RES = 50  # co-scored residues
 IONIC_ATOL = 0.01  # M; "equal ionic strength" (deposited values agree within 0.01 M)
-# a crossing residue: G > CROSS_HI in one chain and G < CROSS_LO in the other
-CROSS_HI, CROSS_LO = 0.65, 0.35
+# a crossing residue: confidently disordered (G >= CROSS_HI) in one chain and not
+# disordered (G < CROSS_LO, below the binary cut) in the other. The three-cut scheme of
+# 17 Nov 2026 sets both from the shared cuts (style_paper.G_CONF / G_DIS); until then the
+# band was G > 0.65 vs G < 0.35. (G_CONF vs G_ORD left 1 of 32 one-factor pairs ranked.)
+CROSS_HI, CROSS_LO = sp.G_CONF, sp.G_DIS
 RANK_REST_MAX = (
     0.06  # the rest of the chain agrees: median |dG| of non-crossing residues < 0.06
 )
@@ -90,7 +94,8 @@ ONE_FACTOR_CSV = "one_factor_pairs.csv"
 
 COLUMNS = ["id", "entry_id", "st_id", "entity_name", "sequence", "is_bound", "gscores", "k",
            "ph", "temperature", "ionic_strength", "pressure_bar", "physical_state",
-           "cosolvent_evidence", "sample_state_evidence", "membrane_mimetic", "citation_title",
+           "cosolvent_evidence", "sample_state_evidence", "membrane_mimetic",
+           "membrane_mimetic_sample", "citation_title",
            "citation_doi", "bbshift_types_post",
            *[off_sigma_col(a) for a in sp.BACKBONE_ATOMS]]  # fmt: skip
 
@@ -174,7 +179,7 @@ def loo_table(D: Data) -> pd.DataFrame:
                         "strictest": D.strictest[cid],
                         "dev": float(d.mean()),
                         "flip": float(
-                            np.mean((own[m] > sp.G_DIS) != (cons[m] > sp.G_DIS))
+                            np.mean((own[m] >= sp.G_DIS) != (cons[m] >= sp.G_DIS))
                         ),
                         "n_res": int(m.sum()),
                         "medk": medk,
@@ -274,7 +279,7 @@ def _pair_stats(x: np.ndarray, y: np.ndarray) -> dict:
         "syy": (y * y).sum(),
         "sxy": (x * y).sum(),
         "sad": np.abs(x - y).sum(),
-        "sflip": float(((x > sp.G_DIS) != (y > sp.G_DIS)).sum()),
+        "sflip": float(((x >= sp.G_DIS) != (y >= sp.G_DIS)).sum()),
     }
 
 
@@ -715,7 +720,7 @@ def _runs(mask: np.ndarray) -> list:
 
 
 def crossing_run(ga: np.ndarray, gb: np.ndarray) -> tuple:
-    """Longest run of consecutive residues that cross between two G-score profiles: G >
+    """Longest run of consecutive residues that cross between two G-score profiles: G >=
     CROSS_HI in one chain and G < CROSS_LO in the other, in the same direction throughout
     the run. An unscored residue (NaN) breaks a run. Returns ``(length, start, end, side)``
     with 0-based inclusive positions and ``side`` the chain ('a' or 'b') that is disordered
@@ -723,8 +728,8 @@ def crossing_run(ga: np.ndarray, gb: np.ndarray) -> tuple:
     best = (0, -1, -1, "")
     with np.errstate(invalid="ignore"):
         sides = (
-            ("a", (ga > CROSS_HI) & (gb < CROSS_LO)),
-            ("b", (gb > CROSS_HI) & (ga < CROSS_LO)),
+            ("a", (ga >= CROSS_HI) & (gb < CROSS_LO)),
+            ("b", (gb >= CROSS_HI) & (ga < CROSS_LO)),
         )
     for side, m in sides:
         for s, e in _runs(m):
@@ -749,7 +754,9 @@ def one_factor_pairs(
        At least ONE_FACTOR_MIN_RES co-scored residues (unfiltered labels of the Parquet).
        Every pair within a sequence and study counts (no cap); chain ``a`` has the lower
        value of the changed factor.
-    3. Ranking: by the longest crossing run (:func:`crossing_run`). A pair ranks only if it
+    3. Ranking: by the longest crossing run (:func:`crossing_run`: confidently disordered,
+       G >= CROSS_HI = G_CONF, in one chain and ordered, G < CROSS_LO = G_ORD, in the other;
+       G > 0.65 vs G < 0.35 until 17 Nov 2026). A pair ranks only if it
        has a crossing run, the rest of the chain agrees (median |dG| over the co-scored
        residues that do not cross < RANK_REST_MAX) and the chains' median shift
        counts k (over co-scored residues) differ by at most RANK_DK_MAX. Ties: lower
@@ -801,7 +808,7 @@ def one_factor_pairs(
                 ad = np.abs(ga - gb)
                 L, s, e, side = crossing_run(ga, gb)
                 with np.errstate(invalid="ignore"):
-                    cross = ((ga > CROSS_HI) & (gb < CROSS_LO)) | ((gb > CROSS_HI) & (ga < CROSS_LO))  # fmt: skip
+                    cross = ((ga >= CROSS_HI) & (gb < CROSS_LO)) | ((gb >= CROSS_HI) & (ga < CROSS_LO))  # fmt: skip
                 n_cross = int(cross.sum())
                 rest = m & ~cross
                 ka, kb = D.K_unf[ra["id"]], D.K_unf[rb["id"]]

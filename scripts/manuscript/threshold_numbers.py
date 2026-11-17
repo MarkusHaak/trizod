@@ -10,8 +10,10 @@ rule (posterior 0.10 / 0.50 / 0.90 at the stated reference-consensus prevalence 
 unbound chains), the consensus likelihood ratio (LR) at each published value, and a 95 % joint
 cluster-bootstrap interval for everything. Estimates ("Est") are those of the primary estimator (log
 LR interpolated between isotonic block midpoints); "Step" macros are the isotonic step sensitivity.
-Paper values: \\thrPaperOrd / \\thrPaperBin / \\thrPaperDis; \\thr<Edge>InCI says whether the paper value
-lies inside the 95 % interval of its estimate (the frozen reporting rule).
+Paper values: \\thrPaperOrd / \\thrPaperBin / \\thrPaperDis, taken from the one place that sets the cuts,
+scripts/figures/paper/paper_config.py (G_ORD / G_DIS / G_CONF); the script stops when the framework
+was run with other paper values. \\thr<Edge>InCI says whether the paper value lies inside the 95 %
+interval of its estimate (the frozen reporting rule). Convention: disordered at G >= t.
 
 Macros of the former calibration that no longer exist are listed in DROPPED (printed on every run).
 
@@ -23,15 +25,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from trizod import paths
 
+sys.path.insert(0, str(paths.ROOT / "scripts" / "figures" / "paper"))
+import paper_config as cfg  # noqa: E402  (the G-score cuts: G_ORD, G_DIS, G_CONF)
+
 DEFAULT_DIR = "threshold-framework-port-2026-11-17"
-EDGES = (
-    ("Ord", "ordered_edge", "0.10", "0.15"),
-    ("Bin", "binary_cut", "0.50", "0.35"),
-    ("Dis", "disordered_edge", "0.90", "0.70"),
+CUTS = (cfg.G_ORD, cfg.G_DIS, cfg.G_CONF)
+G_ORD_TXT, G_DIS_TXT, G_CONF_TXT = (f"{g:.2f}" for g in CUTS)
+EDGES = (  # (tag, result key, posterior level, published value)
+    ("Ord", "ordered_edge", "0.10", G_ORD_TXT),
+    ("Bin", "binary_cut", "0.50", G_DIS_TXT),
+    ("Dis", "disordered_edge", "0.90", G_CONF_TXT),
 )
 TIER_TAGS = (
     ("Unfiltered", "tier_unfiltered+"),
@@ -116,6 +124,12 @@ def main() -> None:
     args = ap.parse_args()
     fdir = _dir(args.framework_dir)
     R = json.loads((fdir / "results.json").read_text())
+    fw_paper = [f"{float(v):.2f}" for v in R["settings"]["paper_values"]]
+    if fw_paper != [e[3] for e in EDGES]:
+        raise SystemExit(
+            f"framework paper values {fw_paper} != paper_config cuts {[e[3] for e in EDGES]}: "
+            f"rerun framework/compute.py with the paper_config cuts ({fdir})"
+        )
     C = R["calibration"]
     est = C["primary_estimator"]
     E = C["estimators"]
@@ -353,8 +367,8 @@ def main() -> None:
             f"LR that gives posterior {lev} at the stated prevalence",
         )
     add("thrLRStrong", "18.7", "ACMG/ClinGen 'strong' odds (Tavtigian 2018)")
-    add("thrLRDisAboveStrong", yes((cons["at_paper_values"]["0.70"]["LR"][1] or 0) >= 18.7),
-        "lower 95 % bound of the LR at 0.70 at or above 18.7")  # fmt: skip
+    add("thrLRDisAboveStrong", yes((cons["at_paper_values"][G_CONF_TXT]["LR"][1] or 0) >= 18.7),
+        f"lower 95 % bound of the LR at {G_CONF_TXT} at or above 18.7")  # fmt: skip
     add3(
         "thrNeutralG",
         cons["neutral_point_LR1"],
@@ -464,17 +478,25 @@ def main() -> None:
         z = zs.get((key, "paper_values"))
         if not z:
             continue
-        add(f"pctThrZoneOrd{tag}", pct(z["ordered"]), f"% residues G < 0.15, {key}")
+        add(
+            f"pctThrZoneOrd{tag}",
+            pct(z["ordered"]),
+            f"% residues G < {G_ORD_TXT}, {key}",
+        )
         add(
             f"pctThrZoneInd{tag}",
             pct(z["indeterminate"]),
-            f"% residues 0.15 <= G < 0.70, {key}",
+            f"% residues {G_ORD_TXT} <= G < {G_CONF_TXT}, {key}",
         )
-        add(f"pctThrZoneDis{tag}", pct(z["disordered"]), f"% residues G >= 0.70, {key}")
+        add(
+            f"pctThrZoneDis{tag}",
+            pct(z["disordered"]),
+            f"% residues G >= {G_CONF_TXT}, {key}",
+        )
         add(
             f"pctThrBinary{tag}",
             pct(z["binary_disordered"]),
-            f"% residues G >= 0.35, {key}",
+            f"% residues G >= {G_DIS_TXT}, {key}",
         )
 
     # ---- replicate agreement (same conditions) at the published values
@@ -487,7 +509,7 @@ def main() -> None:
             f"kappaThrBin{tag}",
             v["kappa_binary"],
             f2,
-            f"replicate kappa of G >= 0.35, same conditions, {key}",
+            f"replicate kappa of G >= {G_DIS_TXT}, same conditions, {key}",
         )
         add(
             f"kappaThrConfident{tag}",
@@ -532,7 +554,7 @@ def main() -> None:
                 f"kappaThr{tag}",
                 kr[key]["kappa_binary"],
                 f2,
-                f"replicate kappa at 0.35, min k of the pair in {key}",
+                f"replicate kappa at {G_DIS_TXT}, min k of the pair in {key}",
             )
             add(
                 f"pctThrFlipDis{tag}",
@@ -542,7 +564,7 @@ def main() -> None:
             add(
                 f"thrPostDis{tag}",
                 f2(kz[key]["post_disordered_at_stated_pi"][0]),
-                f"posterior of G >= 0.70 at \\thrPrior, {key}",
+                f"posterior of G >= {G_CONF_TXT} at \\thrPrior, {key}",
             )
 
     lines = [

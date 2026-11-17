@@ -1,8 +1,17 @@
-"""Build selection and input-keyed caches, shared by the paper figures and ``make_numbers``.
+"""Build selection, G-score cuts, split values and input-keyed caches, shared by the paper
+figures and ``make_numbers``.
 
-One place decides which build the paper describes, so the artwork (``style_paper``) and the
-prose (``scripts/manuscript/make_numbers.py``) can never read two builds. This module
-imports neither matplotlib nor pyarrow.
+One place decides which build the paper describes and where the G-score cuts lie, so the
+artwork (``style_paper``) and the prose (``scripts/manuscript/make_numbers.py``,
+``threshold_numbers.py``) can never read two builds or two cuts. This module imports neither
+matplotlib nor pyarrow.
+
+**G-score cuts** (:data:`G_ORD`, :data:`G_DIS`, :data:`G_CONF`). The three calibrated cuts
+are defined here and nowhere else; ``style_paper`` re-exports them and both numbers scripts
+import them. Convention: a residue is disordered at G >= t, never G > t.
+
+**Split values** (:data:`TEST_SPLITS`, :data:`RETIRED_SPLIT`, :data:`HELD_OUT_SPLITS`): the
+release Parquet's ``split`` column. A ``test_retired`` chain is neither test nor training.
 
 **Build selection** (:func:`resolve`). The default is the build of record, the 2026-11-11
 snapshot rebuild at ``trizod-a481315`` in ``data/interim/rebuild-2026-11-11/`` of the
@@ -50,6 +59,38 @@ from trizod.io.atomic import atomic_write
 from trizod.provenance import file_sha256
 
 REPO = paths.ROOT  # the code checkout: scripts/, docs/, trizod/
+
+# ----------------------------------------------------------------------------------
+# G-score cuts: the calibrated three-cut scheme, set HERE ONLY
+# ----------------------------------------------------------------------------------
+# The cuts of the threshold framework (publication notes, manuscript-revision-2026-11,
+# "Threshold framework soundness check", section 1; scripts/validation/threshold_calibration/
+# framework): the smallest G at which the posterior probability of disorder reaches 0.10 /
+# 0.50 / 0.90 at the reference-consensus prevalence of the strict tier's unbound chains,
+# reported as multiples of 0.05 under the dated rule "keep each value while it lies inside the
+# 95 % interval of its strict-tier estimate, else take the nearest multiple of 0.05 inside the
+# interval". The recalibration on the rebuilt strict tier may still move a value: change it
+# here, and the figures (style_paper), numbers.tex (make_numbers) and numbers_threshold.tex
+# (threshold_numbers, which checks the framework's paper values against these) follow.
+# Convention (checklist F32): disordered at G >= t; ordered at G < t.
+G_ORD = 0.15  # ordered edge: a residue with G < G_ORD is (confidently) ordered
+G_DIS = 0.35  # the binary cut: a residue with G >= G_DIS is disordered
+G_CONF = 0.70  # disordered edge: a residue with G >= G_CONF is confidently disordered
+# Zones of the paper: ordered G < G_ORD; ambiguous G_ORD <= G < G_DIS; disordered G >= G_DIS
+# (the binary call), of which confidently disordered G >= G_CONF. Supplementary Fig. S20 and
+# threshold_numbers call G_ORD <= G < G_CONF the indeterminate zone.
+
+# ----------------------------------------------------------------------------------
+# split values of the release Parquet (scripts/build_parquet_dataset.py)
+# ----------------------------------------------------------------------------------
+# train / redundant / excluded / test_trizod / test_chezod117 and, from the 2026-11-17 build
+# on, test_retired: a pinned TriZOD test chain that no longer meets the strict tier. It is not
+# in the test set, and it stays a leakage target, so it is never training either; every
+# analysis keeps it out of both (trizod/dataset/testset.py on feat/tier-rules-2026-11).
+TEST_SPLITS = ("test_trizod", "test_chezod117")  # the two test sets
+RETIRED_SPLIT = "test_retired"
+HELD_OUT_SPLITS = (*TEST_SPLITS, RETIRED_SPLIT)  # never training
+RETIRED_FASTA = "TriZOD_test_retired.fasta"  # bundle test/ file of the retired chains
 
 # ----------------------------------------------------------------------------------
 # build of record
