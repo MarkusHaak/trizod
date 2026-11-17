@@ -74,6 +74,8 @@ The redundancy-reduced, leakage-free dataset is built by a chain of subcommands
 - `trizod dataset representatives` (`representatives.py`) — override mmseqs cluster reps with the quality-best member
 - `trizod dataset package` (`package_release.py`) — assemble the Zenodo release bundle + MANIFEST + leakage gate
 - `trizod dataset deploy` (`deploy_fasta.py`) — build the UdonPred-handoff FASTA (per-residue G-score labels)
+- `trizod dataset export-jsonl` (`export_jsonl.py`) — the UdonPred v2 view of the release Parquet: `trizod_<tier>/{train,valid,test}.jsonl` (`id`, `x_0`, `y`; 999 = masked), cluster-seeded valid split, checked back against the Parquet
+- `trizod dataset test-crosswalk` (`testset_crosswalk.py`) — every earlier TriZOD test set (Trizod348, v0.2.0, the pins, v0.3.0) against the final release, by exact sequence
 - Shared helpers: `composition.py` (bound-complex classifier), `mmseqs.py` (mmseqs wrappers), `paths.py` (path resolution), `trizod/io/fasta.py`
 
 ## Scripts

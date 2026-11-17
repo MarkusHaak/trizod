@@ -592,3 +592,66 @@ def _dataset_deploy(
     if out is not None:
         argv += ["--out", out]
     deploy_fasta.main(argv + _wd_argv(work_dir, root))
+
+
+@dataset_app.command("export-jsonl")
+def _dataset_export_jsonl(
+    parquet: str = typer.Option(..., "--parquet", help="Release Parquet."),
+    out: str | None = typer.Option(
+        None, "--out", help="Output directory (default: <parquet dir>/udonpred)."
+    ),
+    tier: list[str] | None = typer.Option(
+        None,
+        "--tier",
+        help="Training tier to export, repeatable (default: tolerant, moderate, strict).",
+    ),
+    valid_fraction: float | None = typer.Option(
+        None,
+        "--valid-fraction",
+        help="Fraction of each tier's clusters drawn into valid (default: 0.10).",
+    ),
+    seed: int | None = typer.Option(
+        None, "--seed", help="Seed of the valid draw (default: 42)."
+    ),
+):
+    """Write the UdonPred v2 JSONL view ({train,valid,test}.jsonl per tier) of the Parquet."""
+    from trizod.dataset import export_jsonl
+
+    argv = ["--parquet", parquet]
+    if out is not None:
+        argv += ["--out", out]
+    for t in tier or []:
+        argv += ["--tier", t]
+    if valid_fraction is not None:
+        argv += ["--valid-fraction", str(valid_fraction)]
+    if seed is not None:
+        argv += ["--seed", str(seed)]
+    export_jsonl.main(argv)
+
+
+@dataset_app.command("test-crosswalk")
+def _dataset_test_crosswalk(
+    parquet: str = typer.Option(..., "--parquet", help="Final release Parquet."),
+    out: str | None = typer.Option(
+        None, "--out", help="Output directory (default: <parquet dir>/crosswalk)."
+    ),
+    root: str | None = typer.Option(
+        None, "--root", help="Directory holding data/ for the default earlier sets."
+    ),
+    sets: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="NAME=fasta:PATH|parquet:PATH|git:REV:PATH, repeatable; replaces the defaults.",
+    ),
+):
+    """Crosswalk of every TriZOD test set and its status in the final release."""
+    from trizod.dataset import testset_crosswalk
+
+    argv = ["--parquet", parquet]
+    if out is not None:
+        argv += ["--out", out]
+    if root is not None:
+        argv += ["--root", root]
+    for s in sets or []:
+        argv += ["--set", s]
+    testset_crosswalk.main(argv)
