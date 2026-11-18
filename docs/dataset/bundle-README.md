@@ -28,7 +28,7 @@ the continuous TriZOD **G-score** (0–1, higher = more disordered) per residue.
 | `trizod_shifts.parquet` | Every assigned chemical shift on a canonical residue, backbone and side chain, raw and re-referenced: {{n_shifts}} rows over {{n_shift_chains}} chains. Joins on `id` |
 | `udonpred/` | UdonPred v2 training view generated from the Parquet: `trizod_<tier>/{train,valid,test}.jsonl` (`y` = G, 999 where masked) and `chezod117/test.jsonl`; its own README |
 | `disorder_trizod.fasta` (+ `.summary.json`) | SETH/ODiNPred-style view: tolerant training set and the test set, `SET=`, `TARGET=` (G, 999.0 where masked), `MASK=` |
-| `test/` | The test sets as FASTA: `TriZOD_test_set.fasta` ({{test_set_name}}), `TriZOD_test_retired.fasta` (retired chains, leakage targets only), `CheZOD117_test_set.fasta`, `CheZOD117_original_sequences.fasta` (the 117 sequences as SETH published them); `TriZOD_test_set_labels.tsv`; `TriZOD_test_set_components.tsv` (each test chain's homology component, the unit to resample); `test_training_shared_accessions.tsv` (test and training chains that share a UniProt accession, with the decision); `shared_construct_review.tsv` (the reviewed shared constructs); the pin provenance |
+| `test/` | The test sets as FASTA: `TriZOD_test_set.fasta` ({{test_set_name}}), `TriZOD_test_retired.fasta` (retired chains, leakage targets only), `CheZOD117_test_set.fasta`, `CheZOD117_original_sequences.fasta` (the 117 sequences as SETH published them); `TriZOD_test_set_labels.tsv`; `TriZOD_test_set_components.tsv` (each test chain's homology component, the unit to resample); `test_training_shared_accessions.tsv` (test and training chains that share a UniProt accession, with the decision); `shared_construct_review.tsv` (the reviewed shared constructs); `test_residual_similarity.tsv` (each test chain's best alignment to a tolerant training representative, at any identity) and `nearest_neighbour_baseline.json` (its identity histograms and the nearest-neighbour label-transfer baseline); the pin provenance |
 | `crosswalk/` | Every TriZOD test set since 2024 and the status of its sequences in this release (`test_set_crosswalk.tsv`/`.json`, `test_set_overlap.tsv`) |
 | `class_balance.tsv` | Label distribution per split (table below, unrounded) |
 | `known_issues.tsv` | Every chain with a known issue or a change named in the CHANGELOG: `chain_id`, `issue`, `evidence` ({{n_known_issues}} rows) |
@@ -39,6 +39,7 @@ the continuous TriZOD **G-score** (0–1, higher = more disordered) per residue.
 | `bmrb_files.sha256` | SHA-256 of every BMRB entry file of the snapshot (`sha256sum -c` format) |
 | `MANIFEST.json`, `SHA256SUMS` | SHA-256, size and row/chain counts of every file; version, licence, commits, snapshot and cross-reference-source hashes, cuts, calibration, leakage rule |
 | `LICENSE.md`, `CITATION.cff`, `zenodo.json` | Licence, citation, deposit metadata |
+| `croissant.json` | MLCommons Croissant 1.0 metadata with the Responsible-AI (RAI) extension: every file with SHA-256 (except `croissant.json`, `MANIFEST.json` and `SHA256SUMS`, which describe the others), the columns of `trizod_dataset.parquet` as a record set, the splits |
 {{validation_row}}
 
 Check the download with `sha256sum -c SHA256SUMS`.
@@ -138,7 +139,7 @@ Four **nested** stringency tiers (`unfiltered ⊃ tolerant ⊃ moderate ⊃ stri
   gate re-checks every training and redundant row against every test sequence
   before packaging. This controls homology at that rule, as searched; it does
   not eliminate it. Below it: {{shared_accessions}}. {{remote_homologs}}.
-  {{shared_constructs}}. The overlap with the sequence corpora protein language
+  {{shared_constructs}}. {{nearest_neighbour}}. The overlap with the sequence corpora protein language
   models are pretrained on remains as well.
 - **CheZOD.** The test set is disjoint from CheZOD117 under the leakage rule
   (overlapping chains are retired). Per-chain flags `chezod1325_overlap` and
@@ -175,6 +176,9 @@ published training data are on figshare (10.6084/m9.figshare.31444642).
   not chains or residues.
 - Report a model also on the test chains without a remote homologue in training
   (`known_issues.tsv`, issue `remote_homolog_profile`).
+- Report a model next to the nearest-neighbour baseline
+  (`test/nearest_neighbour_baseline.json`): what copying the labels of the
+  closest training chain already achieves on this test set.
 - Report AUC at G ≥ {{cut_disordered}} on all scored residues, on confident
   residues only (G < {{cut_ordered}} or G ≥ {{cut_confident}}), and on k ≥ 10.
 - State whether predictions were smoothed before scoring.

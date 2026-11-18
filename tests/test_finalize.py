@@ -48,6 +48,9 @@ EXPECTED_FILES = {
     "test/TriZOD_test_set_components.tsv",
     "test/test_training_shared_accessions.tsv",
     "test/shared_construct_review.tsv",
+    "test/test_residual_similarity.tsv",
+    "test/nearest_neighbour_baseline.json",
+    "croissant.json",
     "README.md",
     "datasheet.md",
     "CHANGELOG.md",
@@ -690,6 +693,7 @@ def test_residual_similarity_is_documented_and_counted(release):
         "test_components",
         "shared_accessions",
         "remote_homologs",
+        "nearest_neighbour",
         "shared_constructs",
     }
     assert block["shared_accessions"]["pairs_meeting_rule"] == 0
@@ -700,6 +704,123 @@ def test_residual_similarity_is_documented_and_counted(release):
     assert "share a UniProt accession" in changelog
     assert "decided by one criterion" in changelog
     assert "retired test chains still in the strict tier" in changelog
+
+
+def test_the_nearest_neighbour_baseline_ships_with_its_table(release):
+    out, manifest = release["out"], release["manifest"]
+    lines = (out / "test" / "test_residual_similarity.tsv").read_text().splitlines()
+    header = lines[0].split("\t")
+    assert header[:3] == ["test_id", "length", "scored_residues"]
+    assert {"best_pident", "best_bits", "meets_evalue_1e-3", "meets_27_bits"} <= set(
+        header
+    )
+    n_test = manifest["parquet"]["split_counts"]["test_trizod"]
+    assert len(lines) - 1 == n_test
+    summary = json.loads((out / "test" / "nearest_neighbour_baseline.json").read_text())
+    assert summary["test_chains"] == n_test
+    assert (
+        summary["training_representatives"]
+        == (manifest["parquet"]["training_representatives"]["tolerant"])
+    )
+    for crit in ("evalue", "bits"):
+        base = summary["baseline"][crit]
+        assert base["all_residues"]["residues"] == sum(
+            int(ln.split("\t")[2]) for ln in lines[1:]
+        )
+        assert set(base) >= {"hit_chains", "all_residues", "transferred_residues"}
+    nn = manifest["residual_similarity"]["nearest_neighbour"]
+    assert nn["table"] == "test/test_residual_similarity.tsv"
+    assert nn["hit_criteria"] == ["E ≤ 0.001", "≥ 27 bits"]
+    for name in ("README.md", "datasheet.md", "CHANGELOG.md"):
+        text = " ".join((out / name).read_text().split())
+        assert "nearest-neighbour baseline" in text, name
+        assert "`test/nearest_neighbour_baseline.json`" in text, name
+
+
+def test_croissant_lists_every_file_with_the_manifest_checksums(release):
+    out, manifest = release["out"], release["manifest"]
+    doc = json.loads((out / "croissant.json").read_text())
+    assert doc["conformsTo"] == [
+        "http://mlcommons.org/croissant/1.0",
+        "http://mlcommons.org/croissant/RAI/1.0",
+    ]
+    assert doc["version"] == ri.DATASET_VERSION
+    assert doc["license"] == ri.DATA_LICENSE_URL
+    dist = {d["contentUrl"]: d for d in doc["distribution"]}
+    assert set(dist) == set(manifest["files"]) - {"croissant.json"}
+    for rel, d in dist.items():
+        assert d["@type"] == "cr:FileObject"
+        assert d["sha256"] == manifest["files"][rel]["sha256"], rel
+        assert d["contentSize"] == f"{manifest['files'][rel]['bytes']} B", rel
+    assert dist["trizod_dataset.parquet"]["encodingFormat"] == "application/x-parquet"
+    assert "croissant.json" in manifest["files"]
+    assert manifest["croissant"]["distribution_excludes"] == [
+        "croissant.json",
+        "MANIFEST.json",
+        "SHA256SUMS",
+    ]
+
+
+def test_croissant_describes_every_parquet_column_and_the_splits(release):
+    import pyarrow.parquet as pq
+
+    out = release["out"]
+    doc = json.loads((out / "croissant.json").read_text())
+    sets = {rs["@id"]: rs for rs in doc["recordSet"]}
+    assert set(sets) == {"splits", "chains"}
+    names = pq.read_schema(out / "trizod_dataset.parquet").names
+    fields = sets["chains"]["field"]
+    assert [f["name"] for f in fields] == names
+    by = {f["name"]: f for f in fields}
+    assert by["gscores"]["dataType"] == "sc:Float" and by["gscores"]["repeated"]
+    assert by["mask"]["dataType"] == "sc:Boolean" and by["mask"]["repeated"]
+    assert by["length"]["dataType"] == "sc:Integer"
+    assert "repeated" not in by["sequence"]
+    assert by["split"]["references"] == {"field": {"@id": "splits/name"}}
+    assert [s["name"] for s in by["xrefs"]["subField"]][:2] == ["db", "accession"]
+    assert "G-score" in by["gscores"]["description"]
+    for f in fields:
+        src = f.get("source") or f["subField"][0]["source"]
+        assert src["fileObject"] == {"@id": "trizod_dataset.parquet"}
+        assert src["extract"] == {"column": f["name"]}
+    split_values = {r["splits/name"]: r["splits/url"] for r in sets["splits"]["data"]}
+    assert split_values["train"] == "cr:TrainingSplit"
+    assert split_values["test_trizod"] == "cr:TestSplit"
+    assert set(split_values) == {
+        "train",
+        "redundant",
+        "test_trizod",
+        "test_retired",
+        "test_chezod117",
+        "excluded",
+    }
+    for key in (
+        "rai:dataCollection",
+        "rai:dataPreprocessingProtocol",
+        "rai:dataLimitations",
+        "rai:dataUseCases",
+        "rai:dataReleaseMaintenancePlan",
+    ):
+        assert doc[key], key
+    assert any("BMRB" in s for s in [doc["rai:dataCollection"]])
+    assert any(s.startswith("Score") for s in doc["rai:dataPreprocessingProtocol"])
+    assert any(s.startswith("Intended.") for s in doc["rai:dataUseCases"])
+    assert "test set may only shrink" in doc["rai:dataReleaseMaintenancePlan"]
+
+
+def test_croissant_loads_with_mlcroissant(release):
+    mlc = pytest.importorskip("mlcroissant")
+    ds = mlc.Dataset(str(release["out"] / "croissant.json"))
+
+    def text(v):
+        return v.decode() if isinstance(v, bytes) else v
+
+    recs = list(ds.records("chains"))
+    assert len(recs) == len(CHAINS)
+    assert {text(r["chains/id"]) for r in recs} == set(CHAINS)
+    assert all(len(r["chains/gscores"]) == r["chains/length"] for r in recs)
+    splits = {text(r["splits/name"]) for r in ds.records("splits")}
+    assert "test_trizod" in splits
 
 
 def test_known_issue_inputs_ship_under_their_role(tmp_path):

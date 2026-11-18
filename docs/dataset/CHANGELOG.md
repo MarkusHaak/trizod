@@ -123,6 +123,12 @@ reliability cut.
 - `datasheet.md`, `columns.md`, `class_balance.tsv`, `bmrb_files.sha256`,
   `MANIFEST.json` (now over every file, with the scoring commit beside the
   build commit) and `SHA256SUMS`.
+- `test/test_residual_similarity.tsv` and `test/nearest_neighbour_baseline.json`:
+  each test chain's best alignment to a tolerant training representative at any
+  identity, and a nearest-neighbour label-transfer baseline to report a model
+  against.
+- `croissant.json`: MLCommons Croissant 1.0 metadata with the Responsible-AI
+  extension (every file with SHA-256, the Parquet's columns, the splits).
 
 ### Fixes
 
@@ -207,9 +213,7 @@ In short:
 - **Reviewed chains.** {{reviewed_issues}}
 - **Residual similarity**: homology is controlled at the searched rule, not
   eliminated. {{remote_homologs}}. {{shared_accessions}}. Resampling unit:
-  {{test_components}}. {{threshold_fit_retired}}.
-- **Croissant**: no `croissant.json` (ML-dataset metadata) ships yet; it is
-  deferred to a later release.
+  {{test_components}}. {{nearest_neighbour}}. {{threshold_fit_retired}}.
 - **Shift table**: a few shift keys repeat, the same value under two
   ambiguity codes or a partial-occupancy pair with two values; the
   `trizod_shifts.parquet` metadata (`key_uniqueness`, `counts`) names them.

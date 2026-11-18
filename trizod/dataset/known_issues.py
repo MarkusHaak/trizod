@@ -811,6 +811,10 @@ RESIDUE_LEVEL_CLASSES = (
     "nonstandard_letter_in_sequence",
     "nonstandard_residue",
 )
+#: Residue-level classes about labelled residues: a listed chain measured with
+#: none gets no known-issue row (the audit table counted residues outside the
+#: span, labelled or not; release validation 2026-11-17d, G39/G43).
+LABELLED_RESIDUE_CLASSES = ("outside_uniprot_span_sifts",)
 CONSTRUCT_CLASS_DESCRIPTIONS = {
     "deut_uniform_2H": "uniformly 2H-labelled protein (isotope shifts not corrected)",
     "heme_spin_state_dependent": "heme protein whose shifts depend on the heme "
@@ -922,12 +926,30 @@ def construct_caveats(
         bits.append(f"listed by {CONSTRUCT_INPUT}")
         return "; ".join(bits)
 
-    out_rows = [
-        (cid, f"construct_{cls}", evidence(cls, cid))
-        for cls, ids in sorted(by_class.items())
-        for cid in sorted(ids, key=_id_key)
-    ]
-    return {"summary": summary, "unknown": sorted(unknown), "rows": out_rows}
+    def unaffected(cls, cid):
+        counts = residue_counts.get(cls)
+        return (
+            cls in LABELLED_RESIDUE_CLASSES
+            and counts is not None
+            and cid in counts
+            and counts[cid][0] == 0
+        )
+
+    out_rows, dropped = [], defaultdict(list)
+    for cls, ids in sorted(by_class.items()):
+        for cid in sorted(ids, key=_id_key):
+            if unaffected(cls, cid):
+                dropped[cls].append(cid)
+            else:
+                out_rows.append((cid, f"construct_{cls}", evidence(cls, cid)))
+    for cls, ids in dropped.items():
+        summary[cls]["listed_without_labelled_residue"] = len(ids)
+    return {
+        "summary": summary,
+        "unknown": sorted(unknown),
+        "rows": out_rows,
+        "dropped": dict(sorted(dropped.items())),
+    }
 
 
 def nonstandard_counts(rows: list[dict]) -> dict:
@@ -994,7 +1016,17 @@ def construct_text(caveats: dict | None, nonstd: dict) -> str:
                     f"{_fmt(v['assessed_chains'])} assessed chains, in "
                     f"{_fmt(v['affected_chains'])} chains"
                 )
-            parts.append(f"`{cls}` (residue level): " + ", ".join(bits))
+            none = d.get("listed_without_labelled_residue")
+            parts.append(
+                f"`{cls}` (residue level): "
+                + ", ".join(bits)
+                + (
+                    f" ({_fmt(none)} listed chains have no labelled residue "
+                    "there and no known-issue row)"
+                    if none
+                    else ""
+                )
+            )
         else:
             for g in groups:
                 bits.append(f"{g} {_fmt(d[g]['chains'])} chains")

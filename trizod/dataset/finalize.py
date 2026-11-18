@@ -27,6 +27,16 @@ package``), the shift table and the BMRB snapshot, and writes into ``--out``::
                                     accession, with the decision (E22)
     test/shared_construct_review.tsv
                                     the reviewed shared-construct pairs (E26)
+    test/test_residual_similarity.tsv
+                                    each test chain's best alignment to a
+                                    tolerant training representative (E27)
+    test/nearest_neighbour_baseline.json
+                                    best-hit identity histograms and the
+                                    nearest-neighbour label-transfer baseline
+                                    at E <= 1e-3 and >= 27 bits (E27)
+    croissant.json                  MLCommons Croissant 1.0 + RAI 1.0 metadata:
+                                    every file with SHA-256, the Parquet's
+                                    columns, the splits (G41)
     class_balance.tsv               per-split label distribution (F33)
     known_issues.tsv                per-chain known issues and changes
                                     (chain_id, issue, evidence; G39)
@@ -95,7 +105,13 @@ from pathlib import Path
 
 from trizod import paths as repo_paths
 from trizod.dataset import class_balance as cb
-from trizod.dataset import construct_span, deploy_fasta, export_jsonl, testset_crosswalk
+from trizod.dataset import (
+    construct_span,
+    croissant,
+    deploy_fasta,
+    export_jsonl,
+    testset_crosswalk,
+)
 from trizod.dataset import known_issues as ki
 from trizod.dataset import release_info as ri
 from trizod.dataset import residual_similarity as rsim
@@ -813,6 +829,10 @@ def changes_and_issues(
         caveats = ki.construct_caveats(construct_caveats, rows, residue_counts)
         issues += caveats["rows"]
         assessed["construct_caveats"] = Path(construct_caveats).name
+        if caveats["dropped"]:
+            assessed["construct_caveats_listed_without_labelled_residue"] = {
+                cls: len(ids) for cls, ids in caveats["dropped"].items()
+            }
     values["construct_caveats"] = ki.construct_text(
         caveats, ki.nonstandard_counts(rows)
     )
@@ -883,12 +903,16 @@ def residual_outputs(rows: list[dict], test_out: Path, constructs: dict) -> dict
         "rule: the release gate should have failed",
     )
     remote = rsim.remote_homologs(rows)
+    nn = rsim.nearest_neighbour(rows, remote=set(remote["best"]))
+    rsim.write_nn_table(nn["table"], test_out / Path(rsim.NN_TABLE).name)
+    _json(test_out / Path(rsim.NN_SUMMARY).name, nn["summary"])
     _copy(constructs["path"], test_out / "shared_construct_review.tsv")
     values = {
         "n_test_components": _fmt(comp["n"]),
         "test_components": rsim.components_text(comp, n_test),
         "shared_accessions": rsim.shared_accession_text(acc_summary),
         "remote_homologs": rsim.remote_homolog_text(remote),
+        "nearest_neighbour": rsim.nn_text(nn["summary"]),
         "shared_constructs": constructs["text"],
     }
     issue_rows = (
@@ -918,6 +942,22 @@ def residual_outputs(rows: list[dict], test_out: Path, constructs: dict) -> dict
             "test_chains_searched": remote["n_test"],
             "scored_residues_in_hit_chains": remote["hit_scored"],
             "scored_residues": remote["n_scored"],
+        },
+        "nearest_neighbour": {
+            "table": rsim.NN_TABLE,
+            "summary": rsim.NN_SUMMARY,
+            "search": nn["summary"]["search"],
+            "hit_criteria": [rsim.criterion_label(c) for c in rsim.NN_CRITERIA],
+            "test_chains_aligned": nn["summary"]["any_alignment"]["chains"],
+            "best_identity_median": nn["summary"]["any_alignment"][
+                "best_identity_median"
+            ],
+            "baseline_auc": {
+                rsim.criterion_label(c): nn["summary"]["baseline"][c]["all_residues"][
+                    f"auc_G>={ri.DISORDER_CUT:g}"
+                ]
+                for c in rsim.NN_CRITERIA
+            },
         },
         "shared_constructs": {
             "file": "test/shared_construct_review.tsv",
@@ -1536,7 +1576,13 @@ def assemble(
     _copy(root / "CITATION.cff", out / "CITATION.cff")
     _copy(root / ".zenodo.json", out / "zenodo.json")
 
-    # 6. MANIFEST + checksums
+    # 6. Croissant (G41): every file written so far, the Parquet's columns,
+    # the splits and the datasheet's RAI answers
+    croissant_path = croissant.write(out, version=version, doi=doi)
+    problems = croissant.check(croissant_path)
+    _check(not problems, f"croissant.json does not match the deposit: {problems[:5]}")
+
+    # 7. MANIFEST + checksums
     files = {
         p.relative_to(out).as_posix(): file_entry(p)
         for p in sorted(out.rglob("*"))
@@ -1616,6 +1662,12 @@ def assemble(
         },
         "known_issues": issues_summary,
         "validation": validation_entry,
+        "croissant": {
+            "file": croissant.CROISSANT,
+            "conforms_to": list(croissant.CONFORMS_TO),
+            "distribution_excludes": list(croissant.SELF_DESCRIBING),
+            "record_sets": ["splits", "chains"],
+        },
         "n_files": len(files) + 2,  # + MANIFEST.json, SHA256SUMS
         "total_bytes": sum(f["bytes"] for f in files.values()),
         "total_bytes_covers": TOTAL_BYTES_COVERS,

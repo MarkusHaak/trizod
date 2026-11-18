@@ -131,7 +131,8 @@ continuous G-score; selecting cleaner subsets by tier; benchmarking on
 - Report pooled and per-chain Spearman, AUC at G ≥ {{cut_disordered}} on all,
   confident-only and k ≥ 10 residues, resampling the {{n_test_components}} test
   components (`test/TriZOD_test_set_components.tsv`) for confidence intervals;
-  report also on the test chains without a remote homologue in training.
+  report also on the test chains without a remote homologue in training, and
+  next to the nearest-neighbour baseline (`test/nearest_neighbour_baseline.json`).
 - Compare with an earlier model only on the clean subset (README, "Earlier test
   sets are not comparable"); CheZOD-trained predictors on the test chains whose
   `chezod1325_overlap` / `chezod1174_overlap` is false.
@@ -165,7 +166,8 @@ denaturants, high pressure or in membrane mimetics.
   paramagnetic samples and non-standard residues. {{construct_caveats}}
 - Homology between training and test is controlled at {{leakage_rule}}, as
   searched (every alignment mmseqs2 reports), not eliminated: {{shared_accessions}}.
-  {{remote_homologs}}. {{shared_constructs}}. Nearly every sequence is in the
+  {{remote_homologs}}. {{shared_constructs}}. {{nearest_neighbour}}. Nearly
+  every sequence is in the
   corpora protein language models are pretrained on.
 - **Offsets come in three units.** `off_<atom>_sigma` is in multiples of the
   per-atom POTENCI RMSD (`--max-offset` is compared against it),
@@ -190,7 +192,9 @@ downloaded; `CITATION.cff`). Data: {{data_license}} ({{data_license_url}}).
 Code: {{code_license}}, {{repository}}. {{bmrb_acknowledgement}}
 
 Integrity: `MANIFEST.json` lists every file with SHA-256, size and counts;
-`sha256sum -c SHA256SUMS` checks a download. Scored by TriZOD
+`sha256sum -c SHA256SUMS` checks a download. `croissant.json` describes the deposit in
+MLCommons Croissant 1.0 with the Responsible-AI extension (files with SHA-256,
+the Parquet's columns, the splits, and sections 3–8 of this datasheet). Scored by TriZOD
 `{{scoring_commit}}`; Parquet built and deposit assembled by TriZOD
 `{{code_commit}}`.
 

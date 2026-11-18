@@ -443,3 +443,34 @@ def test_nonstandard_letters_are_counted_in_the_residues_of_their_chains():
     assert nonstd["train_chain_residues"] == 5
     text = ki.construct_text(None, nonstd)
     assert "2 X/U/Z positions (1 scored) in the 5 residues of these chains" in text
+
+
+def test_a_listed_chain_without_labelled_residues_outside_the_span_gets_no_row(
+    tmp_path,
+):
+    rows = [
+        _row("1_1_1_1", "train", "AAAAAAAAAA", [True] * 10, "tolerant"),
+        _row("2_1_1_1", "train", "AAAAAAAAAA", [True] * 10, "tolerant"),
+        _row("3_1_1_1", "redundant", "AAAAAAAAAA", [True] * 10),
+    ]
+    tsv = tmp_path / "caveats.tsv"
+    tsv.write_text(
+        "class\tid\n"
+        "outside_uniprot_span_sifts\t1_1_1_1\n"
+        "outside_uniprot_span_sifts\t2_1_1_1\n"
+        "outside_uniprot_span_sifts\t3_1_1_1\n"
+    )
+    span = {"1_1_1_1": (2, 10), "2_1_1_1": (0, 10)}  # 3_1_1_1 not assessed
+    got = ki.construct_caveats(
+        tsv, rows, residue_counts={"outside_uniprot_span_sifts": span}
+    )
+    listed = {c for c, _, _ in got["rows"]}
+    assert listed == {"1_1_1_1", "3_1_1_1"}
+    assert got["dropped"] == {"outside_uniprot_span_sifts": ["2_1_1_1"]}
+    summary = got["summary"]["outside_uniprot_span_sifts"]
+    assert summary["listed_without_labelled_residue"] == 1
+    assert summary["training"]["affected_chains"] == 1
+    text = ki.construct_text(got, ki.nonstandard_counts(rows))
+    assert "1 listed chains have no labelled residue there" in text
+    ev = {c: e for c, _, e in got["rows"]}
+    assert "not assessed at residue level" in ev["3_1_1_1"]
