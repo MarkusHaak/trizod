@@ -60,12 +60,9 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.21381698
     description: "TriZOD dataset v0.3.0"
-  # v0.4.0: replace the placeholder below with the version DOI reserved on the
-  # Zenodo draft, then re-run `trizod dataset finalize` (it warns while the
-  # placeholder is here and records no version DOI in MANIFEST.json)
   - type: doi
-    value: 10.5281/zenodo.RESERVE-AT-DRAFT
-    description: "TriZOD dataset v0.4.0 (placeholder until the Zenodo draft reserves its DOI)"
+    value: 10.5281/zenodo.24346183
+    description: "TriZOD dataset v0.4.0"
 license: CC-BY-4.0
 date-released: "2026-11-18"
 version: "0.4.0"

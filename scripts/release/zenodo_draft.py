@@ -2,7 +2,7 @@
 
 It never publishes: publishing stays a deliberate click on the draft page.
 
-The token is read from the macOS keychain (service ``zenodo-token``) or from
+The token is read from the macOS keychain (service ``zenodo-token``), else from
 $ZENODO_TOKEN, and is never printed. Create it at zenodo.org > Applications >
 Personal access tokens with the scopes deposit:write and deposit:actions, then store it:
 
@@ -14,6 +14,9 @@ Usage:
     # new version of the latest published record, metadata from zenodo.json, upload all files
     uv run --with requests python scripts/release/zenodo_draft.py new-version \\
         --record 21381698 --files data/release/zenodo-upload-v0.4.0 --dry-run
+    # fill an existing draft: metadata from zenodo.json, then all files (or --metadata-only)
+    uv run --with requests python scripts/release/zenodo_draft.py fill \\
+        --draft <deposition id> --files data/release/zenodo-upload-v0.4.0 [--metadata-only]
     # replace some files in an existing draft (e.g. after patching the reserved DOI)
     uv run --with requests python scripts/release/zenodo_draft.py replace-files \\
         --draft <deposition id> data/release/zenodo-upload-v0.4.0/CITATION.cff ...
@@ -30,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 API = "https://zenodo.org/api"
@@ -52,9 +56,8 @@ METADATA_KEYS = (
 
 
 def _token() -> str:
-    tok = os.environ.get("ZENODO_TOKEN")
-    if tok:
-        return tok.strip()
+    # The keychain wins: a ZENODO_TOKEN left in the shell profile for another
+    # project may lack the rights on this record (it answered 403).
     try:
         out = subprocess.run(
             ["security", "find-generic-password", "-s", "zenodo-token", "-w"],
@@ -62,13 +65,17 @@ def _token() -> str:
             text=True,
             check=True,
         )
+        return out.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        sys.exit(
-            "No Zenodo token: store one with "
-            '`security add-generic-password -a "$USER" -s zenodo-token -w` '
-            "or set ZENODO_TOKEN."
-        )
-    return out.stdout.strip()
+        pass
+    tok = os.environ.get("ZENODO_TOKEN")
+    if tok:
+        return tok.strip()
+    sys.exit(
+        "No Zenodo token: store one with "
+        '`security add-generic-password -a "$USER" -s zenodo-token -w` '
+        "or set ZENODO_TOKEN."
+    )
 
 
 def _session():
@@ -83,6 +90,27 @@ def _check(r, what: str):
     if not r.ok:
         sys.exit(f"{what} failed: HTTP {r.status_code} {r.text[:500]}")
     return r.json() if r.content else {}
+
+
+def _call(send, what: str, tries: int = 7):
+    """send() -> response; retried on connection errors and HTTP 5xx (Zenodo overload)."""
+    import requests
+
+    err = ""
+    for i in range(tries):
+        try:
+            r = send()
+        except requests.RequestException as e:
+            err = f"{type(e).__name__}: {e}"[:200]
+        else:
+            if r.status_code < 500:
+                return _check(r, what)
+            err = f"HTTP {r.status_code}"
+        if i < tries - 1:
+            wait = min(120, 10 * 2**i)
+            print(f"  {what}: {err}; retry in {wait} s", flush=True)
+            time.sleep(wait)
+    sys.exit(f"{what} failed after {tries} tries: {err}")
 
 
 def _md5(path: Path) -> str:
@@ -113,7 +141,7 @@ def load_metadata(files_dir: Path, tag_url: str | None) -> dict:
 
 
 def show(s, draft: int) -> dict:
-    d = _check(s.get(f"{API}/deposit/depositions/{draft}"), "read draft")
+    d = _call(lambda: s.get(f"{API}/deposit/depositions/{draft}"), "read draft")
     md = d.get("metadata", {})
     pre = md.get("prereserve_doi", {})
     print(f"draft {d['id']}: state {d.get('state')}, submitted {d.get('submitted')}")
@@ -132,12 +160,15 @@ def upload(s, draft: dict, paths: list[Path], dry: bool) -> None:
     bucket = draft["links"]["bucket"]
     for p in paths:
         size = p.stat().st_size
-        print(f"  upload {p.name} ({size / 1e6:.1f} MB)")
+        print(f"  upload {p.name} ({size / 1e6:.1f} MB)", flush=True)
         if dry:
             continue
-        with p.open("rb") as fh:
-            r = s.put(f"{bucket}/{p.name}", data=fh)
-        got = _check(r, f"upload {p.name}")
+
+        def send(p=p):
+            with p.open("rb") as fh:
+                return s.put(f"{bucket}/{p.name}", data=fh)
+
+        got = _call(send, f"upload {p.name}")
         want = _md5(p)
         if got.get("checksum", "").split(":")[-1] != want:
             sys.exit(
@@ -157,21 +188,33 @@ def new_version(s, record: int, files_dir: Path, tag_url: str | None, dry: bool)
         upload(s, {"links": {"bucket": "<bucket>"}}, paths, dry=True)
         print("dry run: nothing sent")
         return
-    r = _check(
-        s.post(f"{API}/deposit/depositions/{record}/actions/newversion"), "new version"
+    # The records API creates the version (the legacy newversion action answers 403
+    # for a token without deposit:actions); the legacy deposit API fills it.
+    r = _call(lambda: s.post(f"{API}/records/{record}/versions"), "new version")
+    fill(s, int(r["id"]), files_dir, tag_url, upload_files=True)
+
+
+def fill(s, draft_id: int, files_dir: Path, tag_url: str | None, upload_files: bool):
+    """Set the draft's metadata from zenodo.json; with upload_files, replace all its files."""
+    md = load_metadata(files_dir, tag_url)
+    draft = _call(lambda: s.get(f"{API}/deposit/depositions/{draft_id}"), "read draft")
+    if draft.get("submitted"):
+        sys.exit("that deposition is published; files can only change in a new version")
+    if isinstance(draft["metadata"].get("prereserve_doi"), dict):
+        md.pop("prereserve_doi")  # already reserved; keep that DOI
+    draft = _call(
+        lambda: s.put(draft["links"]["self"], json={"metadata": md}), "set metadata"
     )
-    draft_url = r.get("links", {}).get("latest_draft") or r["links"]["self"]
-    draft = _check(s.get(draft_url), "read new draft")
-    for f in draft.get("files", []):
-        _check(s.delete(f["links"]["self"]), f"delete inherited {f['filename']}")
-    draft = _check(s.put(draft["links"]["self"], json={"metadata": md}), "set metadata")
-    upload(s, draft, paths, dry=False)
+    if upload_files:
+        for f in draft.get("files", []):
+            _call(lambda f=f: s.delete(f["links"]["self"]), f"delete {f['filename']}")
+        upload(s, draft, sorted(p for p in files_dir.iterdir() if p.is_file()), False)
     show(s, draft["id"])
     print("Draft saved, NOT published. Review it on the edit page, then publish there.")
 
 
 def replace_files(s, draft_id: int, paths: list[Path], dry: bool):
-    d = _check(s.get(f"{API}/deposit/depositions/{draft_id}"), "read draft")
+    d = _call(lambda: s.get(f"{API}/deposit/depositions/{draft_id}"), "read draft")
     if d.get("submitted"):
         sys.exit("that deposition is published; files can only change in a new version")
     names = {p.name for p in paths}
@@ -179,7 +222,9 @@ def replace_files(s, draft_id: int, paths: list[Path], dry: bool):
         if f["filename"] in names:
             print(f"  delete {f['filename']}")
             if not dry:
-                _check(s.delete(f["links"]["self"]), f"delete {f['filename']}")
+                _call(
+                    lambda f=f: s.delete(f["links"]["self"]), f"delete {f['filename']}"
+                )
     upload(s, d, paths, dry)
     if not dry:
         show(s, draft_id)
@@ -199,6 +244,11 @@ def main(argv=None):
     b.add_argument("--dry-run", action="store_true")
     c = sub.add_parser("show")
     c.add_argument("--draft", type=int, required=True)
+    f = sub.add_parser("fill")
+    f.add_argument("--draft", type=int, required=True)
+    f.add_argument("--files", type=Path, required=True)
+    f.add_argument("--tag-url", default=None)
+    f.add_argument("--metadata-only", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "new-version" and args.dry_run:
         new_version(None, args.record, args.files, args.tag_url, dry=True)
@@ -206,6 +256,8 @@ def main(argv=None):
     s = _session()
     if args.cmd == "new-version":
         new_version(s, args.record, args.files, args.tag_url, dry=False)
+    elif args.cmd == "fill":
+        fill(s, args.draft, args.files, args.tag_url, not args.metadata_only)
     elif args.cmd == "replace-files":
         replace_files(s, args.draft, args.paths, args.dry_run)
     else:
