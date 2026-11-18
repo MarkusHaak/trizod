@@ -432,9 +432,8 @@ ensemble, the ionic-strength cap is a stated convention, and the 273 K rule repa
 bad metadata. Each leaves a provenance column, so a chain that drops to a looser tier
 stays identifiable, and every lost chain stays in the release at a looser tier. The
 tier sizes these rules produce are not typed here: each release's `CHANGELOG.md`
-states its tier counts and the tier moves against the previous build by rule, computed
-by `trizod dataset finalize` (`--previous-build`), and its `known_issues.tsv` lists
-every moved chain.
+states its tier counts beside those of the previous published version, and the
+release chains each rule flags, computed by `trizod dataset finalize`.
 
 ### High pressure — `max-pressure-bar` (tolerant, moderate, strict: 400 bar)
 

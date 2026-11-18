@@ -32,10 +32,9 @@ The earlier sets (:func:`default_set_specs`):
 * ``trizod2024_348`` -- the 2024 figshare release test set
   (10.6084/m9.figshare.25792035), "Trizod348" in the UdonPred preprint; local
   copy ``data/external/chezod117/TriZOD_test_set.fasta``;
-* ``v0.2.0_344`` / ``v0.3.0_365`` -- the Zenodo releases' ``test_trizod`` rows;
-* ``pin_2026-07-13_342``, ``pin_2026-08-11_460``, ``pin_2026-11-10_452`` -- the
-  committed pin ``trizod/dataset/pinned/TriZOD_test_set.fasta`` at the commit
-  that wrote each (v0.3.0's 365 is the pin of 2026-07-14, identical by ID).
+* ``v0.2.0_344`` / ``v0.3.0_365`` -- the Zenodo releases' ``test_trizod`` rows.
+
+Unpublished intermediate pins are left out; ``--set NAME=git:REV:PATH`` adds one.
 
 Usage
 -----
@@ -72,7 +71,6 @@ SPLIT_STATUS = {
 STATUS_PRIORITY = ("test", "chezod117", "train", "redundant", "retired", "excluded")
 STATUSES = (*STATUS_PRIORITY, "absent")
 FINAL_SET = "final"
-PIN_PATH = "trizod/dataset/pinned/TriZOD_test_set.fasta"
 MATCH_RULE = (
     "exact full-length sequence (case-insensitive); a lower bound on overlap "
     "under the 30 %/80 % leakage rule (homologues, tagged constructs and "
@@ -151,10 +149,9 @@ def describe_source(spec: str, repo: Path | None = None) -> dict:
 
 
 def default_set_specs(root) -> list[tuple[str, str, str]]:
-    """``(name, source spec, description)`` of every earlier TriZOD test set.
+    """``(name, source spec, description)`` of every earlier published TriZOD test set.
 
-    ``root`` holds ``data/`` (the main checkout; a worktree has none). The pin
-    revisions are commits of this repository.
+    ``root`` holds ``data/`` (the main checkout; a worktree has none).
     """
     root = Path(root)
     rel = root / "data" / "release"
@@ -171,24 +168,9 @@ def default_set_specs(root) -> list[tuple[str, str, str]]:
             "Zenodo v0.2.0 (2026-06), test_trizod rows",
         ),
         (
-            "pin_2026-07-13_342",
-            f"git:0b0b151:{PIN_PATH}",
-            "first committed pin (post-fix rebuild of 2026-07-13)",
-        ),
-        (
             "v0.3.0_365",
             f"parquet:{rel / 'trizod-dataset-v0.3.0' / 'trizod_dataset.parquet'}",
-            "Zenodo v0.3.0 (2026-07), test_trizod rows; = pin 7bff12c of 2026-07-14",
-        ),
-        (
-            "pin_2026-08-11_460",
-            f"git:cc5b006:{PIN_PATH}",
-            "seeded redraw from the final strict pool (2026-08-11)",
-        ),
-        (
-            "pin_2026-11-10_452",
-            f"git:0dfe124:{PIN_PATH}",
-            "trim to the chains that still resolve (2026-11-10)",
+            "Zenodo v0.3.0 (2026-07), test_trizod rows",
         ),
     ]
 

@@ -178,16 +178,9 @@ def test_parquet_source(tmp_path):
     assert cw.load_source(f"parquet:{p}") == {"a": "AA", "c": "GG"}
 
 
-def test_default_specs_name_every_earlier_set(tmp_path):
+def test_default_specs_name_every_published_set(tmp_path):
     names = [s[0] for s in cw.default_set_specs(tmp_path)]
-    assert names == [
-        "trizod2024_348",
-        "v0.2.0_344",
-        "pin_2026-07-13_342",
-        "v0.3.0_365",
-        "pin_2026-08-11_460",
-        "pin_2026-11-10_452",
-    ]
+    assert names == ["trizod2024_348", "v0.2.0_344", "v0.3.0_365"]
 
 
 def test_run_writes_outputs(sets, release, tmp_path):

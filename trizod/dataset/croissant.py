@@ -340,8 +340,10 @@ def describe_file(rel: str) -> str:
         "disorder_trizod.fasta": "SETH/ODiNPred-style FASTA view: tolerant "
         "training set and the test set, G-score targets (999.0 where masked)",
         "disorder_trizod.summary.json": "Counts of disorder_trizod.fasta",
-        "known_issues.tsv": "Every chain with a known issue or a change named "
-        "in the CHANGELOG, with its evidence",
+        "known_issues.tsv": "Every chain with a known issue, with its evidence",
+        "test/test_residual_similarity.tsv": "Each test chain's closest tolerant "
+        "training representative at any identity (identity, coverage, bit "
+        "score): how close the test set comes to training below the leakage rule",
         "class_balance.tsv": "Per-split label distribution",
         "bmrb_files.sha256": "SHA-256 of every BMRB entry file of the snapshot",
         "columns.md": "The column dictionary of trizod_dataset.parquet",

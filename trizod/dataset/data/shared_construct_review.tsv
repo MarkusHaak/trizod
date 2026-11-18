@@ -1,6 +1,5 @@
 # Test chains that share a construct with training once expression tags are set
-# aside: the reviewed outcome of every candidate pair (release validation
-# 2026-11-17c, check E26; decision of 17 November 2026).
+# aside: the reviewed outcome of every candidate pair.
 #
 # Criterion (trizod/dataset/shared_constructs.py, docs/dataset/dataset-construction.md):
 # a pinned test chain is retired as shared_construct when, after the expression
@@ -12,10 +11,8 @@
 # Candidates: every test x training pair whose stripped sequences share an
 # identical run of >= 30 residues (source identical_run; an exhaustive 30-mer
 # scan), and the 35 pairs on 23 test chains that meet the leakage rule only
-# after stripping (source tag_stripped_homology: the union of the auditor's 34
-# pairs and the verifier's 34, which differ by one chain, 5764 vs 15457;
-# leakage/verify/out/v_e26_stripped_pairs.tsv). Computed on the 2026-11-17c
-# release Parquet with `python -m trizod.dataset.shared_constructs`; finalize
+# after stripping (source tag_stripped_homology). Computed on the release
+# Parquet with `python -m trizod.dataset.shared_constructs`; finalize
 # re-derives every row from the release it ships and refuses a stale one.
 #
 # test_tags / training_tags: the tags removed; run: longest identical run after
@@ -28,9 +25,8 @@
 # longest other runs are 37 (52143_1_1_1 ~ 53627_1_1_1, 13.7 %) and 34 residues
 # (19777_1_1_1 ~ 50256_1_1_1, 16.8 %), and no tag-stripped homology pair shares
 # more than 6 identical residues. 30007_1_1_1 ~ 50596_1_1_1 meets the leakage
-# rule on an alternative alignment (E20/E22): the training chain 50596_1_1_1 is
-# removed by stage 2 since the search runs with --min-seq-id 0; the test chain
-# stays.
+# rule on an alternative alignment: stage 2 searches with --min-seq-id 0 and
+# removes the training chain 50596_1_1_1; the test chain stays.
 test_id	training_id	source	test_tags	training_tags	run	test_scored	scored_in_run	coverage	outcome
 5764_1_1_1	16444_1_1_1	tag_stripped_homology	-	GB1	4	104	4	0.038	keep
 6081_1_1_1	18880_1_1_1	tag_stripped_homology	-	N-His,N-thrombin	3	157	3	0.019	keep

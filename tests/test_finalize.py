@@ -1,6 +1,5 @@
-"""``trizod dataset finalize`` assembles the deposit (release audit 2026-11-17,
-B4, E21, F33, G35, G36, G38, G39) -- tested end to end on a synthetic bundle,
-with the real docs templates and repository metadata."""
+"""``trizod dataset finalize`` assembles the deposit -- tested end to end on a
+synthetic bundle, with the real docs templates and repository metadata."""
 
 import hashlib
 import json
@@ -15,10 +14,8 @@ from trizod.dataset import shared_constructs as sc
 
 from ._release_fixtures import (
     CHAINS,
-    TIERS,
     _seq,
     build_release_parquet,
-    record,
     write_bundle,
     write_results,
     write_shifts,
@@ -49,7 +46,6 @@ EXPECTED_FILES = {
     "test/test_training_shared_accessions.tsv",
     "test/shared_construct_review.tsv",
     "test/test_residual_similarity.tsv",
-    "test/nearest_neighbour_baseline.json",
     "croissant.json",
     "README.md",
     "datasheet.md",
@@ -68,37 +64,11 @@ EXPECTED_FILES = {
 }
 
 
-def write_previous_bundle(bundle, prev):
-    """The synthetic bundle as an earlier build saw it: 1003_1_1_1 was still
-    moderate (the membrane rule moved it), 2003_1_1_1 was strict with other
-    labels (the 273 K rule re-scored it), and 1001_1_1_1's deposited sequence
-    still carried a trailing stop character."""
-    shutil.copytree(bundle, prev)
-    for tier in TIERS:
-        path = prev / "scores" / tier / "scores.json"
-        recs = [json.loads(line) for line in path.read_text().splitlines() if line]
-        ids = {r["ID"] for r in recs}
-        if tier == "moderate" and "1003_1_1_1" not in ids:
-            recs.append(record("1003_1_1_1", CHAINS["1003_1_1_1"][1]))
-        if tier in ("moderate", "strict") and "2003_1_1_1" not in ids:
-            recs.append(record("2003_1_1_1", CHAINS["2003_1_1_1"][1]))
-        for r in recs:
-            if r["ID"] == "2003_1_1_1":
-                r["gscores"] = [
-                    None if g is None else round(abs(g - 0.4), 4) for g in r["gscores"]
-                ]
-            if r["ID"] == "1001_1_1_1":
-                r["seq"] += "*"
-                r["gscores"] = r["gscores"][:-1] + [0.5, None]
-        path.write_text("".join(json.dumps(r) + "\n" for r in recs))
-    return prev
-
-
 @pytest.fixture(scope="module")
 def inputs(tmp_path_factory):
     root = tmp_path_factory.mktemp("inputs")
     bundle = write_bundle(root / "bundle")
-    snapshot = write_snapshot(root / "bmrb_entries_2026-11-11")
+    snapshot = write_snapshot(root / "bmrb_entries_2026-11-01", day="2026-11-01")
     results = write_results(root / "framework")
     parquet = build_release_parquet(
         bundle,
@@ -130,7 +100,6 @@ def inputs(tmp_path_factory):
     return {
         "root": root,
         "bundle": bundle,
-        "previous": write_previous_bundle(bundle, root / "previous"),
         "snapshot": snapshot,
         "results": results,
         "parquet": parquet,
@@ -138,15 +107,13 @@ def inputs(tmp_path_factory):
         "reviewed": reviewed,
         "validation": validation,
         "construct_review": construct_review,
-        "specs": [("pin_old_3", f"fasta:{earlier}", "an earlier pin")],
+        "specs": [("v0.0.1_3", f"fasta:{earlier}", "an earlier release")],
     }
 
 
 def _assemble(inputs, out, **kw):
     kw.setdefault("reviewed", inputs["reviewed"])
     kw.setdefault("validation", inputs["validation"])
-    kw.setdefault("previous_build", inputs["previous"])
-    kw.setdefault("previous_label", "the synthetic earlier build")
     kw.setdefault("construct_review", inputs["construct_review"])
     return finalize.assemble(
         inputs["parquet"],
@@ -221,7 +188,7 @@ def test_manifest_records_the_release_identity(release, inputs):
     )
     assert tp["rule"] == "disordered iff G >= t"
     snap = m["bmrb_snapshot"]
-    assert snap["name"] == "bmrb_entries_2026-11-11"
+    assert snap["name"] == "bmrb_entries_2026-11-01"
     assert snap["n_entries"] == 3 and snap["n_files"] == 3
     assert snap["entry_list_sha256"] == "a" * 64
     assert snap["files_table_sha256"] == m["files"]["bmrb_files.sha256"]["sha256"]
@@ -288,13 +255,13 @@ def test_rendered_docs_carry_this_builds_identity(release):
     assert "**Rows:** 10 scored protein chains" in readme
     assert "π = 0.186 [0.141, 0.244]" in readme
     assert "| train, tolerant | 3 |" in readme  # class-balance table
-    assert "`pin_old_3` | 3 | 1 | 1 |" in readme  # crosswalk overlap table
+    assert "`v0.0.1_3` | 3 | 1 | 1 |" in readme  # crosswalk overlap table
     assert "Trizod348" in readme and "v0.3.0" in readme
     flat = " ".join(readme.split())
     assert "(1 and 2 of the 2 test chains)" in flat  # CheZOD clean subsets
     changelog = (out / "CHANGELOG.md").read_text()
     assert "| strict | 3,271 | 5 | 1,381 | 1 |" in changelog
-    assert "not assessed" in changelog  # no --pkl-dir, --snapshot-drift, ...
+    assert "not assessed" in changelog  # no --pkl-dir, --ionic-drivers
     assert "`not_strict` (1): it no longer meets the strict tier" in changelog
     assert "`membrane_mimetic_sample`) | moderate, strict | 1 |" in changelog
     assert "1 not_strict" in changelog
@@ -526,7 +493,7 @@ def test_calibration_input_without_the_sequence_group_is_the_same_data(
 
 
 # --------------------------------------------------------------------------- #
-# provenance: no machine paths; changes and known issues (audit 2026-11-17b)
+# provenance: no machine paths; known issues of the released chains
 # --------------------------------------------------------------------------- #
 
 
@@ -538,7 +505,7 @@ def test_no_shipped_file_names_a_path_of_this_machine(release, inputs):
             assert root not in p.read_text(), p
     assert finalize.machine_paths(out, [inputs["root"]]) == []
     cw = json.loads((out / "crosswalk" / "test_set_crosswalk.json").read_text())
-    source = {s["name"]: s["source"] for s in cw["sets"]}["pin_old_3"]
+    source = {s["name"]: s["source"] for s in cw["sets"]}["v0.0.1_3"]
     assert source["spec"] == "fasta:earlier.fasta" and source["path"] == "earlier.fasta"
     deploy = json.loads((out / "disorder_trizod.summary.json").read_text())
     assert deploy["out"] == "disorder_trizod.fasta"
@@ -592,27 +559,57 @@ def _known_issues(out):
     return [tuple(line.split("\t")) for line in lines[1:]]
 
 
-def test_known_issues_lists_tier_moves_rescores_and_sequence_changes(release):
+#: Issue types that compared the release with an earlier, unpublished build or
+#: test-set pin; the deposit describes the release as it is.
+HISTORY_ISSUES = {
+    "tier_move",
+    "snapshot_drift",
+    "sequence_alphabet_change",
+    "pin_trimmed",
+}
+#: Strings that name development history, an internal audit or the dropped
+#: predictor baseline; none may reach the rendered documents.
+HISTORY_STRINGS = (
+    "2026-11-11",
+    "2026-11-17",
+    "previous build",
+    "pin of",
+    "audit 2026",
+    "release validation",
+    "D18",
+    "nearest_neighbour",
+    "nearest-neighbour",
+    "snapshot_drift",
+    "pin_trimmed",
+    "tier_move",
+)
+
+
+def test_known_issues_list_properties_of_the_released_chains(release):
     out = release["out"]
     rows = _known_issues(out)
     by = {(cid, issue): ev for cid, issue, ev in rows}
-    assert by[("1003_1_1_1", "tier_move")] == "left moderate (membrane)"
-    assert "left strict (273 K)" in by[("2003_1_1_1", "tier_move")]
-    assert "left moderate (273 K re-score)" in by[("2003_1_1_1", "tier_move")]
-    assert by[("2003_1_1_1", "temperature_placeholder_rescore")].startswith(
-        "deposited 273 K read as not deposited, re-scored at 298 K: max |ΔG| 0.400"
+    # one row per chain whose deposited 273 K was read as not deposited
+    assert by[("2003_1_1_1", "temperature_placeholder_rescore")] == (
+        "deposited 273 K read as not deposited; scored at the 298 K default"
     )
-    assert by[("1001_1_1_1", "sequence_alphabet_change")].startswith(
-        "sequence 31 → 30 residues"
+    placeholder = {
+        cid
+        for cid, (_, extra) in CHAINS.items()
+        if extra.get("temperature_placeholder")
+    }
+    assert {c for c, i, _ in rows if i == "temperature_placeholder_rescore"} == (
+        placeholder
     )
     assert by[("2001_1_1_1", "reviewed_issue")] == "a reviewed note (split test_trizod)"
-    # the pin provenance's trimmed chains, with their status in this release
-    trimmed = [ev for cid, issue, ev in rows if issue == "pin_trimmed"]
-    assert trimmed and all("now not released" in ev for ev in trimmed)
+    assert not {i for _, i, _ in rows} & HISTORY_ISSUES
     # sorted, unique, and listed in MANIFEST
     assert rows == sorted(set(rows), key=lambda r: (ki_key(r[0]), r[1], r[2]))
     m = release["manifest"]
-    assert m["known_issues"]["by_issue"]["tier_move"] == 2
+    assert m["known_issues"]["by_issue"]["temperature_placeholder_rescore"] == 1
+    assert not set(m["known_issues"]["by_issue"]) & HISTORY_ISSUES
+    assert set(m["known_issues"]["inputs"]) <= {"conditions", "construct_caveats",
+                                                "ionic_drivers"}  # fmt: skip
     assert m["files"]["known_issues.tsv"]["n_rows"] == len(rows)
 
 
@@ -622,17 +619,45 @@ def ki_key(cid):
     return _id_key(cid)
 
 
-def test_changelog_states_the_tier_moves_and_rescore_statistics(release):
+def test_the_changelog_compares_with_the_previous_published_version_only(release):
     text = " ".join((release["out"] / "CHANGELOG.md").read_text().split())
-    assert "Tier moves against the synthetic earlier build" in text
-    assert (
-        "| moderate | 8 → 6 | 2: 273 K re-score 1 (2003_1_1_1), membrane 1 "
-        "(1003_1_1_1) | 0 |"
-    ) in text
-    assert "| strict | 6 → 5 | 1: 273 K 1 (2003_1_1_1) | 0 |" in text
-    assert "1 of the 1 such chains in both builds changed their labels" in text
-    assert "1001_1_1_1 (sequence 31 → 30 residues" in text
+    assert f"Against **v{ri.PREVIOUS_VERSION}** (Zenodo, " in text
+    assert "previous published version" in text
+    assert "Tier moves" not in text and "development builds" not in text
+    assert "`temperature_placeholder_rescore`" in text
     assert "2001_1_1_1: a reviewed note (split test_trizod)" in text
+
+
+def test_the_deposit_describes_the_release_without_development_history(release):
+    """No comparison with an unpublished build, no internal audit name, no
+    predictor baseline: in the rendered documents and known_issues.tsv."""
+    out = release["out"]
+    for name in ("README.md", "datasheet.md", "CHANGELOG.md", "known_issues.tsv"):
+        text = (out / name).read_text()
+        hits = [s for s in HISTORY_STRINGS if s in text]
+        assert not hits, (name, hits)
+    files = _files(out)
+    assert "test/nearest_neighbour_baseline.json" not in files
+    assert "test/TriZOD_test_set.provenance.json" not in files
+    assert not any(f.startswith("known_issues_inputs/snapshot_drift") for f in files)
+    manifest = json.dumps(release["manifest"])
+    for s in ("nearest_neighbour", "snapshot_drift", "previous_build", "pin_trimmed"):
+        assert s not in manifest, s
+
+
+def test_the_readme_crosswalk_table_lists_the_published_sets_only():
+    payload = {
+        "overlap": [
+            {"set": name, "n_sequences": 3, "test": 1, "in_tolerant_training": 1}
+            | dict.fromkeys(
+                ("train_unfiltered", "redundant", "retired", "excluded", "absent"), 0
+            )
+            for name in ("v0.3.0_365", "pin_2026-08-11_460", "final")
+        ]
+    }
+    table = finalize._crosswalk_table(payload)
+    assert "`v0.3.0_365`" in table
+    assert "pin_" not in table and "`final`" not in table
 
 
 def test_retired_reasons_are_explained_generically():
@@ -648,7 +673,7 @@ def test_retired_reasons_are_explained_generically():
 
 
 # --------------------------------------------------------------------------- #
-# release validation 2026-11-17c: residual similarity, VALIDATION.md, inputs
+# residual similarity, VALIDATION.md, inputs
 # --------------------------------------------------------------------------- #
 
 
@@ -693,7 +718,7 @@ def test_residual_similarity_is_documented_and_counted(release):
         "test_components",
         "shared_accessions",
         "remote_homologs",
-        "nearest_neighbour",
+        "closest_training_chain",
         "shared_constructs",
     }
     assert block["shared_accessions"]["pairs_meeting_rule"] == 0
@@ -706,7 +731,7 @@ def test_residual_similarity_is_documented_and_counted(release):
     assert "retired test chains still in the strict tier" in changelog
 
 
-def test_the_nearest_neighbour_baseline_ships_with_its_table(release):
+def test_the_residual_similarity_table_describes_the_split(release):
     out, manifest = release["out"], release["manifest"]
     lines = (out / "test" / "test_residual_similarity.tsv").read_text().splitlines()
     header = lines[0].split("\t")
@@ -714,27 +739,26 @@ def test_the_nearest_neighbour_baseline_ships_with_its_table(release):
     assert {"best_pident", "best_bits", "meets_evalue_1e-3", "meets_27_bits"} <= set(
         header
     )
+    assert not [c for c in header if "transferred" in c]  # no label transfer
     n_test = manifest["parquet"]["split_counts"]["test_trizod"]
     assert len(lines) - 1 == n_test
-    summary = json.loads((out / "test" / "nearest_neighbour_baseline.json").read_text())
-    assert summary["test_chains"] == n_test
+    block = manifest["residual_similarity"]["closest_training_chain"]
+    assert block["table"] == "test/test_residual_similarity.tsv"
+    assert block["test_chains"] == n_test
     assert (
-        summary["training_representatives"]
-        == (manifest["parquet"]["training_representatives"]["tolerant"])
+        block["training_representatives"]
+        == manifest["parquet"]["training_representatives"]["tolerant"]
     )
-    for crit in ("evalue", "bits"):
-        base = summary["baseline"][crit]
-        assert base["all_residues"]["residues"] == sum(
-            int(ln.split("\t")[2]) for ln in lines[1:]
-        )
-        assert set(base) >= {"hit_chains", "all_residues", "transferred_residues"}
-    nn = manifest["residual_similarity"]["nearest_neighbour"]
-    assert nn["table"] == "test/test_residual_similarity.tsv"
-    assert nn["hit_criteria"] == ["E ≤ 0.001", "≥ 27 bits"]
+    meets = {
+        "E ≤ 0.001": sum(ln.split("\t")[9] == "true" for ln in lines[1:]),
+        "≥ 27 bits": sum(ln.split("\t")[10] == "true" for ln in lines[1:]),
+    }
+    assert block["closest_hit_meets"] == meets
+    assert not [k for k in block if "baseline" in k or "auc" in k]
     for name in ("README.md", "datasheet.md", "CHANGELOG.md"):
         text = " ".join((out / name).read_text().split())
-        assert "nearest-neighbour baseline" in text, name
-        assert "`test/nearest_neighbour_baseline.json`" in text, name
+        assert "`test/test_residual_similarity.tsv`" in text, name
+        assert "baseline" not in text, name
 
 
 def test_croissant_lists_every_file_with_the_manifest_checksums(release):
@@ -824,42 +848,61 @@ def test_croissant_loads_with_mlcroissant(release):
 
 
 def test_known_issue_inputs_ship_under_their_role(tmp_path):
-    src = tmp_path / "v_b6_e2e_rows.tsv"
-    src.write_text("id\tlabel_or_tier_change\n1_1_1_1\tTrue\n")
+    src = tmp_path / "caveat_log.tsv"
+    src.write_text("class\tid\ndeut_uniform_2H\t1_1_1_1\n")
     out = tmp_path / "out"
     got = finalize.ship_known_issue_inputs(
-        out, {"snapshot_drift": src, "construct_caveats": None}
+        out, {"construct_caveats": src, "ionic_drivers": None}
     )
     assert got == {
-        "snapshot_drift": {
-            "file": "known_issues_inputs/snapshot_drift.tsv",
-            "source": "v_b6_e2e_rows.tsv",
+        "construct_caveats": {
+            "file": "known_issues_inputs/construct_caveats.tsv",
+            "source": "caveat_log.tsv",
             "sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
         }
     }
-    assert (out / "known_issues_inputs" / "snapshot_drift.tsv").read_text() == (
+    assert (out / "known_issues_inputs" / "construct_caveats.tsv").read_text() == (
         src.read_text()
     )
+    assert set(finalize.KNOWN_ISSUE_INPUTS) == {"construct_caveats", "ionic_drivers"}
 
 
-def test_the_cli_passes_the_round4_options_through(monkeypatch):
+def test_the_cli_passes_the_finalize_options_through(monkeypatch):
     from typer.testing import CliRunner
 
     from trizod.cli.main import app
 
     seen = {}
     monkeypatch.setattr(finalize, "main", lambda argv: seen.setdefault("argv", argv))
+    base = ["dataset", "finalize", "--parquet", "p", "--shifts", "s", "--bundle",
+            "b", "--bmrb-dir", "d", "--out", "o"]  # fmt: skip
     result = CliRunner().invoke(
         app,
-        ["dataset", "finalize", "--parquet", "p", "--shifts", "s", "--bundle", "b",
-         "--bmrb-dir", "d", "--out", "o", "--previous-bmrb-dir", "old",
-         "--xref-sources", "x", "--construct-review", "r"],
-    )  # fmt: skip
+        [*base, "--pkl-dir", "pk", "--xref-sources", "x", "--construct-review", "r"],
+    )
     assert result.exit_code == 0, result.output
     argv = seen["argv"]
     for flag, value in (
-        ("--previous-bmrb-dir", "old"),
+        ("--pkl-dir", "pk"),
         ("--xref-sources", "x"),
         ("--construct-review", "r"),
     ):
         assert argv[argv.index(flag) + 1] == value
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--previous-build", "--previous-label", "--previous-bmrb-dir", "--snapshot-drift"],
+)
+def test_the_history_options_are_gone(flag):
+    """The deposit compares with no earlier build: finalize takes none."""
+    from typer.testing import CliRunner
+
+    from trizod.cli.main import app
+
+    base = ["dataset", "finalize", "--parquet", "p", "--shifts", "s", "--bundle",
+            "b", "--bmrb-dir", "d", "--out", "o"]  # fmt: skip
+    result = CliRunner().invoke(app, [*base, flag, "x"])
+    assert result.exit_code != 0
+    with pytest.raises(SystemExit):
+        finalize.main([*base[2:], flag, "x"])

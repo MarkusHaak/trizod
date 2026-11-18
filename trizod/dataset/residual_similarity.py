@@ -3,8 +3,7 @@
 The leakage rule (>= 30 % identity over >= 80 % of either chain, >= 27 bits,
 every alignment mmseqs reports) separates training from the test sets; it
 controls homology at that level and does not eliminate it. ``trizod dataset
-finalize`` documents what remains below it, from the release Parquet alone
-(release validation 2026-11-17c, checks E22, E24, E25, E26):
+finalize`` documents what remains below it, from the release Parquet alone:
 
 * :func:`test_components` -- the homology components of the TriZOD test set
   under the leakage rule: the unit to resample for confidence intervals
@@ -19,10 +18,10 @@ finalize`` documents what remains below it, from the release Parquet alone
   audit), listed in ``known_issues.tsv`` as ``remote_homolog_profile``;
 * :func:`shared_construct_issues` -- the reviewed tag-stripped / identical-run
   pairs of :mod:`trizod.dataset.shared_constructs` as known issues;
-* :func:`nearest_neighbour` -- each test chain's best alignment to a tolerant
-  training representative at any identity (``test/test_residual_similarity.tsv``)
-  and a nearest-neighbour label-transfer baseline under two hit criteria,
-  E ≤ 1e-3 and ≥ 27 bits (``test/nearest_neighbour_baseline.json``; E27).
+* :func:`closest_training_chains` -- each test chain's closest tolerant
+  training representative at any identity, with identity, coverage, bit score
+  and whether it reaches E ≤ 1e-3 or 27 bits
+  (``test/test_residual_similarity.tsv``): a description of the split.
 
 Every search runs in a temporary directory; only the tables above ship.
 """
@@ -30,7 +29,6 @@ Every search runs in a temporary directory; only the tables above ship.
 from __future__ import annotations
 
 import csv
-import math
 import shutil
 import subprocess
 import tempfile
@@ -38,7 +36,6 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from trizod.dataset import mmseqs as mm
-from trizod.dataset import release_info as ri
 from trizod.dataset import shared_constructs as sc
 from trizod.io.fasta import write_fasta
 
@@ -543,27 +540,23 @@ def shared_construct_issues(review: list[dict], rows: list[dict]) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# best training hit per test chain and the nearest-neighbour baseline (E27)
+# each test chain's closest training chain, at any identity
 # --------------------------------------------------------------------------- #
 
-#: The residual-similarity search (release audit E27): test chains as queries
-#: against the tolerant training representatives, no identity or coverage
-#: floor, prefilter off (every pair is aligned), E ≤ 10, aligned strings kept
-#: for the label transfer.
-NN_EVALUE = 10.0
-NN_FORMAT = (
-    "query,target,pident,evalue,bits,qstart,qend,qlen,tstart,tend,tlen,qaln,taln"
-)
-#: The two hit criteria of the baseline: mmseqs2's default significance and
-#: the leakage rule's bit-score floor.
-NN_SIG_EVALUE = 1e-3
-NN_SIG_BITS = mm.LEAKAGE_MIN_BITS
-NN_CRITERIA = ("evalue", "bits")
+#: The residual-similarity search: test chains as queries against the tolerant
+#: training representatives, no identity or coverage floor, prefilter off
+#: (every pair is aligned), E ≤ 10.
+SEARCH_EVALUE = 10.0
+SEARCH_FORMAT = "query,target,pident,evalue,bits,qstart,qend,qlen,tstart,tend,tlen"
+#: Two significance levels the closest hit is reported at: mmseqs2's default
+#: E-value and the leakage rule's bit-score floor.
+SIG_EVALUE = 1e-3
+SIG_BITS = mm.LEAKAGE_MIN_BITS
+HIT_CRITERIA = ("evalue", "bits")
 #: Best-hit identity bins (%), lower bound inclusive; the last bin is closed.
 IDENTITY_BINS = (0, 20, 30, 40, 50, 60, 70, 80, 90, 100)
-NN_TABLE = "test/test_residual_similarity.tsv"
-NN_SUMMARY = "test/nearest_neighbour_baseline.json"
-NN_COLUMNS = (
+SIMILARITY_TABLE = "test/test_residual_similarity.tsv"
+SIMILARITY_COLUMNS = (
     "test_id",
     "length",
     "scored_residues",
@@ -575,16 +568,14 @@ NN_COLUMNS = (
     "best_bits",
     "meets_evalue_1e-3",
     "meets_27_bits",
-    "transferred_residues_evalue_1e-3",
-    "transferred_residues_27_bits",
     "remote_homolog_profile",
 )
 
 
 def criterion_label(criterion: str) -> str:
     return {
-        "evalue": f"E ≤ {NN_SIG_EVALUE:g}",
-        "bits": f"≥ {NN_SIG_BITS:g} bits",
+        "evalue": f"E ≤ {SIG_EVALUE:g}",
+        "bits": f"≥ {SIG_BITS:g} bits",
     }[criterion]
 
 
@@ -594,13 +585,13 @@ def meets(hit: dict, criterion: str | None) -> bool:
     if criterion is None:
         return True
     if criterion == "evalue":
-        return hit["evalue"] <= NN_SIG_EVALUE
+        return hit["evalue"] <= SIG_EVALUE
     if criterion == "bits":
-        return hit["bits"] >= NN_SIG_BITS
+        return hit["bits"] >= SIG_BITS
     raise ValueError(f"unknown hit criterion {criterion!r}")
 
 
-def nn_search_cmd(q_fa, t_fa, out_tsv, tmp) -> list[str]:
+def similarity_search_cmd(q_fa, t_fa, out_tsv, tmp) -> list[str]:
     """The mmseqs command of the residual-similarity search."""
     return [
         "mmseqs",
@@ -624,28 +615,28 @@ def nn_search_cmd(q_fa, t_fa, out_tsv, tmp) -> list[str]:
         "--prefilter-mode",
         str(mm.LEAKAGE_PREFILTER_MODE),
         "-e",
-        f"{NN_EVALUE:g}",
+        f"{SEARCH_EVALUE:g}",
         "--max-seqs",
         "100000",
         "--dbtype",
         "1",
         "--format-output",
-        NN_FORMAT,
+        SEARCH_FORMAT,
     ]
 
 
-def describe_nn_search(n_db: int | None = None) -> str:
+def describe_similarity_search(n_db: int | None = None) -> str:
     db = f"the {n_db:,} " if n_db is not None else "the "
     return (
         f"mmseqs2 easy-search, test chains as queries against {db}tolerant "
         "training representatives, no identity or coverage floor (--min-seq-id 0 "
         "-c 0), prefilter off (--prefilter-mode 2: every pair aligned), "
-        f"--alignment-mode 3 -s 7.5 --comp-bias-corr 0 --mask 0 -e {NN_EVALUE:g}"
+        f"--alignment-mode 3 -s 7.5 --comp-bias-corr 0 --mask 0 -e {SEARCH_EVALUE:g}"
     )
 
 
-def parse_nn_hits(path: Path) -> list[dict]:
-    cols = NN_FORMAT.split(",")
+def parse_similarity_hits(path: Path) -> list[dict]:
+    cols = SEARCH_FORMAT.split(",")
     out = []
     with Path(path).open() as fh:
         for line in fh:
@@ -659,14 +650,10 @@ def parse_nn_hits(path: Path) -> list[dict]:
                     "pident": float(r["pident"]),
                     "evalue": float(r["evalue"]),
                     "bits": float(r["bits"]),
-                    "qstart": int(r["qstart"]),
-                    "tstart": int(r["tstart"]),
                     "test_cov": (int(r["qend"]) - int(r["qstart"]) + 1)
                     / int(r["qlen"]),
                     "training_cov": (int(r["tend"]) - int(r["tstart"]) + 1)
                     / int(r["tlen"]),
-                    "qaln": r["qaln"],
-                    "taln": r["taln"],
                 }
             )
     return out
@@ -693,67 +680,6 @@ def best_hits(hits: list[dict], criterion: str | None = None) -> dict[str, dict]
         if meets(h, criterion) and _better(h, best.get(h["test_id"])):
             best[h["test_id"]] = h
     return best
-
-
-def transfer(hit: dict, train_g: list, n: int) -> list:
-    """The training chain's G-scores copied onto the test chain through the
-    alignment's match columns (scored training residues only); None elsewhere."""
-    pred: list = [None] * n
-    qi, ti = hit["qstart"] - 1, hit["tstart"] - 1
-    for qa, ta in zip(hit["qaln"], hit["taln"]):
-        if qa != "-" and ta != "-" and 0 <= qi < n and 0 <= ti < len(train_g):
-            pred[qi] = train_g[ti]
-        qi += qa != "-"
-        ti += ta != "-"
-    return pred
-
-
-def _labels(row: dict) -> list:
-    """G where scored, else None."""
-    return [
-        float(g) if m and g is not None and not math.isnan(g) else None
-        for g, m in zip(row["gscores"], row["mask"])
-    ]
-
-
-def auc(scores, positive) -> float | None:
-    """ROC AUC (Mann-Whitney, average ranks for ties); None without both
-    classes."""
-    from scipy.stats import rankdata
-
-    n1 = sum(1 for p in positive if p)
-    n0 = len(positive) - n1
-    if not n1 or not n0:
-        return None
-    ranks = rankdata(scores)
-    r1 = sum(r for r, p in zip(ranks, positive) if p)
-    return float((r1 - n1 * (n1 + 1) / 2) / (n1 * n0))
-
-
-def spearman(a, b) -> float | None:
-    import numpy as np
-    from scipy.stats import rankdata
-
-    if len(a) < 2:
-        return None
-    ra, rb = rankdata(a), rankdata(b)
-    if ra.std() == 0 or rb.std() == 0:
-        return None
-    return float(np.corrcoef(ra, rb)[0, 1])
-
-
-def _metrics(truth, pred, chains) -> dict:
-    n = len(truth)
-    cut = ri.DISORDER_CUT
-    pos = [t >= cut for t in truth]
-    return {
-        "residues": n,
-        "chains": len(set(chains)),
-        f"auc_G>={cut:g}": auc(pred, pos),
-        "spearman": spearman(truth, pred),
-        "mae": (sum(abs(t - p) for t, p in zip(truth, pred)) / n) if n else None,
-        f"prevalence_G>={cut:g}": (sum(pos) / n) if n else None,
-    }
 
 
 def _round(obj, digits=4):
@@ -796,78 +722,48 @@ def _tolerant_reps(rows: list[dict]) -> dict[str, dict]:
     }
 
 
-def nn_hits(rows: list[dict]) -> list[dict]:
-    """Run the residual-similarity search (:func:`nn_search_cmd`)."""
+def similarity_hits(rows: list[dict]) -> list[dict]:
+    """Run the residual-similarity search (:func:`similarity_search_cmd`)."""
     test = {r["id"]: r["sequence"] for r in rows if r["split"] == TEST_SPLIT}
     db = {k: r["sequence"] for k, r in _tolerant_reps(rows).items()}
     if not test or not db:
         return []
     _require_mmseqs("residual-similarity search")
-    with tempfile.TemporaryDirectory(prefix="trizod_nn_") as td:
+    with tempfile.TemporaryDirectory(prefix="trizod_sim_") as td:
         work = Path(td)
         q_fa, t_fa = work / "test.fasta", work / "train.fasta"
         write_fasta(test, q_fa)
         write_fasta(db, t_fa)
         with (work / "log").open("w") as log:
             subprocess.run(
-                nn_search_cmd(q_fa, t_fa, work / "hits.tsv", work / "tmp"),
+                similarity_search_cmd(q_fa, t_fa, work / "hits.tsv", work / "tmp"),
                 check=True,
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
-        return parse_nn_hits(work / "hits.tsv")
+        return parse_similarity_hits(work / "hits.tsv")
 
 
-def nearest_neighbour(
+def closest_training_chains(
     rows: list[dict], hits: list[dict] | None = None, remote: set | None = None
 ) -> dict:
-    """The per-test-chain best-hit table (``NN_COLUMNS``) and the baseline
-    summary. ``hits`` (parsed search hits) skips the search; ``remote`` are the
-    test chains with a remote-homology profile hit (:func:`remote_homologs`),
-    reported apart.
-
-    Baseline, per hit criterion: each test residue gets the G-score of the
-    training residue it is aligned to in the chain's best alignment meeting the
-    criterion (match columns, scored training residues), every other residue
-    the mean G of all scored residues of the tolerant training
-    representatives; scored on the scored test residues."""
+    """Each test chain's closest tolerant training representative
+    (``SIMILARITY_COLUMNS``) and a summary: how many test chains align at all,
+    the closest hit's identity, and for how many test chains the closest hit
+    reaches each significance level (``HIT_CRITERIA``). ``hits`` (parsed search hits) skips the search;
+    ``remote`` are the test chains with a remote-homology profile hit
+    (:func:`remote_homologs`), marked in the table."""
     remote = set(remote or ())
     test = [r for r in rows if r["split"] == TEST_SPLIT]
     test.sort(key=lambda r: _key(r["id"]))
     reps = _tolerant_reps(rows)
     if hits is None:
-        hits = nn_hits(rows)
+        hits = similarity_hits(rows)
     hits = [h for h in hits if h["training_id"] in reps]
     best_any = best_hits(hits)
-    best = {c: best_hits(hits, c) for c in NN_CRITERIA}
-    rep_labels = {k: _labels(r) for k, r in reps.items()}
-    pooled = [g for lab in rep_labels.values() for g in lab if g is not None]
-    train_mean = sum(pooled) / len(pooled) if pooled else 0.0
-
-    table, transferred = [], {c: {} for c in NN_CRITERIA}
-    evals = {
-        c: {"truth": [], "pred": [], "covered": [], "chain": []} for c in NN_CRITERIA
-    }
+    table = []
     for r in test:
-        cid, truth = r["id"], _labels(r)
-        for c in NN_CRITERIA:
-            h = best[c].get(cid)
-            pred = (
-                transfer(h, rep_labels[h["training_id"]], len(truth))
-                if h
-                else [None] * len(truth)
-            )
-            ev = evals[c]
-            n_tr = 0
-            for t, p in zip(truth, pred):
-                if t is None:
-                    continue
-                ev["truth"].append(t)
-                ev["pred"].append(train_mean if p is None else p)
-                ev["covered"].append(p is not None)
-                ev["chain"].append(cid)
-                n_tr += p is not None
-            transferred[c][cid] = n_tr
+        cid = r["id"]
         b = best_any.get(cid)
         table.append(
             {
@@ -882,8 +778,6 @@ def nearest_neighbour(
                 "best_bits": f"{b['bits']:g}" if b else "",
                 "meets_evalue_1e-3": str(bool(b) and meets(b, "evalue")).lower(),
                 "meets_27_bits": str(bool(b) and meets(b, "bits")).lower(),
-                "transferred_residues_evalue_1e-3": transferred["evalue"][cid],
-                "transferred_residues_27_bits": transferred["bits"][cid],
                 "remote_homolog_profile": str(cid in remote).lower(),
             }
         )
@@ -900,62 +794,32 @@ def nearest_neighbour(
             "histogram_best_identity": identity_histogram(pid),
         }
 
-    def subset(ev, keep):
-        idx = [i for i in range(len(ev["truth"])) if keep(i)]
-        return _metrics(
-            [ev["truth"][i] for i in idx],
-            [ev["pred"][i] for i in idx],
-            [ev["chain"][i] for i in idx],
-        )
-
-    baseline = {}
-    for c in NN_CRITERIA:
-        ev = evals[c]
-        n = len(ev["truth"])
-        baseline[c] = {
-            "criterion": criterion_label(c),
-            "hit_chains": len(best[c]),
-            "all_residues": subset(ev, lambda i: True),
-            "transferred_residues": subset(ev, lambda i, ev=ev: ev["covered"][i]),
-            "transferred_share": (sum(ev["covered"]) / n) if n else None,
-            "without_remote_homolog_chains": subset(
-                ev, lambda i, ev=ev: ev["chain"][i] not in remote
-            ),
-        }
     summary = {
-        "file": NN_TABLE,
-        "search": describe_nn_search(len(reps)),
+        "file": SIMILARITY_TABLE,
+        "search": describe_similarity_search(len(reps)),
         "best_hit": (
             "per test chain the alignment with the highest bit score (then the "
             "lowest E-value, then the highest identity, then the smallest "
-            "training ID) among all alignments the search reports (E ≤ 10)"
+            f"training ID) among all alignments the search reports (E ≤ "
+            f"{SEARCH_EVALUE:g})"
         ),
         "test_chains": len(test),
         "training_representatives": len(reps),
         "any_alignment": hit_block(best_any),
-        "hits": {c: hit_block(best[c]) for c in NN_CRITERIA},
-        "baseline": {
-            "method": (
-                "nearest-neighbour label transfer: each scored test residue gets "
-                "the G-score of the scored training residue it is aligned to in "
-                "the chain's best alignment meeting the hit criterion (match "
-                "columns); every other residue gets the mean G of all scored "
-                "residues of the tolerant training representatives"
-            ),
-            "train_mean_G": train_mean,
-            "metric_cut": ri.DISORDER_CUT,
-            **baseline,
+        "closest_hit_meets": {
+            criterion_label(c): sum(meets(b, c) for b in best_any.values())
+            for c in HIT_CRITERIA
         },
         "remote_homolog_chains": len(remote & {r["id"] for r in test}),
     }
     return {"table": table, "summary": _round(summary)}
 
 
-def write_nn_table(table: list[dict], path: Path) -> Path:
+def write_similarity_table(table: list[dict], path: Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=NN_COLUMNS, delimiter="\t")
+        w = csv.DictWriter(fh, fieldnames=SIMILARITY_COLUMNS, delimiter="\t")
         w.writeheader()
         for rec in table:
             w.writerow(rec)
@@ -970,38 +834,21 @@ def _hist_text(hist: dict[str, int]) -> str:
     return ", ".join(parts)
 
 
-def nn_text(summary: dict) -> str:
-    """The deposit's sentence on residual similarity and the baseline."""
+def similarity_text(summary: dict) -> str:
+    """The deposit's sentence on how close the test chains come to training
+    below the leakage rule (a description of the split)."""
     anyb = summary["any_alignment"]
-    base = summary["baseline"]
-    cut = f"{base['metric_cut']:g}"
-    auc_key = f"auc_G>={cut}"
-
-    def fmt(x, spec=".3f"):
-        return "–" if x is None else format(x, spec)
-
-    def res(c):
-        b = base[c]
-        return (
-            f"{fmt(b['all_residues'][auc_key])} (Spearman "
-            f"{fmt(b['all_residues']['spearman'])}) at {criterion_label(c)} "
-            f"({b['hit_chains']:,} chains with a hit)"
-        )
-
-    without = base["evalue"]["without_remote_homolog_chains"]
+    med = anyb["best_identity_median"]
+    n = summary["closest_hit_meets"]
+    ev, bits = (criterion_label(c) for c in HIT_CRITERIA)
     return (
         f"Searched without an identity or coverage floor, {anyb['chains']:,} of "
         f"the {summary['test_chains']:,} test chains align to one of the "
         f"{summary['training_representatives']:,} tolerant training "
-        f"representatives (E ≤ {NN_EVALUE:g}); the best hit's identity has median "
-        f"{fmt(anyb['best_identity_median'], '.1f')} % (test chains per identity "
-        f"bin: {_hist_text(anyb['histogram_best_identity'])}). A nearest-neighbour "
-        "baseline that copies the G-scores of the best hit's aligned training "
-        "residues and gives every other residue the mean training G "
-        f"({fmt(base['train_mean_G'], '.4f')}) reaches AUC(G ≥ {cut}) {res('evalue')} "
-        f"and {res('bits')} over all {base['evalue']['all_residues']['residues']:,} "
-        f"scored test residues, and {fmt(without[auc_key])} and "
-        f"{fmt(base['bits']['without_remote_homolog_chains'][auc_key])} on the "
-        f"{without['chains']:,} test chains without a remote homologue "
-        f"(`{NN_TABLE}`, `{NN_SUMMARY}`). Report a model next to this baseline"
+        f"representatives (E ≤ {SEARCH_EVALUE:g}); the closest hit's identity has "
+        f"median {'–' if med is None else format(med, '.1f')} % (test chains per "
+        f"identity bin: {_hist_text(anyb['histogram_best_identity'])}), and it "
+        f"reaches {ev} for {n[ev]:,} test chains and {bits} for {n[bits]:,} "
+        f"(`{SIMILARITY_TABLE}`: each test chain's closest training chain with its "
+        "identity, coverage and bit score)"
     )

@@ -276,8 +276,11 @@ def write_results(directory: Path, curve: bool = True, **kw) -> Path:
     return directory
 
 
-def write_snapshot(directory: Path, entry_ids=("1001", "2001", "3001")) -> Path:
-    """A BMRB snapshot directory: BMRB_SNAPSHOT.json + bmr<ID>/bmr<ID>_3.str."""
+def write_snapshot(
+    directory: Path, entry_ids=("1001", "2001", "3001"), day="2026-11-11"
+) -> Path:
+    """A BMRB snapshot directory: BMRB_SNAPSHOT.json + bmr<ID>/bmr<ID>_3.str,
+    retrieved on ``day``."""
     directory = Path(directory)
     for eid in entry_ids:
         d = directory / f"bmr{eid}"
@@ -286,8 +289,8 @@ def write_snapshot(directory: Path, entry_ids=("1001", "2001", "3001")) -> Path:
     (directory / "BMRB_SNAPSHOT.json").write_text(
         json.dumps(
             {
-                "retrieved": "2026-11-11T12:46:31Z",
-                "retrieved_end": "2026-11-11T13:23:49Z",
+                "retrieved": f"{day}T12:46:31Z",
+                "retrieved_end": f"{day}T13:23:49Z",
                 "n_entries": len(entry_ids),
                 "entry_list_sha256": "a" * 64,
                 "entry_ids": list(entry_ids),

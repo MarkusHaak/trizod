@@ -1,10 +1,12 @@
-"""Per-chain changes and known issues of a release (release audit 2026-11-17b,
-item 7): every number the CHANGELOG states and every row of
-``known_issues.tsv`` is computed by :mod:`trizod.dataset.known_issues` from the
-release, the builds or a table finalize is given."""
+"""Per-chain known issues of a release: every number the CHANGELOG states and
+every row of ``known_issues.tsv`` is computed by
+:mod:`trizod.dataset.known_issues` from the release, the build or a table
+finalize is given, and describes a released chain, never a change against
+another build."""
 
 import json
 import pickle
+import re
 import subprocess
 import sys
 
@@ -106,57 +108,6 @@ def test_condition_issues_read_the_build_pickles(tmp_path):
     assert text["unread"] == 2
 
 
-def test_compare_labels_counts_crossings_and_mask_flips():
-    old = [None, 0.30, 0.40, 0.80, 0.10]
-    new = [None, 0.36, 0.40, 0.60, None]
-    got = ki.compare_labels(old, new)
-    assert got["scored_in_both"] == 3
-    assert got["max_abs_dg"] == pytest.approx(0.20)
-    assert got["crossings"] == {0.35: 1, 0.70: 1}
-    assert got["mask_flips"] == 1
-    assert got["changed_positions"] == [2, 4, 5]
-
-
-def test_tier_move_causes_follow_the_rule_flags():
-    row = {
-        "high_pressure": True,
-        "membrane_mimetic_sample": True,
-        "ionic_strength": 1.0,
-        "temperature_placeholder": True,
-    }
-    assert ki._move_causes("unfiltered", row, False) == "273 K re-score"
-    assert ki._move_causes("tolerant", row, False) == "pressure + 273 K re-score"
-    assert (
-        ki._move_causes("strict", row, True)
-        == "pressure + membrane + ionic + 273 K + sequence alphabet"
-    )
-    assert ki._move_causes("moderate", {}, False) == "other"
-    assert ki._move_causes("moderate", None, False) == "not in this release"
-
-
-def test_snapshot_drift_lists_changed_chains_with_their_split(tmp_path):
-    path = tmp_path / "drift.tsv"
-    per_tier = json.dumps(
-        {"unfiltered": {"gscores": {"max_abs_dG": 0.33, "mask_flips": 2}},
-         "moderate": "leaves_tier_with_new_file"}
-    )  # fmt: skip
-    path.write_text(
-        "id\treleased\tsplit\tlabel_tier_source\tlabel_or_tier_change\tper_tier\n"
-        f"50751_1_1_1\tTrue\ttrain\ttolerant\tTrue\t{per_tier}\n"
-        "11348_1_1_1\tTrue\ttest_trizod\tstrict\tFalse\t{}\n"
-        "36002_1_1_1\tFalse\tNone\tNone\tTrue\t{}\n"
-    )
-    rows = {"50751_1_1_1": {"split": "train"}, "11348_1_1_1": {"split": "test_trizod"}}
-    got = ki.snapshot_drift(path, rows)
-    assert got["changed"] == ["36002_1_1_1", "50751_1_1_1"]
-    assert got["test_affected"] == []
-    ev = {c: e for c, _, e in got["rows"]}
-    assert "unfiltered: max |ΔG| 0.33, 2 mask flips" in ev["50751_1_1_1"]
-    assert "moderate: leaves tier with new file" in ev["50751_1_1_1"]
-    assert ev["36002_1_1_1"].endswith("now no longer released")
-    assert "no test chain changed its labels" in ki.snapshot_drift_text(got)
-
-
 def _row(cid, split, seq, mask, train_tier=None):
     return {"id": cid, "split": split, "sequence": seq, "mask": mask,
             "train_tier": train_tier}  # fmt: skip
@@ -191,19 +142,41 @@ def test_construct_caveats_and_nonstandard_counts(tmp_path):
     assert "not counted" in ki.construct_text(None, nonstd)
 
 
-def test_few_scored_training_and_pin_trimmed():
+def test_few_scored_training():
     rows = [
         _row("1_1_1_1", "train", "A" * 20, [True] * 9 + [False] * 11, "moderate"),
         _row("2_1_1_1", "train", "A" * 20, [True] * 10 + [False] * 10, "moderate"),
     ]
     few = ki.few_scored_training(rows)
     assert [c for c, _, _ in few] == ["1_1_1_1"]
-    prov = {"count": 452, "written": "2026-11-10", "dropped": ["1_1_1_1", "9_1_1_1"],
-            "trimmed_from": {"count": 460, "written": "2026-08-11"}}  # fmt: skip
-    got = ki.pin_trimmed(prov, {r["id"]: r for r in rows})
-    assert got["n"] == 2
-    assert "2 chains were trimmed from the 460-chain pin" in got["text"]
-    assert "1 not released, 1 train" in got["text"]
+
+
+def test_every_placeholder_chain_gets_one_row_without_a_previous_build():
+    rows = [
+        {"id": "20_1_1_1", "split": "train", "temperature_placeholder": True},
+        {"id": "3_1_1_1", "split": "test_chezod117", "temperature_placeholder": True},
+        {"id": "4_1_1_1", "split": "test_retired", "temperature_placeholder": True,
+         "retired_reason": "not_strict"},
+        {"id": "5_1_1_1", "split": "train", "temperature_placeholder": False},
+        {"id": "6_1_1_1", "split": "train"},
+    ]  # fmt: skip
+    got = ki.temperature_placeholder_rows(rows)
+    assert got == [
+        (cid, "temperature_placeholder_rescore",
+         "deposited 273 K read as not deposited; scored at the 298 K default")
+        for cid in ("3_1_1_1", "4_1_1_1", "20_1_1_1")
+    ]  # fmt: skip
+    text = ki.chezod_placeholder_text(rows)
+    assert text.startswith("1 CheZOD117 chains carry `temperature_placeholder`")
+    assert "(3_1_1_1)" in text
+    assert "1 retired test chains carry it (1 not_strict)" in text
+    assert "ΔG" not in text and "previous" not in text
+
+
+def test_no_issue_compares_with_another_build():
+    for name in ("tier_moves", "label_changes", "snapshot_drift", "pin_trimmed",
+                 "alphabet_rows", "rescore_rows", "changed_entries"):  # fmt: skip
+        assert not hasattr(ki, name), name
 
 
 def test_reviewed_table_refuses_a_chain_not_in_the_release(tmp_path):
@@ -223,6 +196,9 @@ def test_the_committed_reviewed_table_is_well_formed():
     for line in lines[1:]:
         cid, issue, evidence = line.split("\t")
         assert cid.count("_") == 3 and issue and evidence
+        # facts only: no internal audit or validation label
+        assert not re.search(r"audit|validation|2026-\d\d-\d\d|\b[A-G]\d{1,2}\b",
+                             evidence), (cid, evidence)  # fmt: skip
 
 
 def test_write_tsv_sorts_dedups_and_flattens(tmp_path):
@@ -312,7 +288,7 @@ def test_ionic_drivers_list_the_inconsistent_chains(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# release validation 2026-11-17c: G39 pressure classes, B6 drift, G43 caveats
+# pressure classes and construct caveats
 # --------------------------------------------------------------------------- #
 
 
@@ -344,57 +320,6 @@ def test_the_pressure_sentence_names_the_placeholder_classes():
     assert "2 released chains deposited a pressure of about 1 Pa" in text
     assert "1 deposited 1013 bar" in text and "3_1_1_1" in text
     assert "1 released chains deposited a pressure without a unit" in text
-
-
-def test_snapshot_drift_counts_every_chain_of_the_changed_entries(tmp_path):
-    path = tmp_path / "drift.tsv"
-    cite = json.dumps({"unfiltered": {"fields": ["citation_title"]}})
-    path.write_text(
-        "id\treleased\tsplit\tlabel_tier_source\tlabel_or_tier_change\tper_tier\n"
-        f"10_1_1_1\tTrue\ttest_trizod\tstrict\tFalse\t{cite}\n"
-        "11_1_1_1\tTrue\ttrain\ttolerant\tTrue\t{}\n"
-        "12_1_1_1\tFalse\tNone\tNone\tTrue\t{}\n"
-    )
-    rows = {
-        "10_1_1_1": {"split": "test_trizod", "entry_id": "10"},
-        "13_1_1_1": {"split": "test_trizod", "entry_id": "13"},
-        "11_1_1_1": {"split": "train", "entry_id": "11"},
-        "14_1_1_1": {"split": "excluded", "entry_id": "14"},
-        "99_1_1_1": {"split": "train", "entry_id": "99"},
-    }
-    changed = {"changed": {"10", "11", "12", "13", "14"}, "added": {"20"},
-               "withdrawn": {"30", "31"}}  # fmt: skip
-    got = ki.snapshot_drift(path, rows, changed)
-    text = ki.snapshot_drift_text(got)
-    assert "5 entries changed in place (1 added, 2 withdrawn)" in text
-    assert "5 chains: 4 released now" in text and "12_1_1_1" in text
-    assert "3 of them have a record that differs" in text
-    assert "1 only in metadata (citation_title)" in text
-    assert "2 in labels or tiers (11_1_1_1, 12_1_1_1)" in text
-    assert "The 2 test chains of changed entries (10_1_1_1, 13_1_1_1)" in text
-    assert "identical labels" in text
-
-
-def test_snapshot_drift_without_the_changed_entries_says_what_it_counts(tmp_path):
-    path = tmp_path / "drift.tsv"
-    path.write_text(
-        "id\treleased\tsplit\tlabel_tier_source\tlabel_or_tier_change\tper_tier\n"
-        "11_1_1_1\tTrue\ttrain\ttolerant\tTrue\t{}\n"
-    )
-    text = ki.snapshot_drift_text(ki.snapshot_drift(path, {"11_1_1_1": {}}))
-    assert "Of 1 chains whose record differs" in text
-    assert "--previous-bmrb-dir" in text
-
-
-def test_changed_entries_compare_the_two_snapshots(tmp_path):
-    old, new = tmp_path / "old", tmp_path / "new"
-    for root, entries in ((old, {"1": "a", "2": "b", "3": "c"}),
-                          (new, {"1": "a", "2": "B", "4": "d"})):  # fmt: skip
-        for e, text in entries.items():
-            (root / f"bmr{e}").mkdir(parents=True)
-            (root / f"bmr{e}" / f"bmr{e}_3.str").write_text(text)
-    got = ki.changed_entries(old, new)
-    assert got == {"changed": {"2"}, "added": {"4"}, "withdrawn": {"3"}}
 
 
 def test_construct_caveats_report_residue_classes_at_residue_level(tmp_path):

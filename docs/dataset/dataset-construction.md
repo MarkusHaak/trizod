@@ -396,7 +396,7 @@ column dictionary, generated from the column contract.
 and the shift table; the deploy FASTA, regenerated from the bundle; the UdonPred
 v2 JSONL view and the test-set crosswalk, generated from the Parquet; the test
 FASTAs (including the retired chains and the 117 original CheZOD117 sequences)
-with the labels table and the pin provenance; `class_balance.tsv`;
+with the labels table; `class_balance.tsv`;
 `known_issues.tsv` (one row per chain and issue: `chain_id`, `issue`,
 `evidence`); `bmrb_files.sha256` (the SHA-256 of every snapshot entry file);
 `VALIDATION.json` of the final audit when given (`--validation`), with
@@ -404,10 +404,11 @@ with the labels table and the pin provenance; `class_balance.tsv`;
 human decisions the release checklist asks for; the test set's homology
 components (`test/TriZOD_test_set_components.tsv`, the resampling unit), the
 test × training pairs sharing a UniProt accession
-(`test/test_training_shared_accessions.tsv`) and the shared-construct review
-(`test/shared_construct_review.tsv`), all computed from the Parquet
-(`trizod.dataset.residual_similarity`); the per-chain audit tables finalize was
-given (`known_issues_inputs/`); the README,
+(`test/test_training_shared_accessions.tsv`), the shared-construct review
+(`test/shared_construct_review.tsv`) and each test chain's closest tolerant
+training representative at any identity (`test/test_residual_similarity.tsv`),
+all computed from the Parquet (`trizod.dataset.residual_similarity`); the
+per-chain tables finalize was given (`known_issues_inputs/`); the README,
 datasheet and CHANGELOG rendered from the templates in `docs/dataset/` with the
 build's own counts; `columns.md`, `LICENSE.md`, `CITATION.cff` and
 `zenodo.json`; and one `MANIFEST.json` over every file (SHA-256, size, row and
@@ -417,22 +418,24 @@ cuts, calibration and threshold-framework commit, leakage rule, known-issue
 counts; `total_bytes` covers every file but `MANIFEST.json` and `SHA256SUMS`)
 plus `SHA256SUMS`.
 
-The CHANGELOG's changes and known issues and `known_issues.tsv` are computed
-(`trizod.dataset.known_issues`), never typed: tier moves by rule, the 273 K
-re-score statistics and sequence changes against the previous build
-(`--previous-build <its package bundle>`); pH* / pD readings, temperatures
+The deposit describes the release as it is: the CHANGELOG compares it with
+the previous published version only, and `known_issues.tsv` lists properties
+of the released chains, never changes against another build. The known
+issues are computed (`trizod.dataset.known_issues`), never typed: the chains
+whose deposited 273 K was read as not deposited
+(`temperature_placeholder_rescore`); pH* / pD readings, temperatures
 read as Celsius or Fahrenheit and pressures without a unit from the build's
 `BmrbEntry` pickles (`--pkl-dir`), with the pressure placeholders (about 1 Pa,
 `pressure_placeholder_pa`; 1013 bar read as hPa, `pressure_hpa_as_bar`);
-snapshot drift and construct caveats from the audit's tables
-(`--snapshot-drift`, with `--previous-bmrb-dir` to count every chain of the
-changed entries; `--construct-caveats`, with `--xref-sources` to measure the
-outside-UniProt-span class at residue level, `trizod.dataset.construct_span`);
+construct caveats and ionic strengths that contradict the sample's components
+from the tables finalize is given (`--construct-caveats`, with
+`--xref-sources` to measure the outside-UniProt-span class at residue level,
+`trizod.dataset.construct_span`; `--ionic-drivers`);
 remote homologues of the test chains (a 3-iteration mmseqs2 profile search
 against the tolerant training representatives, `remote_homolog_profile`), the
 shared-accession pairs and the shared-construct review
-(`trizod.dataset.residual_similarity`); the pin's trimmed chains from its
-provenance; the reviewed chains of `docs/dataset/known_issues_reviewed.tsv`
+(`trizod.dataset.residual_similarity`); the reviewed chains of
+`docs/dataset/known_issues_reviewed.tsv`
 (each checked to be in the release). A missing input renders as "not
 assessed".
 
@@ -533,8 +536,7 @@ uv run --with pyarrow python scripts/build_parquet_dataset.py \
 uv run --with pyarrow trizod dataset finalize --parquet <trizod_dataset.parquet> \
     --shifts <trizod_shifts.parquet> --bundle <bundle> --bmrb-dir <snapshot> \
     --out <release dir> --crosswalk-root <checkout holding data/> \
-    --previous-build <previous build's bundle> --pkl-dir <the build's tmp/bmrb_entries> \
-    [--snapshot-drift <TSV> --previous-bmrb-dir <previous snapshot>] \
+    --pkl-dir <the build's tmp/bmrb_entries> \
     [--construct-caveats <TSV> --xref-sources <xref dir>] [--ionic-drivers <TSV>] \
     [--validation <VALIDATION.json>] \
     [--calibration-input <the Parquet the framework calibrated on>]

@@ -82,7 +82,7 @@ list, wwPDB SEQRES, SIFTS), pinned by SHA-256 in the Parquet metadata
 2. **Filter** per tier: temperature, pH and ionic-strength windows, backbone-shift
    coverage, non-canonical residue caps, experiment method, paramagnetic
    samples, keyword and perturbing-cosolvent lists, the `Physical_state` deny
-   list, and the 2026-11 condition rules (pressure ≥ 400 bar out of tolerant and
+   list, and four condition rules (pressure ≥ 400 bar out of tolerant and
    up; membrane-mimetic samples out of moderate and strict; strict ionic
    strength ≤ 0.5 M; a deposited 273 K read as not deposited).
 3. **Re-reference** with LACS, then a POTENCI/AIC residual offset
@@ -131,8 +131,7 @@ continuous G-score; selecting cleaner subsets by tier; benchmarking on
 - Report pooled and per-chain Spearman, AUC at G ≥ {{cut_disordered}} on all,
   confident-only and k ≥ 10 residues, resampling the {{n_test_components}} test
   components (`test/TriZOD_test_set_components.tsv`) for confidence intervals;
-  report also on the test chains without a remote homologue in training, and
-  next to the nearest-neighbour baseline (`test/nearest_neighbour_baseline.json`).
+  report also on the test chains without a remote homologue in training.
 - Compare with an earlier model only on the clean subset (README, "Earlier test
   sets are not comparable"); CheZOD-trained predictors on the test chains whose
   `chezod1325_overlap` / `chezod1174_overlap` is false.
@@ -166,9 +165,8 @@ denaturants, high pressure or in membrane mimetics.
   paramagnetic samples and non-standard residues. {{construct_caveats}}
 - Homology between training and test is controlled at {{leakage_rule}}, as
   searched (every alignment mmseqs2 reports), not eliminated: {{shared_accessions}}.
-  {{remote_homologs}}. {{shared_constructs}}. {{nearest_neighbour}}. Nearly
-  every sequence is in the
-  corpora protein language models are pretrained on.
+  {{remote_homologs}}. {{shared_constructs}}. {{residual_similarity}}. Nearly
+  every sequence is in the corpora protein language models are pretrained on.
 - **Offsets come in three units.** `off_<atom>_sigma` is in multiples of the
   per-atom POTENCI RMSD (`--max-offset` is compared against it),
   `lacs_off_<atom>_ppm` is ppm, and `total_off_<atom>_ppm =
@@ -176,8 +174,8 @@ denaturants, high pressure or in membrane mimetics.
   total to subtract from a deposited shift. Never add the first two.
 - **Side-chain shifts are re-referenced in three regimes** (`offset_source`):
   backbone shifts get the full offset the scorer used; side-chain ¹³C only the
-  LACS offset, which transfers to side chains (measured on the 2026-08 build:
-  slope β ≈ 0.79, lowering side-chain ¹³C error), while the POTENCI residual does
+  LACS offset, which transfers to side chains (slope β ≈ 0.79 in the transfer
+  regression, lowering side-chain ¹³C error), while the POTENCI residual does
   not (β < 0.1); side-chain ¹H and ¹⁵N stay raw, because applying the backbone
   offset increased their error (β ≈ 0.08 and 0.37, below the 0.5 break-even).
   Side-chain ¹³C is withheld on chains with |`lacs_off_CA_ppm`| > 5 ppm.

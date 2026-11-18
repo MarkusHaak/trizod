@@ -167,3 +167,31 @@ def test_the_readme_and_changelog_introduce_the_sequence_group():
     assert "`uniprot_ids`" in readme and "alignment" in readme
     changelog = (DOCS / "CHANGELOG.md").read_text()
     assert "`sequence_group`" in changelog and "`sequence_group_size`" in changelog
+
+
+#: Development history, internal audit names and the dropped predictor
+#: baseline: the deposit describes the release as it is and compares it with
+#: the previous published version only.
+HISTORY = re.compile(
+    r"2026-11-1[0-9]|previous build|build of record|pin of|audit 2026|"
+    r"release validation|\bD18\b|\bE2[0-9]\b|round [0-9]|nearest[_-]neighbour|"
+    r"snapshot[_ ]drift|pin_trimmed|tier_move|previous_build|rescore_summary|"
+    r"alphabet_changes"
+)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        *TEMPLATES,
+        DOCS / "known_issues_reviewed.tsv",
+        ROOT / "trizod" / "dataset" / "data" / "shared_construct_review.tsv",
+    ],
+    ids=lambda p: p.name,
+)
+def test_shipped_sources_carry_no_development_history(path):
+    """What finalize renders or copies into the deposit names no earlier
+    unpublished build, no test-set pin history and no internal audit."""
+    text = finalize._TEMPLATE_NOTE.sub("", path.read_text())
+    hits = sorted({m.group(0) for m in HISTORY.finditer(text)})
+    assert not hits, f"{path.name}: {hits}"

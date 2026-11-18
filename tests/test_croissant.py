@@ -1,4 +1,4 @@
-"""``croissant.json`` (release validation 2026-11-17, G41):
+"""``croissant.json``:
 :mod:`trizod.dataset.croissant` on its own; the assembled deposit's file is
 tested in ``tests/test_finalize.py``."""
 
@@ -167,3 +167,16 @@ def test_the_distribution_lists_every_file_but_the_self_describing_ones(tmp_path
     assert cr.write(out, version="9.9.9").read_bytes() != first  # a.fasta changed
     again = cr.write(out, version="9.9.9").read_bytes()
     assert cr.write(out, version="9.9.9").read_bytes() == again
+
+
+def test_file_descriptions_state_the_release_as_it_is():
+    """known_issues.tsv lists known issues, not changes against another build;
+    the residual-similarity table describes the split."""
+    known = cr.describe_file("known_issues.tsv")
+    assert "known issue" in known and "change" not in known
+    sim = cr.describe_file("test/test_residual_similarity.tsv")
+    assert "closest tolerant training representative" in sim
+    assert "baseline" not in sim and "nearest" not in sim
+    assert cr.describe_file("known_issues_inputs/construct_caveats.tsv").endswith(
+        "construct_caveats.tsv"
+    )

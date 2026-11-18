@@ -736,33 +736,22 @@ def _dataset_finalize(
         "(dry runs only).",
     ),
     force: bool = typer.Option(False, "--force", help="Replace a non-empty --out."),
-    previous_build: str | None = typer.Option(
-        None,
-        "--previous-build",
-        help="Previous build's package bundle: tier moves, re-score statistics "
-        "and sequence changes against it.",
-    ),
-    previous_label: str | None = typer.Option(
-        None, "--previous-label", help="How the CHANGELOG names --previous-build."
-    ),
     pkl_dir: str | None = typer.Option(
         None,
         "--pkl-dir",
         help="The build's BmrbEntry pickle cache: pH*/pD, temperature and "
         "pressure-unit issues per chain.",
     ),
-    snapshot_drift: str | None = typer.Option(
-        None, "--snapshot-drift", help="Snapshot-drift table of the release audit."
-    ),
     construct_caveats: str | None = typer.Option(
         None,
         "--construct-caveats",
-        help="Construct / sample caveat table of the release audit (class, id).",
+        help="Construct / sample caveat table (class, id).",
     ),
     ionic_drivers: str | None = typer.Option(
         None,
         "--ionic-drivers",
-        help="Ionic-strength driver log of the release audit.",
+        help="Ionic-strength driver log (chains whose deposited ionic strength "
+        "contradicts their sample components).",
     ),
     scoring_commit: str | None = typer.Option(
         None,
@@ -773,12 +762,6 @@ def _dataset_finalize(
         None,
         "--calibration-input",
         help="The Parquet the threshold framework calibrated on.",
-    ),
-    previous_bmrb_dir: str | None = typer.Option(
-        None,
-        "--previous-bmrb-dir",
-        help="The previous build's BMRB snapshot: the drift text counts every "
-        "chain of the entries that changed between the two.",
     ),
     xref_sources: str | None = typer.Option(
         None,
@@ -822,15 +805,11 @@ def _dataset_finalize(
     if force:
         argv.append("--force")
     for flag, value in (
-        ("--previous-build", previous_build),
-        ("--previous-label", previous_label),
         ("--pkl-dir", pkl_dir),
-        ("--snapshot-drift", snapshot_drift),
         ("--construct-caveats", construct_caveats),
         ("--ionic-drivers", ionic_drivers),
         ("--scoring-commit", scoring_commit),
         ("--calibration-input", calibration_input),
-        ("--previous-bmrb-dir", previous_bmrb_dir),
         ("--xref-sources", xref_sources),
         ("--construct-review", construct_review),
     ):

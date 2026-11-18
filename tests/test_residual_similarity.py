@@ -1,5 +1,5 @@
-"""What remains below the leakage rule, documented in the deposit (release
-validation 2026-11-17c, E22, E24, E25, E26): :mod:`trizod.dataset.residual_similarity`."""
+"""What remains below the leakage rule, documented in the deposit:
+:mod:`trizod.dataset.residual_similarity`."""
 
 from __future__ import annotations
 
@@ -226,7 +226,7 @@ def test_shared_construct_issues_list_every_reviewed_test_chain():
 
 
 # --------------------------------------------------------------------------- #
-# best training hit per test chain and the nearest-neighbour baseline (E27)
+# each test chain's closest training chain
 # --------------------------------------------------------------------------- #
 
 
@@ -238,25 +238,17 @@ def _nrow(cid, split, g, *, tier=None):
     }
 
 
-def _nhit(test, train, *, bits, evalue, qaln, taln, pident=40.0, qs=1, ts=1):
+def _nhit(test, train, *, bits, evalue, pident=40.0):
     return {"test_id": test, "training_id": train, "pident": pident,
-            "evalue": evalue, "bits": bits, "qstart": qs, "tstart": ts,
-            "test_cov": 0.9, "training_cov": 0.9, "qaln": qaln, "taln": taln}  # fmt: skip
-
-
-def test_the_label_transfer_follows_the_alignment_through_gaps():
-    hit = _nhit("t", "r", bits=30, evalue=1e-4, qaln="AA-AA", taln="AAAA-", qs=2)
-    train_g = [0.1, 0.2, None, 0.4]
-    # query 2..5 (0-based 1..4), target 1..4: q1-t0, q2-t1, (gap in q: t2),
-    # q3-t3, q4-(gap in t)
-    assert rs.transfer(hit, train_g, 6) == [None, 0.1, 0.2, 0.4, None, None]
+            "evalue": evalue, "bits": bits, "test_cov": 0.9,
+            "training_cov": 0.9}  # fmt: skip
 
 
 def test_best_hits_take_the_highest_bit_score_and_break_ties_by_id():
     hits = [
-        _nhit("1_1_1_1", "20_1_1_1", bits=30, evalue=1e-2, qaln="A", taln="A"),
-        _nhit("1_1_1_1", "3_1_1_1", bits=30, evalue=1e-2, qaln="A", taln="A"),
-        _nhit("1_1_1_1", "4_1_1_1", bits=25, evalue=1e-4, qaln="A", taln="A"),
+        _nhit("1_1_1_1", "20_1_1_1", bits=30, evalue=1e-2),
+        _nhit("1_1_1_1", "3_1_1_1", bits=30, evalue=1e-2),
+        _nhit("1_1_1_1", "4_1_1_1", bits=25, evalue=1e-4),
     ]
     assert rs.best_hits(hits)["1_1_1_1"]["training_id"] == "3_1_1_1"
     assert rs.best_hits(list(reversed(hits)))["1_1_1_1"]["training_id"] == "3_1_1_1"
@@ -267,74 +259,75 @@ def test_best_hits_take_the_highest_bit_score_and_break_ties_by_id():
     assert rs.meets({"bits": 1.0, "evalue": 1e-3}, "evalue")
 
 
-def test_auc_counts_ties_as_half():
-    assert rs.auc([0.1, 0.2, 0.3, 0.4], [False, False, True, True]) == 1.0
-    assert rs.auc([0.5, 0.5, 0.5, 0.5], [False, True, False, True]) == 0.5
-    assert rs.auc([0.1, 0.2], [True, True]) is None
+def test_identity_histogram_bins():
     assert rs.identity_histogram([10, 20, 29.9, 100])["[20, 30)"] == 2
     assert rs.identity_histogram([100])["[90, 100]"] == 1
 
 
-def test_nearest_neighbour_table_and_baseline():
+def test_the_closest_training_chain_of_every_test_chain():
     rows = [
         _nrow("1_1_1_1", "test_trizod", [0.9, 0.8, 0.1, None]),
         _nrow("2_1_1_1", "test_trizod", [0.1, 0.2]),
+        _nrow("3_1_1_1", "test_trizod", [0.5, 0.5]),  # no alignment at all
         _nrow("10_1_1_1", "train", [0.7, 0.9, 0.0, 0.0], tier="tolerant"),
         _nrow("11_1_1_1", "train", [0.2, 0.2], tier="moderate"),
         _nrow("12_1_1_1", "train", [0.5, 0.5], tier="unfiltered"),  # not in db
     ]
     hits = [
         # 1: a significant hit to 10 (both criteria)
-        _nhit("1_1_1_1", "10_1_1_1", bits=40, evalue=1e-6, qaln="AAAA", taln="AAAA"),
+        _nhit("1_1_1_1", "10_1_1_1", bits=40, evalue=1e-6, pident=55.0),
         # 2: a weak hit to 11 (>= 27 bits, but E > 1e-3)
-        _nhit("2_1_1_1", "11_1_1_1", bits=28, evalue=0.01, qaln="AA", taln="AA"),
+        _nhit("2_1_1_1", "11_1_1_1", bits=28, evalue=0.01, pident=25.0),
         # an unfiltered-only training chain is not a representative searched
-        _nhit("2_1_1_1", "12_1_1_1", bits=90, evalue=1e-20, qaln="AA", taln="AA"),
+        _nhit("2_1_1_1", "12_1_1_1", bits=90, evalue=1e-20),
     ]
-    res = rs.nearest_neighbour(rows, hits, remote={"1_1_1_1"})
+    res = rs.closest_training_chains(rows, hits, remote={"1_1_1_1"})
     table = {r["test_id"]: r for r in res["table"]}
-    assert list(table) == ["1_1_1_1", "2_1_1_1"]
+    assert list(table) == ["1_1_1_1", "2_1_1_1", "3_1_1_1"]
+    assert list(res["table"][0]) == list(rs.SIMILARITY_COLUMNS)
     assert table["1_1_1_1"]["best_training_id"] == "10_1_1_1"
     assert table["2_1_1_1"]["best_training_id"] == "11_1_1_1"
+    assert table["3_1_1_1"]["best_training_id"] == ""
     assert table["1_1_1_1"]["meets_evalue_1e-3"] == "true"
     assert table["2_1_1_1"]["meets_evalue_1e-3"] == "false"
     assert table["2_1_1_1"]["meets_27_bits"] == "true"
-    assert table["1_1_1_1"]["transferred_residues_evalue_1e-3"] == 3
-    assert table["2_1_1_1"]["transferred_residues_evalue_1e-3"] == 0
-    assert table["2_1_1_1"]["transferred_residues_27_bits"] == 2
+    assert table["3_1_1_1"]["meets_27_bits"] == "false"
     assert table["1_1_1_1"]["remote_homolog_profile"] == "true"
+    assert table["1_1_1_1"]["scored_residues"] == 3
     s = res["summary"]
-    assert (s["test_chains"], s["training_representatives"]) == (2, 2)
-    mean = (0.7 + 0.9 + 0.0 + 0.0 + 0.2 + 0.2) / 6
-    assert s["baseline"]["train_mean_G"] == round(mean, 4)
-    ev = s["baseline"]["evalue"]
-    assert ev["hit_chains"] == 1 and s["baseline"]["bits"]["hit_chains"] == 2
-    assert ev["all_residues"]["residues"] == 5
-    assert ev["transferred_residues"]["residues"] == 3
-    assert ev["transferred_share"] == 0.6
-    # E <= 1e-3: 1 gets 0.7, 0.9, 0.0 (truth 0.9, 0.8, 0.1), 2 gets the mean
-    # 0.333 (truth 0.1, 0.2): the two disordered residues rank highest
-    assert ev["all_residues"]["auc_G>=0.35"] == 1.0
-    assert ev["without_remote_homolog_chains"]["chains"] == 1
-    text = rs.nn_text(s)
-    assert "2 of the 2 test chains align" in text
-    assert "1 chains with a hit" in text and "≥ 27 bits (2 chains" in text
-    assert "`test/nearest_neighbour_baseline.json`" in text
+    assert (s["test_chains"], s["training_representatives"]) == (3, 2)
+    assert s["any_alignment"]["chains"] == 2
+    assert s["any_alignment"]["best_identity_median"] == 40.0
+    assert s["closest_hit_meets"] == {"E ≤ 0.001": 1, "≥ 27 bits": 2}
+    assert s["remote_homolog_chains"] == 1
+    assert "baseline" not in s
+    text = rs.similarity_text(s)
+    assert "2 of the 3 test chains align to one of the 2 tolerant" in text
+    assert "median 40.0 %" in text
+    assert "E ≤ 0.001 for 1 test chains and ≥ 27 bits for 2" in text
+    assert "`test/test_residual_similarity.tsv`" in text
+    assert "baseline" not in text and "nearest" not in text
+
+
+def test_no_label_transfer_is_left():
+    for name in ("transfer", "nearest_neighbour", "nn_text", "auc", "NN_SUMMARY"):
+        assert not hasattr(rs, name), name
+    assert not [c for c in rs.SIMILARITY_COLUMNS if "transferred" in c]
 
 
 def test_the_residual_similarity_search_has_no_floor(tmp_path):
-    cmd = rs.nn_search_cmd("q.fa", "t.fa", "hits.tsv", "tmp")
+    cmd = rs.similarity_search_cmd("q.fa", "t.fa", "hits.tsv", "tmp")
     assert cmd[cmd.index("--min-seq-id") + 1] == "0"
     assert cmd[cmd.index("-c") + 1] == "0"
     assert cmd[cmd.index("--prefilter-mode") + 1] == "2"
     assert float(cmd[cmd.index("-e") + 1]) == 10
     fmt = cmd[cmd.index("--format-output") + 1].split(",")
-    assert fmt[-2:] == ["qaln", "taln"]
+    assert "qaln" not in fmt and fmt[-1] == "tlen"
     tsv = tmp_path / "hits.tsv"
-    tsv.write_text("1_1_1_1\t10_1_1_1\t50.0\t1e-05\t40\t1\t10\t20\t3\t12\t10\tAC\tAC\n")
-    (h,) = rs.parse_nn_hits(tsv)
+    tsv.write_text("1_1_1_1\t10_1_1_1\t50.0\t1e-05\t40\t1\t10\t20\t3\t12\t10\n")
+    (h,) = rs.parse_similarity_hits(tsv)
     assert (h["test_cov"], h["training_cov"]) == (0.5, 1.0)
-    assert (h["qaln"], h["taln"], h["qstart"], h["tstart"]) == ("AC", "AC", 1, 3)
+    assert (h["pident"], h["bits"], h["evalue"]) == (50.0, 40.0, 1e-05)
 
 
 @requires_mmseqs
@@ -347,6 +340,6 @@ def test_the_residual_similarity_search_runs(tmp_path):
     ]
     rows[0]["sequence"] = a
     rows[1]["sequence"] = a[:30] + _rand(30, rng)
-    hits = rs.nn_hits(rows)
+    hits = rs.similarity_hits(rows)
     assert hits and all(h["training_id"] == "10_1_1_1" for h in hits)
-    assert all(len(h["qaln"]) == len(h["taln"]) for h in hits)
+    assert all(0 < h["test_cov"] <= 1 for h in hits)
