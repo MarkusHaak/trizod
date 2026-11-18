@@ -20,8 +20,11 @@ reports/story/review/science.md): pairs whose two entries share a citation title
 (``fig3_replicates.study_condition_pairs`` / ``boot_study_conditions(matched="class")``, the
 definition of the ``\\condRatioWithinStudy`` / ``\\condRatioAcrossStudy`` macros: each
 class's different-condition pairs re-weighted to its own same-condition |dk| profile, the
-across-study same-condition pairs to the within-study ones). The ratio different / same is
-printed beside each block. 95 % CIs from 1,000 sequence bootstraps; the matching weights are
+across-study same-condition pairs to the within-study ones). Under each row label, the pairs
+behind its two medians ("n = same / different"); the ratio different / same of each block in
+a column of its own headed "Ratio (95% CI)" (18 Nov 2026, figure review: the counts left the
+caption, the bracket that joined the two dots to the ratio went). 95 % CIs from 1,000
+sequence bootstraps; the matching weights are
 re-estimated inside every replicate. The residue-level r of the two classes moves to
 Supplementary Fig. 7.
 
@@ -118,6 +121,11 @@ BLOCKS = [
 # row of each block; the light rule sits between "clean" and "within"
 BLOCK_Y = {"all": 0.0, "clean": 1.0, "within": 2.3, "across": 3.3}
 DODGE = 0.18  # same above (-), different below (+), in row units
+# Fig. 4a columns (mm): row labels | axes | ratio column. Axes x0, y0, w, h; its top
+# leaves room for the ratio column's header under the key.
+A_AX = (23.0, AX_Y0, 32.0, 37.0)
+A_LABEL_GAP = 1.5  # right edge of the row labels, left of the axes
+A_RATIO_GAP = 3.0  # left edge of the ratio column, right of the axes
 
 
 def state_signature(D: fr.Data) -> pd.DataFrame:
@@ -189,18 +197,27 @@ def condition_rows(
 def draw_conditions(R: pd.DataFrame, ratios: dict):
     """Fig. 4a: median per-pair |dG|, same vs different conditions, four blocks, ratios.
 
-    Each block is one row: the same-condition median (black) above the different-condition
-    median (green), joined at the right by a bracket that carries their ratio. A light rule
-    separates the two state blocks from the two study blocks."""
+    Three columns (figure review 18 Nov 2026: the panel read as convoluted). Left, the row
+    label of each block with its pair counts under it ("n = same / different", the order of
+    the key and of the two dots). Middle, one row per block: the same-condition median
+    (black) above the different-condition median (green), each with its 95 % CI. Right, a
+    column of its own under the header "Ratio (95% CI)": different / same per block, so the
+    ratio is not read on the |dG| axis. A light rule separates the two state blocks from the
+    two study blocks; the counts are drawn here, so the caption need not list them."""
     from matplotlib.lines import Line2D
-    from matplotlib.transforms import blended_transform_factory
+    from matplotlib.transforms import blended_transform_factory, offset_copy
 
     fig = sp.figure(W, H)
-    x0, y0, w, h = 23.0, AX_Y0, 34.0, 39.0  # axes, mm
+    x0, y0, w, h = A_AX  # axes, mm
     ax = fig.add_axes([x0 / W, y0 / H, w / W, h / H])
     R = R.set_index(["block", "cond"])
     trb = blended_transform_factory(ax.transAxes, ax.transData)
-    for bk, _, st_same, st_diff in BLOCKS:
+
+    def at(dx_mm: float, dy_pt: float = 0.0):
+        """Axes-x / data-y transform, shifted by ``dx_mm`` mm and ``dy_pt`` points."""
+        return offset_copy(trb, fig=fig, x=dx_mm * sp.MM, y=dy_pt / 72, units="inches")
+
+    for bk, lab, st_same, st_diff in BLOCKS:
         yb = BLOCK_Y[bk]
         for cond, st, dy in (("same", st_same, -DODGE), ("different", st_diff, DODGE)):
             d = R.loc[(bk, cond)]
@@ -209,31 +226,40 @@ def draw_conditions(R: pd.DataFrame, ratios: dict):
             ax.plot(
                 d.median_absdg, yb + dy, ms=MS, zorder=3, **sp.marker_kw(st, mew=0.9)
             )
-        # ratio bracket, right of the axes
-        xb, ya, yz = 1.04, yb - DODGE, yb + DODGE
-        ax.plot([xb - 0.02, xb, xb, xb - 0.02], [ya, ya, yz, yz], color=sp.INK, lw=0.6,
-                transform=trb, clip_on=False)  # fmt: skip
+        # row label, and under it the pairs behind the two medians (same / different);
+        # the pair is centred on the row (the count line is ~7 pt high)
+        n_same, n_diff = (int(R.loc[(bk, c), "n_pairs"]) for c in ("same", "different"))
+        t = ax.text(0, yb, lab, transform=at(-A_LABEL_GAP, 3.6), ha="right",
+                    va="center", fontsize=sp.FS_BODY, linespacing=1.1)  # fmt: skip
+        ax.annotate(f"n = {n_same:,} / {n_diff:,}", xy=(1, 0), xycoords=t,
+                    xytext=(0, -0.8), textcoords="offset points", ha="right", va="top",
+                    fontsize=sp.FS_SMALL, color=sp.INK_SOFT)  # fmt: skip
+        # ratio column: estimate (ink) over its 95 % CI (secondary ink)
         rr = ratios[bk]
-        ax.text(xb + 0.04, yb, f"×{rr['est']:.2f}\n({rr['lo']:.2f}–{rr['hi']:.2f})",
-                transform=trb, ha="left", va="center", fontsize=sp.FS_BODY,
-                linespacing=1.15, clip_on=False)  # fmt: skip
+        xr = (w + A_RATIO_GAP) / w  # axes fraction of the column's left edge
+        ax.text(xr, yb, f"×{rr['est']:.2f}", transform=at(0, 1.2), ha="left",
+                va="bottom", fontsize=sp.FS_BODY, clip_on=False)  # fmt: skip
+        ax.text(xr, yb, f"({rr['lo']:.2f}–{rr['hi']:.2f})", transform=at(0, 0.2),
+                ha="left", va="top", fontsize=sp.FS_BODY, color=sp.INK_SOFT,
+                clip_on=False)  # fmt: skip
     ys = [BLOCK_Y[bk] for bk, *_ in BLOCKS]
     ax.set_ylim(max(ys) + 0.62, min(ys) - 0.62)
-    ax.set_yticks(ys)
-    ax.set_yticklabels([lab for _, lab, *_ in BLOCKS], linespacing=1.1)
-    ax.tick_params(axis="y", length=0)
+    ax.set_yticks([])
     ax.spines["left"].set_visible(False)
-    # light rule between the state blocks and the study blocks, across label column and axes
+    # light rule between the state blocks and the study blocks, across all three columns
     y_rule = (BLOCK_Y["clean"] + BLOCK_Y["within"]) / 2
     trf = blended_transform_factory(fig.transFigure, ax.transData)
-    ax.plot([1.0 / W, (x0 + w) / W], [y_rule, y_rule], transform=trf, color=sp.CAT["light"],
-            lw=0.5, clip_on=False, zorder=1)  # fmt: skip
+    ax.plot([1.0 / W, (W - 1.0) / W], [y_rule, y_rule], transform=trf,
+            color=sp.CAT["light"], lw=0.5, clip_on=False, zorder=1)  # fmt: skip
     ax.set_xlim(0, 0.1)
     ax.set_xticks([0, 0.03, 0.06, 0.09])
     ax.set_xticklabels(["0", "0.03", "0.06", "0.09"])
     ax.grid(axis="x", color=GRID, lw=0.4, zorder=0)
     ax.set_axisbelow(True)
     ax.set_xlabel(XLABEL_MEDIAN)
+    # header of the ratio column (different / same; the caption says so)
+    ax.text((w + A_RATIO_GAP) / w, 1.0, "Ratio (95% CI)", transform=ax.transAxes,
+            ha="left", va="bottom", fontsize=sp.FS_BODY, clip_on=False)  # fmt: skip
     # key above the axes, after the panel letter: the two condition classes (filled; the
     # open symbols are named by their row label)
     y_key = 1 - 2.2 / H
@@ -246,9 +272,6 @@ def draw_conditions(R: pd.DataFrame, ratios: dict):
                      fontsize=sp.FS_BODY)  # fmt: skip
         fig.canvas.draw()
         xk = t.get_window_extent().x1 / fig.dpi / sp.MM + 3.0
-    # header of the ratio column: different / same, with its 95 % CI
-    ax.text(1.02, 1.0, "Ratio", transform=ax.transAxes, ha="left", va="bottom",
-            fontsize=sp.FS_BODY, clip_on=False)  # fmt: skip
     sp.fig_label(fig, "a", 0.0, 0.0)
     return fig
 

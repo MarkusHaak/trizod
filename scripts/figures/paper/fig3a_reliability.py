@@ -8,7 +8,9 @@ log axis); y, the residue-level Pearson r of G between two non-bound chains of i
 sequence from different entries, pooled over residues, with its 95 % interval from 1,000
 bootstrap resamples of sequences. Only non-bound chains are used, every chain carries its own
 tier's labels (``scores/<tier>/scores.json``), <= 20 seeded pairs per sequence and tier, and a
-pair needs >= 10 co-scored residues. Definitions are in ``fig3_replicates.py``.
+pair needs >= 10 co-scored residues. Definitions are in ``fig3_replicates.py``. Each point is
+labelled with its tier and the number of replicate pairs behind its r (18 Nov 2026, figure
+review: larger markers, labels clear of every marker and CI bar, no joining line).
 
 The leave-one-entry-out deviation (the left half of the old Fig. 3a) moves to Supplementary
 Fig. 7a; :func:`draw` (the old two-measure dot plot) is kept for reuse and is no longer
@@ -75,16 +77,22 @@ def compute():
 # --- Fig. 4c: size x agreement plane ------------------------------------------------
 W_C, H_C = sp.W_SINGLE, 55.0  # mm, one cell of the 2 x 2 Fig. 4 grid
 AX_C = (13.0, 9.5, 61.0, 41.5)  # x0, y0, w, h (mm); y0 shared with Fig. 4a, d
-XLIM_C = (3000, 25000)
+XLIM_C = (3000, 30000)  # one decade; leaves room right of the unfiltered point
 XT_C = [5000, 10000, 20000]
+# y starts at 0.6, not 0: a dot plot with intervals (position, not length, encodes r)
 YLIM_C, YT_C = (0.6, 1.0), [0.6, 0.7, 0.8, 0.9, 1.0]
-MS_C = 5.5
-# direct labels: (dx_mm, dy_mm, ha, va) per tier, beside the point, clear of the CI bar
+MS_C = 7.5  # marker size, pt (5.5 until 18 Nov 2026; figure review: larger markers)
+CI_LW = 1.0
+# Two-line direct label per tier: the tier name, and under it the replicate pairs behind r
+# (secondary ink). (dx_mm, dy_mm, ha, va of the name) from the point, clear of every marker
+# and CI bar: va "bottom" with dy ~0 centres the two lines on the point; tolerant sits lower
+# so it stays below the moderate CI bar to its upper left. No line joins the points since
+# 18 Nov 2026: it ran through the strict and moderate labels.
 LABEL_AT = {
-    "unfiltered": (-1.6, -1.2, "right", "top"),
-    "tolerant": (1.4, 0.0, "left", "center"),
-    "moderate": (-2.0, 0.0, "right", "center"),
-    "strict": (1.4, 0.0, "left", "center"),
+    "unfiltered": (2.6, 0.1, "left", "bottom"),
+    "tolerant": (-2.6, 1.0, "right", "top"),
+    "moderate": (-2.6, 0.1, "right", "bottom"),
+    "strict": (2.6, 0.1, "left", "bottom"),
 }
 
 
@@ -94,7 +102,10 @@ def tier_sizes(D) -> dict:
 
 
 def draw_plane(R: pd.DataFrame, sizes: dict):
-    """Fig. 4c: chains per tier (log x) against replicate r with its 95 % CI (y)."""
+    """Fig. 4c: chains per tier (log x) against replicate r with its 95 % CI (y).
+
+    Each point is labelled with its tier and, under it, the number of replicate pairs behind
+    its r (``n_pairs``), so the panel shows both sizes: chains (x) and pairs (label)."""
     from matplotlib import ticker as mticker
 
     fig = sp.figure(W_C, H_C)
@@ -102,14 +113,18 @@ def draw_plane(R: pd.DataFrame, sizes: dict):
     ax = fig.add_axes([x0 / W_C, y0 / H_C, w / W_C, h / H_C])
     R = R.set_index("tier").loc[sp.TIERS]
     xs = np.array([sizes[t] for t in sp.TIERS], float)
-    ax.plot(xs, R["r"].to_numpy(), color=sp.CAT["light"], lw=0.8, zorder=1)
     for t, x in zip(sp.TIERS, xs):
         r = R.loc[t]
-        ax.plot([x, x], [r.r_lo, r.r_hi], color=CI_COLOR, lw=0.8, solid_capstyle="butt", zorder=2)  # fmt: skip
+        ax.plot([x, x], [r.r_lo, r.r_hi], color=CI_COLOR, lw=CI_LW, solid_capstyle="butt", zorder=2)  # fmt: skip
         ax.plot(x, r.r, ls="", marker=sp.TIER_MARKERS[t], ms=MS_C, mfc=sp.TIER_COLORS[t],
-                mec=EDGE, mew=0.5, zorder=3)  # fmt: skip
+                mec=EDGE, mew=0.6, zorder=3)  # fmt: skip
         dx, dy, ha, va = LABEL_AT[t]
-        sp.direct_label(ax, x, r.r, t, dx_mm=dx, dy_mm=dy, ha=ha, va=va)  # lower case
+        # tier name in lower case, the pairs behind r under it
+        name = sp.direct_label(ax, x, r.r, t, dx_mm=dx, dy_mm=dy, ha=ha, va=va)
+        ax.annotate(f"{int(r.n_pairs):,} pairs", xy=({"left": 0, "right": 1}[ha], 0),
+                    xycoords=name, xytext=(0, -0.3), textcoords="offset points", ha=ha,
+                    va="top", fontsize=sp.FS_BODY, color=sp.INK_SOFT,
+                    annotation_clip=False)  # fmt: skip
     ax.set_xscale("log")
     ax.set_xlim(*XLIM_C)
     ax.xaxis.set_major_locator(mticker.FixedLocator(XT_C))

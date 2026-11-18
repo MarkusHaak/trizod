@@ -11,12 +11,16 @@ Panels
   b  Same for the G-score: its mean is nearly flat in k; only its spread narrows.
   c  The exact G-Z relation: for fixed k both scores are monotone functions of the
      capped residual sum of squares, so each k traces one curve.
-  d  Empirical G vs Z over the scored residues of the unfiltered training pool (fine 2-D
-     histogram, log counts). No curves are drawn on top: every residue lies on the curve
-     of its k (largest |G - G_curve(Z, k)| below 1e-4, the storage precision of G;
-     summary key max_abs_dG_from_curve_pool), so the residues form one band per k
-     themselves; the overlaid k = 3 / 9 / 15 / 21 curves of the earlier version hid them.
-     The curves k = 1 and k = 21 are labelled at the same place in c and d.
+  d  Empirical G vs Z over the scored residues of the unfiltered training pool: a 2-D
+     histogram in bins of 0.25 (Z) x 0.02 (G) on a logarithmic grey scale, with the
+     marginal distributions of Z (top) and G (right) on linear counts, inside the old
+     62 x 36 mm footprint (18 Nov 2026, figure review: the fine 440 x 300 histogram drew
+     each k as a hairline, so where most residues lie could not be seen). No curves are
+     drawn on top: every residue lies on the curve of its k (largest |G - G_curve(Z, k)|
+     below 1e-4, the storage precision of G; summary key max_abs_dG_from_curve_pool), so
+     where the curves separate the residues form one band per k themselves; the overlaid
+     k = 3 / 9 / 15 / 21 curves of an earlier version hid them. The curves k = 1 and
+     k = 21 are labelled at the same place in c and d.
 
 The Z- and G-scores are computed with the scoring code itself
 (``trizod.scoring.scoring.compute_zscores`` / ``compute_gscores``), so the curves
@@ -70,6 +74,47 @@ ORD_COLOR = {
     3: "#000000",
 }
 SUMMARY = {}
+# Panel d (18 Nov 2026): joint histogram in coarse bins + marginals of Z and G
+D_BIN_Z, D_BIN_G = 0.25, 0.02  # bin widths of the joint histogram and the marginals
+D_MARGIN, D_MARGIN_GAP = 5.0, 0.8  # marginal depth and its gap to the joint panel, mm
+D_GREY = (0.22, 1.0)  # span of matplotlib's "Greys" used for the log counts
+D_MARGIN_COLOR = sp.INK_SOFT
+
+
+def draw_density(fig, ax, ax_top, ax_right, Z, G, zr, gr):
+    """Panel d: residues per (Z, G) bin on a log grey scale, with the distributions of Z
+    (``ax_top``) and G (``ax_right``) as filled histograms on linear counts. The marginals
+    carry no count axis: they show where the residues lie, the colour bar gives counts."""
+    import matplotlib as mpl
+
+    ze = np.arange(zr[0], zr[1] + D_BIN_Z / 2, D_BIN_Z)
+    ge = np.arange(gr[0], gr[1] + D_BIN_G / 2, D_BIN_G)
+    h2, _, _ = np.histogram2d(Z, G, bins=(ze, ge))
+    grey = mpl.colors.ListedColormap(mpl.colormaps["Greys"](np.linspace(*D_GREY, 256)))
+    mesh = ax.pcolormesh(
+        ze,
+        ge,
+        np.ma.masked_equal(h2.T, 0),
+        cmap=grey,
+        norm=mpl.colors.LogNorm(vmin=1, vmax=h2.max()),
+        rasterized=True,
+    )
+    cax = ax.inset_axes([0.70, 0.52, 0.035, 0.42])
+    cb = fig.colorbar(
+        mesh, cax=cax, ticks=[t for t in (1, 10, 100, 1000, 10000) if t <= h2.max()]
+    )
+    cb.set_label("Residues", fontsize=sp.FS_TICK, labelpad=2)
+    cb.ax.tick_params(labelsize=sp.FS_TICK, length=1.5, pad=1)
+    cb.outline.set_linewidth(0.4)
+    # marginals: same bins, linear counts, no axes of their own
+    hz, _ = np.histogram(Z, bins=ze)
+    hg, _ = np.histogram(G, bins=ge)
+    ax_top.stairs(hz, ze, fill=True, color=D_MARGIN_COLOR, lw=0)
+    ax_right.stairs(hg, ge, fill=True, color=D_MARGIN_COLOR, lw=0, orientation="horizontal")  # fmt: skip
+    ax_top.set_ylim(0, hz.max() * 1.05)
+    ax_right.set_xlim(0, hg.max() * 1.05)
+    for a in (ax_top, ax_right):
+        a.set_axis_off()
 
 
 def scores_from_diffs(absdiffs: np.ndarray, k: int):
@@ -200,15 +245,20 @@ def main():
     # ---- figure: a | b (simulation over k) above c | d (the G-Z relation)
     W, H = sp.W_DOUBLE, 100.0  # mm
 
-    def ax_mm(x, top, w, h):
+    def ax_mm(x, top, w, h, **kw):
         """Axes at ``x`` mm from the left, ``top`` mm from the top, ``w`` x ``h`` mm."""
-        return fig.add_axes([x / W, 1 - (top + h) / H, w / W, h / H])
+        return fig.add_axes([x / W, 1 - (top + h) / H, w / W, h / H], **kw)
 
     fig = sp.figure(W, H)
     axa = ax_mm(12.0, 5.0, 45.0, 37.0)
     axb = ax_mm(91.0, 5.0, 45.0, 37.0)
     axc = ax_mm(12.0, 55.0, 62.0, 36.0)
-    axd = ax_mm(91.0, 55.0, 62.0, 36.0)
+    # d keeps c's footprint (91, 55, 62 x 36 mm): the joint histogram shares c's bottom and
+    # left edge, the Z marginal sits on top of it, the G marginal at its right
+    dm, dg = D_MARGIN, D_MARGIN_GAP
+    axd = ax_mm(91.0, 55.0 + dm + dg, 62.0 - dm - dg, 36.0 - dm - dg)
+    axd_top = ax_mm(91.0, 55.0, 62.0 - dm - dg, dm, sharex=axd)
+    axd_right = ax_mm(153.0 - dm, 55.0 + dm + dg, dm, 36.0 - dm - dg, sharey=axd)
 
     # a and b: each line is labelled at its right end with the number of ordered residues
     # in the three-residue window, written out ("2 of 3 ordered"), so neither a legend nor
@@ -259,31 +309,14 @@ def main():
     cb.ax.tick_params(labelsize=sp.FS_TICK, length=1.5, pad=1)
     cb.outline.set_linewidth(0.4)
 
-    # d: the released residues as a fine 2-D histogram (log counts), WITHOUT the curves of
-    # c on top: every residue lies on the curve of its k (max_abs_dG_from_curve_pool), so
-    # the residues draw those curves themselves, one grey band per k. The overlay that d
-    # carried until 17 Nov 2026 (k = 3 / 9 / 15 / 21, dashed, haloed) hid exactly those
-    # bands (figure review, item 7b).
+    # d: where the residues lie (figure review 18 Nov 2026: the fine 440 x 300 histogram
+    # drew each k as a hairline, so the dense region could not be seen). A 2-D histogram in
+    # coarse bins (D_BIN_Z x D_BIN_G) with a logarithmic grey scale, plus the marginal
+    # distributions of Z (top) and G (right) on linear counts, all inside the old footprint.
+    # Still no curves on top: every residue lies on the curve of its k
+    # (max_abs_dG_from_curve_pool), and the k = 1 / k = 21 labels below name the outermost.
     zr, gr = (-5.0, 17.0), (-0.02, 1.02)
-    h2, ze, ge = np.histogram2d(Z, G, bins=(440, 300), range=(zr, gr))
-    grey = mpl.colors.ListedColormap(
-        mpl.colormaps["Greys"](np.linspace(0.30, 1.0, 256))
-    )
-    mesh = axd.pcolormesh(
-        ze,
-        ge,
-        np.ma.masked_equal(h2.T, 0),
-        cmap=grey,
-        norm=mpl.colors.LogNorm(vmin=1, vmax=h2.max()),
-        rasterized=True,
-    )
-    cax2 = axd.inset_axes([0.70, 0.56, 0.035, 0.38])
-    cb2 = fig.colorbar(
-        mesh, cax=cax2, ticks=[t for t in (1, 10, 100, 1000, 10000) if t <= h2.max()]
-    )
-    cb2.set_label("Residues", fontsize=sp.FS_TICK, labelpad=2)
-    cb2.ax.tick_params(labelsize=sp.FS_TICK, length=1.5, pad=1)
-    cb2.outline.set_linewidth(0.4)
+    draw_density(fig, axd, axd_top, axd_right, Z, G, zr, gr)
     axd.text(
         0.03,
         0.04,
@@ -296,19 +329,25 @@ def main():
 
     # c and d share their axes, and the outermost curves (k = 1, k = 21) are labelled at
     # the same place in both, so a band of d is matched to its curve of c by position
+    # (k = 21 sits just above G = g_lab: d's bins reach past the curve below it)
     g_lab = 0.2
     for ax in (axc, axd):
-        for k, dx, ha in ((1, -1.0, "right"), (int(KS_MAP[-1]), 1.0, "left")):
+        for k, dx, ha, va in ((1, -1.0, "right", "center"),
+                              (int(KS_MAP[-1]), 1.5, "left", "bottom")):  # fmt: skip
             z, g = analytic_curve(k)
             z0 = float(np.interp(g_lab, g[::-1], z[::-1]))  # g falls as z rises
-            sp.direct_label(ax, z0, g_lab, f"$k$ = {k}", dx_mm=dx, ha=ha)
+            sp.direct_label(ax, z0, g_lab, f"$k$ = {k}", dx_mm=dx, ha=ha, va=va)
         ax.set_xlabel("Z-score")
         ax.set_ylabel("G-score")
         ax.set_xlim(*zr)
         ax.set_ylim(*gr)
 
-    for ax, l in zip((axa, axb, axc, axd), "abcd"):
-        sp.panel_label(ax, l, x=-11.0 / (ax.get_position().width * W), y=1.02)
+    # panel letters 11 mm left of the axes, just above them; d's sits on its Z marginal, at
+    # the height of c's letter
+    for ax, l in zip((axa, axb, axc, axd_top), "abcd"):
+        pos = ax.get_position()
+        y = 1.02 if l != "d" else 1 + 0.02 * axc.get_position().height / pos.height
+        sp.panel_label(ax, l, x=-11.0 / (pos.width * W), y=y)
     out = sp.save(fig, "S2")
     data_dir = sp.out_dir("suppfigs_b_data")
     data_dir.mkdir(exist_ok=True)

@@ -16,10 +16,13 @@ first, and fails loudly if none ranks.
 
 Left: the unfiltered G-score profiles of the two chains (Parquet labels, the labels of the
 condition comparison in Fig. 4a), solid for the lower and dashed for the higher value of the
-changed factor; every crossing residue is shaded; below, the shift count k of each chain per
-residue on the shared k scale, sp.K_CMAP (blank = residue not scored). Right: the denominator --
-the per-pair mean |dG| of every qualifying pair (the measure of Fig. 4a), one dot per pair,
-with their median and the drawn pair marked, so the example is seen in its distribution.
+changed factor, named by one line-style key above the panel (18 Nov 2026; until then the
+values were written on the curves); every crossing residue is shaded; below, the shift count
+k of each chain per residue on the shared k scale, sp.K_CMAP (blank = residue not scored).
+Right ("All n pairs"): the denominator -- one dot per qualifying pair (one sequence at two
+conditions in one study), y the pair's mean |dG| (the measure of Fig. 4a), with the median
+line and the drawn pair (filled, "pair at left") labelled, so the example is seen in its
+distribution.
 
 Run (code worktree root):
     uv run --extra figures --with pyarrow python scripts/figures/paper/fig4b_pair.py \\
@@ -54,12 +57,17 @@ sp.plt.rcParams.update(
 )
 
 W, H = sp.W_SINGLE, 55.0  # mm; one cell of the 2 x 2 Fig. 4 grid
-# profile + k strips (left), denominator strip (right); all in mm from the bottom-left
-PROF = (9.7, 16.0, 45.3, 35.5)  # x0, y0, w, h
+# profile + k strips (left), denominator strip (right); all in mm from the bottom-left.
+# 18 Nov 2026 (figure review): the profile gave 4 mm of width to the labels left of the
+# denominator strip ("pair at left", "median") and 2 mm of height to the line-style key
+# above it, which replaced the labels written on the curves.
+PROF = (9.7, 16.0, 41.3, 33.5)  # x0, y0, w, h
 K_H, K_GAP = 2.4, 0.5  # height of one k strip, gap between strips
 K_TOP = PROF[1] - 1.2  # top of the upper k strip
-DEN = (62.8, 21.5, 7.0, 30.0)  # the denominator strip
-CBAR = (60.5, 10.2, 14.0, 1.6)  # k colour bar, level with the k strips
+DEN = (63.3, 21.5, 6.5, PROF[1] + PROF[3] - 21.5)  # the denominator strip, top level
+CBAR = (59.5, 10.2, 14.0, 1.6)  # k colour bar, level with the k strips
+KEY_Y = H - 2.2  # line-style key above the profile, after the letter (as Fig. 4a, d)
+KEY_LEN = 5.5  # length of a key's line sample, mm
 SHADE = (
     0.0,
     0.0,
@@ -121,25 +129,20 @@ def _shade(ax, res, y0=None, y1=None):
         ax.axvspan(r - 0.5, r + 0.5, color=SHADE, lw=0, zorder=0)
 
 
-def _label_run(ax, g, lo, hi, text, room=0.13):
-    """Name profile ``g`` at its run of residues lo..hi (1-based): above the run's highest
-    point when there is ``room`` (data units) below the top of the axes, else to the right
-    of the run's end."""
-    i = int(np.nanargmax(g[lo - 1 : hi])) + lo
-    if g[i - 1] + room < ax.get_ylim()[1]:
-        sp.direct_label(
-            ax, i, g[i - 1], text, dx_mm=0, dy_mm=0.8, ha="center", va="bottom"
-        )
-    else:
-        sp.direct_label(
-            ax,
-            hi + 0.5,
-            np.nanmax(g[lo - 1 : hi]),
-            text,
-            dx_mm=0.8,
-            ha="left",
-            va="top",
-        )
+def _line_key(fig, top) -> None:
+    """One key for the two profiles, above the axes after the panel letter (as the keys of
+    Fig. 4a and 4d): a line sample in each chain's style and the value of the changed
+    factor ("278 K", solid; "303 K", dashed)."""
+    from matplotlib.lines import Line2D
+
+    xk, y = 5.0, KEY_Y / H
+    for side in ("a", "b"):
+        fig.add_artist(Line2D([xk / W, (xk + KEY_LEN) / W], [y, y], color=sp.INK,
+                              transform=fig.transFigure, **LINE[side]))  # fmt: skip
+        t = fig.text((xk + KEY_LEN + 1.2) / W, y, _value(top, side), ha="left",
+                     va="center", fontsize=sp.FS_BODY)  # fmt: skip
+        fig.canvas.draw()
+        xk = t.get_window_extent().x1 / fig.dpi / sp.MM + 3.5
 
 
 def draw(Pr: pd.DataFrame, P: pd.DataFrame, top):
@@ -164,14 +167,7 @@ def draw(Pr: pd.DataFrame, P: pd.DataFrame, top):
     ax.tick_params(axis="x", labelbottom=False)
     ax.spines["bottom"].set_visible(False)
     ax.tick_params(axis="x", length=0)
-    # direct labels: each line named above its own highest stretch where it alone is high
-    sel_a = Pr["disordered_in"].to_numpy() == top.a
-    sel_b = Pr["disordered_in"].to_numpy() == top.b
-    for g, sel, side in ((ga, sel_a, "a"), (gb, sel_b, "b")):
-        if sel.any():
-            runs = fr._runs(sel)
-            s, e = max(runs, key=lambda r: r[1] - r[0])
-            _label_run(ax, g, s + 1, e + 1, _value(top, side))
+    _line_key(fig, top)  # one key for both lines (figure review 18 Nov 2026)
 
     # --- k strips -------------------------------------------------------------------
     cmap = mpl.colormaps[sp.K_CMAP].copy()
@@ -204,6 +200,10 @@ def draw(Pr: pd.DataFrame, P: pd.DataFrame, top):
     cax.set_title("Shift count $\\mathit{k}$", fontsize=sp.FS_BODY, pad=2.0)
 
     # --- denominator: every qualifying pair ------------------------------------------
+    # One dot per replicate pair (one sequence at two conditions in one study); y, that
+    # pair's |dG| (mean over its co-scored residues, the measure of Fig. 4a). Titled
+    # "All n pairs"; the filled dot is named as the pair drawn at the left, the line as the
+    # median (figure review 18 Nov 2026: the strip had to explain itself).
     axd = _ax(fig, *DEN)
     v = P["mean_absdg"].to_numpy(float)
     rng = np.random.default_rng(JITTER_SEED)
@@ -214,14 +214,13 @@ def draw(Pr: pd.DataFrame, P: pd.DataFrame, top):
     axd.plot(jit[is_top], v[is_top], ls="", marker="o", ms=3.6, mfc=sp.INK, mec=sp.INK, zorder=4)  # fmt: skip
     med = float(np.median(v))
     axd.plot([-0.45, 0.45], [med, med], color=sp.INK, lw=1.0, zorder=2)
-    sp.direct_label(axd, -0.45, med, "median", dx_mm=-0.6, ha="right")
-    sp.direct_label(
-        axd, jit[is_top][0] - 0.05, v[is_top][0], "shown", dx_mm=-1.2, ha="right"
-    )
+    # both labels start at one x left of the strip, so they read as one column
+    sp.direct_label(axd, -0.6, med, "median", dx_mm=-0.8, ha="right")
+    sp.direct_label(axd, -0.6, v[is_top][0], "pair at left", dx_mm=-0.8, ha="right")
     axd.set_xlim(-0.6, 0.6)
     ymax = 0.1 * np.ceil(v.max() / 0.1 + 1e-9)
     axd.set_ylim(0, ymax)
-    # no tick label at the top, where the "n pairs" title sits
+    # no tick label at the top, where the title sits
     yt = np.round(np.arange(0, ymax - 0.05, 0.1), 1)
     axd.set_yticks(yt)
     axd.set_yticklabels([f"{v:g}" for v in yt])
@@ -231,8 +230,8 @@ def draw(Pr: pd.DataFrame, P: pd.DataFrame, top):
     axd.spines["right"].set_visible(True)
     axd.spines["bottom"].set_visible(False)
     axd.set_xticks([])
-    axd.set_ylabel("|ΔG| of the pair")  # the quantity of Fig. 4a, named the same way
-    axd.set_title(f"{len(v)} pairs", fontsize=sp.FS_BODY, pad=2.0)
+    axd.set_ylabel("|ΔG| of each pair")  # the quantity of Fig. 4a, named the same way
+    axd.set_title(f"All {len(v)} pairs", fontsize=sp.FS_BODY, pad=2.0)
 
     sp.fig_label(fig, "b", 0.0, 0.0)
     return fig
